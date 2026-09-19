@@ -49,15 +49,29 @@ jobs:
             #
             # 40 x 5s = 200s, roughly double the compose healthcheck's 90s
             # start period, to leave room for the cold build's first-run cost.
+            #
+            # A flag and a `break`, deliberately NOT `exit 0` inside the loop.
+            # This script arrives on ssh's stdin: exiting the shell while the
+            # heredoc still has unread lines left makes ssh return non-zero,
+            # so a deploy that succeeded reports as a failed step. Running to
+            # the natural end keeps the exit status honest.
+            #
+            # Expect the first attempts to fail with "Connection reset by
+            # peer" - the container is up but Node has not bound the port yet.
+            # That is what the retry loop is for, so the noise is suppressed.
+            healthy=0
             for i in $(seq 1 40); do
-              if curl -fsS -o /dev/null http://127.0.0.1:3010/health; then
+              if curl -fsS -o /dev/null http://127.0.0.1:3010/health 2>/dev/null; then
                 echo "converter healthy after $((i * 5))s"
-                exit 0
+                healthy=1
+                break
               fi
               sleep 5
             done
 
-            echo "converter did not become healthy within 200s" >&2
-            docker compose -f "$APP_DIR/docker-compose.yml" logs --tail 100 converter >&2
-            exit 1
+            if [ "$healthy" -ne 1 ]; then
+              echo "converter did not become healthy within 200s" >&2
+              docker compose -f "$APP_DIR/docker-compose.yml" logs --tail 100 converter >&2
+              exit 1
+            fi
           EOF
