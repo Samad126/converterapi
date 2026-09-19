@@ -269,6 +269,32 @@ describe('download filenames', () => {
     assert.deepEqual(zipEntryNames(response.body), ['slide-1.png', 'slide-2.png']);
   });
 
+  it('keeps a non-ASCII name intact through the whole stack', async () => {
+    // The end-to-end version of the decode test: this goes through the real
+    // multipart parser, so if multer's treatment of the filename ever changes
+    // (or is fixed upstream), the unit test still passes while this one does
+    // not - which is the one that describes what a user experiences.
+    const name = 'KVADRAT KÖKLƏR 8-Cİ SİNİF (ARZU ƏLƏDDİN QIZI 051-641-88-34)';
+    const response = await upload(server.baseUrl, `${name}.docx`, SAMPLE_DOCX);
+
+    assert.equal(response.status, 200);
+    const disposition = response.contentDisposition ?? '';
+
+    // The starred form is what current clients read, and it must carry the
+    // exact name the user typed. Compared as a substring rather than matched as
+    // a pattern: the name contains parentheses, which `encodeURIComponent`
+    // leaves alone and a regex would read as grouping.
+    const expected = `filename*=UTF-8''${encodeURIComponent(name)}.pdf`;
+    assert.ok(
+      disposition.includes(expected),
+      `expected the header to carry ${expected}, got ${disposition}`,
+    );
+    // And nothing left over from the latin1 misreading: no C1 controls, and
+    // no `Ã`/`Ä` pile-up.
+    assert.doesNotMatch(disposition, /[\u0080-\u009f]/, 'a C1 control reached the header');
+    assert.doesNotMatch(disposition, /Ã|Ä|Æ/, 'the latin1 misreading was passed on');
+  });
+
   it('does not let a hostile filename reach the header', async () => {
     // The name is attacker-controlled and this value is a response header, so
     // a CRLF in it would be a header injection. Sanitised, not escaped.

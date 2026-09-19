@@ -26,6 +26,58 @@
 import { MAX_DOWNLOAD_NAME_LENGTH } from '../config.ts';
 
 /**
+ * Recover the filename the client actually sent.
+ *
+ * multer hands us `originalname` with every byte of the UTF-8 the client sent
+ * read as a SEPARATE LATIN-1 CHARACTER. This is busboy's doing and it is not
+ * configurable. `KÖKLƏR` therefore arrives as `KÃKLÆR`: `Ö` is `C3 96` in
+ * UTF-8, and reading those two bytes as latin1 gives `Ã` followed by a C1
+ * control character that is invisible in a terminal and turns into noise
+ * wherever it is displayed.
+ *
+ * Undoing it is a re-encode: take the string's code points as the bytes they
+ * were, and decode them as UTF-8. Two cases have to be left ALONE, and both
+ * are checked before touching anything:
+ *
+ *   - a name that is already correct, including any non-ASCII character above
+ *     U+00FF. Latin-1 cannot represent those, so seeing one proves the bytes
+ *     were decoded properly already (`filename*` in the multipart headers is
+ *     handled correctly by busboy) and re-reading it would destroy it.
+ *   - a name that was GENUINELY Latin-1 - `café` sent as single bytes. Those
+ *     bytes are not valid UTF-8, so the decode fails and the original stands.
+ *     Guessing wrong here would corrupt a name that was never broken.
+ */
+export function decodeUploadName(raw: string): string {
+  // Pure ASCII is already right, and is the common case.
+  if (!/[\u0080-ÿ]/.test(raw)) return raw;
+  if (/[^\u0000-ÿ]/.test(raw)) return raw;
+
+  const bytes = Buffer.from(raw, 'latin1');
+  const decoded = bytes.toString('utf8');
+
+  // Node's decoder emits U+FFFD for a byte sequence that is not valid UTF-8,
+  // so its presence means this was never UTF-8 to begin with.
+  if (decoded.includes('�')) return raw;
+  return decoded;
+}
+
+/**
+ * Best-effort ASCII rendering of a name, for the `filename` fallback.
+ *
+ * Decomposing first means an accented letter keeps its base character instead
+ * of being replaced wholesale - `Résumé` becomes `Resume` rather than `R_sum_`
+ * - and only characters with no ASCII equivalent at all are marked with an
+ * underscore. This form is only read by clients too old to understand
+ * `filename*`; everything current uses the accurate one.
+ */
+function asciiRender(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^ -~]/g, '_');
+}
+
+/**
  * The basename to build a download name from, or '' if nothing usable is left.
  *
  * Deliberately conservative: anything questionable is removed rather than
@@ -43,9 +95,14 @@ function baseNameOf(originalName: string): string {
   const withoutExtension = lastSegment.replace(/\.[^.]*$/, '');
 
   const cleaned = withoutExtension
-    // Control characters, including CR and LF, and the two characters that
-    // would end the quoted `filename="..."` value early.
-    .replace(/[\u0000-\u001f\u007f"\\]/g, '')
+    // Control characters, and the two characters that would end the quoted
+    // `filename="..."` value early.
+    //
+    // The range covers C1 as well as C0. C1 is the half that is easy to miss
+    // and the half that shows up in practice: it is exactly what a mangled
+    // multi-byte character leaves behind, so a name that survived the decode
+    // above can still carry one.
+    .replace(/[\u0000-\u001f\u007f-\u009f"\\]/g, '')
     .trim()
     // A leading dot would make the result a hidden file on the receiving side.
     .replace(/^\.+/, '');
@@ -63,7 +120,7 @@ function baseNameOf(originalName: string): string {
  * original has nothing usable in it - an upload named `.docx`, say.
  */
 export function downloadNameFor(originalName: string, extension: string): string {
-  const base = baseNameOf(originalName);
+  const base = baseNameOf(decodeUploadName(originalName));
   return base === '' ? `converted${extension}` : `${base}${extension}`;
 }
 
@@ -77,6 +134,6 @@ export function downloadNameFor(originalName: string, extension: string): string
  * `R_sum_.pdf` in an ancient one, rather than as mojibake in both.
  */
 export function contentDispositionFor(filename: string): string {
-  const ascii = filename.replace(/[^\u0020-\u007e]/g, '_').replace(/["\\]/g, '');
+  const ascii = asciiRender(filename).replace(/["\\]/g, '');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }

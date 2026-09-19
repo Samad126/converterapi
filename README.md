@@ -184,7 +184,30 @@ so the result is not a hidden file, and the length is capped at
 
 It is sent in both RFC 6266 forms — a quoted ASCII `filename` for older clients
 and a percent-encoded UTF-8 `filename*` for current ones — so `Résumé.docx`
-arrives as `Résumé.pdf` rather than as mojibake.
+arrives as `Résumé.pdf` rather than as mojibake. The ASCII form is derived by
+decomposing accents first, so it reads `Resume.pdf` rather than `R_sum_.pdf`.
+
+#### Non-ASCII names, and the decoding trap
+
+**multer hands over every byte of the client's UTF-8 as a separate Latin-1
+character.** A file named `KÖKLƏR.docx` arrives as `KÃKLÆR.docx`: `Ö` is
+`C3 96` in UTF-8, and read one byte at a time that is `Ã` followed by a C1
+control character — invisible in a terminal, and noise wherever it is shown.
+This is busboy's behaviour and it is not configurable.
+
+`decodeUploadName` undoes it by re-encoding the code points as bytes and
+decoding them as UTF-8, and it is deliberately careful about the two cases
+where that would be wrong:
+
+- a name that is already correct — including any character above `U+00FF`,
+  which Latin-1 cannot represent, so seeing one proves the string was decoded
+  properly already;
+- a name that was genuinely Latin-1, like `café` sent as single bytes. Those
+  bytes are not valid UTF-8, so the decode fails and the original stands.
+
+Getting this wrong is silent in both directions, which is why
+[`test/unit.test.ts`](test/unit.test.ts) pins the round trip for a real
+Azerbaijani filename and asserts that the names which must not change do not.
 
 ### GET /formats
 

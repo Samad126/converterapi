@@ -34,7 +34,9 @@ const {
   inputFileNameFor,
 } = await import('../src/services/workspace.service.ts');
 const { zipStored, safeEntryName } = await import('../src/lib/zip.ts');
-const { downloadNameFor, contentDispositionFor } = await import('../src/lib/download-name.ts');
+const { decodeUploadName, downloadNameFor, contentDispositionFor } = await import(
+  '../src/lib/download-name.ts'
+);
 const { buildMinimalDocx, buildMinimalOdp, buildSolidPng } = await import(
   '../src/lib/probe-documents.ts'
 );
@@ -257,6 +259,51 @@ describe('download names', () => {
     // The starred form carries the real name, percent-encoded as UTF-8, so the
     // recipient gets `Résumé — final.pdf` rather than mojibake.
     assert.match(header, /filename\*=UTF-8''R%C3%A9sum%C3%A9%20%E2%80%94%20final\.pdf/);
+  });
+
+  it('recovers a UTF-8 filename that multer read as Latin-1', () => {
+    // multer hands over every BYTE of the client's UTF-8 as its own latin1
+    // character, so `Ö` (`C3 96`) arrives as `Ã` plus an invisible C1 control.
+    // Left alone, a perfectly ordinary name downloads as line noise.
+    const real = 'KVADRAT KÖKLƏR 8-Cİ SİNİF (ARZU ƏLƏDDİN QIZI 051-641-88-34)';
+    const asMulterGivesIt = Buffer.from(real, 'utf8').toString('latin1');
+
+    assert.notEqual(asMulterGivesIt, real, 'the fixture does not reproduce the bug');
+    assert.equal(decodeUploadName(asMulterGivesIt), real);
+    assert.equal(downloadNameFor(`${asMulterGivesIt}.docx`, '.pdf'), `${real}.pdf`);
+  });
+
+  it('leaves names that were never broken exactly as they are', () => {
+    // Each of these has been decoded correctly already, and re-reading it as
+    // UTF-8 would destroy it. The Japanese name and the em dash prove the
+    // check for characters Latin-1 cannot represent; `café` proves the case
+    // where the bytes are genuinely latin1 and simply are not valid UTF-8.
+    for (const name of [
+      'plain.docx',
+      'café.docx',
+      'Résumé — final.docx',
+      '日本語.docx',
+      'Ελληνικά.docx',
+    ]) {
+      assert.equal(decodeUploadName(name), name, name);
+    }
+  });
+
+  it('strips C1 control characters as well as C0', () => {
+    // C1 is the half that matters here: it is exactly what a mangled
+    // multi-byte character leaves behind, so it reaches this code in practice
+    // rather than only in theory.
+    const name = downloadNameFor('a\u0096b\u0085c.docx', '.pdf');
+    assert.equal(name, 'abc.pdf');
+    assert.doesNotMatch(name, /[\u0000-\u001f\u007f-\u009f]/);
+  });
+
+  it('renders an ASCII fallback that is still readable', () => {
+    // The quoted `filename` has to be ASCII, but replacing every accented
+    // letter with an underscore would leave `R_sum_`. Decomposing first keeps
+    // the base character.
+    const header = contentDispositionFor('Résumé — final.pdf');
+    assert.match(header, /filename="Resume _ final\.pdf"/);
   });
 
   it('never emits a header value containing a newline', () => {
