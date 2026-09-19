@@ -1,17 +1,14 @@
 # Deployment shape for the converter.
 #
 # This file runs the CONVERTER ONLY. It expects a reverse proxy in front of it
-# - nginx on the host, in the common case - which terminates TLS and applies
-# the matching request body limit. See deploy/nginx.conf.example.
+# - nginx on the host - which terminates TLS and applies the matching request
+# body limit. The real site is deploy/converter.alakbaroff.com.conf;
+# deploy/nginx.conf.example is a generic one to adapt.
 #
-# A bundled Caddy proxy is available for anyone who does not already have one,
-# but it is deliberately OPT-IN:
-#
-#     docker compose --profile proxy up -d
-#
-# It is off by default because it binds host ports 80 and 443, which on a
-# server that already runs nginx means Caddy fails to start and takes the
-# deployment down with it.
+# There is deliberately no bundled proxy. One was tried and removed: a proxy in
+# this file has to bind ports 80 and 443 to be useful, which is exactly what
+# the nginx running on the host already does, so it could only ever fail to
+# start or fight it for the ports.
 #
 # TLS terminates at the proxy, because the Android client speaks https://.
 
@@ -110,35 +107,6 @@ services:
         max-size: '10m'
         max-file: '3'
 
-  # ---------------------------------------------------------------------------
-  # Optional bundled proxy. Skip this if you already run nginx.
-  #
-  #   docker compose --profile proxy up -d
-  #
-  # Terminates TLS using Caddy's internal CA for localhost, or Let's Encrypt
-  # for a real DOMAIN. See deploy/Caddyfile.
-  # ---------------------------------------------------------------------------
-  proxy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    profiles: ['proxy']
-    ports:
-      - '80:80'
-      - '443:443'
-    networks:
-      - backend
-      - edge
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    environment:
-      # Set this to the hostname the APK uses. Caddy provisions TLS for it
-      # automatically.
-      DOMAIN: ${DOMAIN:-localhost}
-    depends_on:
-      - converterapi
-
 networks:
   # A NORMAL bridge, deliberately NOT `internal: true`.
   #
@@ -154,10 +122,3 @@ networks:
   # The trade-off is real: the container can now reach the internet. See
   # README "Network egress" for how to get that property back.
   backend:
-
-  # Only created when the `proxy` profile is active.
-  edge:
-
-volumes:
-  caddy_data:
-  caddy_config:

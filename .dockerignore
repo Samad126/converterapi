@@ -18,5 +18,3 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 
-# Local dev CA, extracted from the running proxy. Never baked into the image.
-caddy-root.crt

@@ -8,7 +8,7 @@
 # 127.0.0.1:3010 - the HOST port the compose file publishes, which is not the
 # container's own 3001. If your nginx is in its own container rather than on
 # the host, change proxy_pass to the service name and put nginx on the same
-# Docker network - and note that the bundled Caddy profile is then redundant.
+# Docker network.
 
 server {
     listen 80;

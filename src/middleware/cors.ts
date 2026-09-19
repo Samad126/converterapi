@@ -1,19 +1,17 @@
 /**
  * CORS, for the browser client.
  *
- * The policy lives here rather than in the reverse proxy for three reasons,
- * and the third is the one that decides it:
+ * The policy lives here rather than in the reverse proxy for two reasons:
  *
- *   - it is part of the wire contract, and this repository keeps its contract
- *     where `test/` can assert it - the same argument that keeps the statuses
- *     and messages of `openapi.yaml` pinned by test/openapi.test.ts;
- *   - there is more than one supported way to reach this service - nginx on
- *     the host, or the opt-in Caddy profile in docker-compose.yml - and a
- *     policy living in one proxy's config is silently absent from the other;
  *   - this is the only layer that sees EVERY response. Headers set by the
  *     route handlers would miss the catch-all 404, the 400 from a rejected
  *     upload, and everything the error handler produces - which is most of
- *     what a browser needs to read.
+ *     what a browser actually needs to read;
+ *   - it is part of the wire contract, and this repository keeps its contract
+ *     where `test/` can assert it - the same argument that keeps the statuses
+ *     and messages of `openapi.yaml` pinned by test/openapi.test.ts. A policy
+ *     living in a proxy's config is out of reach of the suite, and the 413
+ *     below is the standing proof of how easily that goes unnoticed.
  *
  * What it deliberately does NOT cover is the one response this service never
  * sees: nginx refuses an oversized upload with its own 413 before a byte

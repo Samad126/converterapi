@@ -28,8 +28,10 @@ function intFromEnv(name: string, fallback: number, min: number): number {
 
 /**
  * Upload ceiling, in bytes. MUST equal the Android client's MAX_UPLOAD_BYTES.
- * Also mirrored by the reverse proxy's request body limit (see deploy/Caddyfile)
- * so an oversized upload is refused before it reaches Node at all.
+ * Also mirrored by the reverse proxy's request body limit (see the API block in
+ * deploy/converter.alakbaroff.com.conf) so an oversized upload is refused
+ * before it reaches Node at all - which is also why that 413 needs its own CORS
+ * header: the application never sees the response.
  */
 export const MAX_UPLOAD_BYTES = 25 * MB;
 

@@ -779,8 +779,9 @@ private files and there is no operational reason to retain them.
 ## Deployment
 
 `docker-compose.yml` runs the **converter only**. It expects a reverse proxy in
-front of it — nginx on the host, in the common case — which terminates TLS and
-applies the matching request body limit.
+front of it — nginx on the host — which terminates TLS and applies the matching
+request body limit. There is deliberately no bundled proxy: see
+[Why there is no bundled proxy](#why-there-is-no-bundled-proxy).
 
 ```bash
 docker compose up -d --build
@@ -808,10 +809,13 @@ not the internet. Keep that prefix: dropping it would expose an unauthenticated
 endpoint that parses untrusted documents to your whole network. Keep the port
 too: 3000 and 3001 are what the other services on this host use.
 
-### With nginx (the common case)
+### With nginx
 
-[`deploy/nginx.conf.example`](deploy/nginx.conf.example) is a working server
-block. The parts that matter:
+[`deploy/converter.alakbaroff.com.conf`](deploy/converter.alakbaroff.com.conf)
+is this deployment's actual site — both hostnames, the frontend and the API, in
+one file. [`deploy/nginx.conf.example`](deploy/nginx.conf.example) is a generic
+single-host block to adapt if you are deploying this somewhere else. The parts
+that matter:
 
 - `client_max_body_size 25m` — **must match `MAX_UPLOAD_BYTES`**, so an
   oversized upload is refused before it reaches Node. Two halves of one number.
@@ -823,23 +827,18 @@ block. The parts that matter:
 
 Point `proxy_pass` at `http://127.0.0.1:3010`.
 
-### With the bundled Caddy (if you have no proxy already)
+### Why there is no bundled proxy
 
-Caddy is behind an opt-in profile, and is **off by default** — it binds host
-ports 80 and 443, which on a server already running nginx means Caddy fails to
-start and takes the deployment with it.
+There used to be one — a Caddy service behind an opt-in profile — and it was
+removed, because it could never be useful on a host that already terminates TLS.
 
-```bash
-DOMAIN=converterapi.example.com docker compose --profile proxy up -d --build
-```
-
-Set `DOMAIN` to the hostname the APK uses and Caddy provisions Let's Encrypt
-TLS automatically.
-
-> **Migrating an existing stack:** switching the proxy into a profile leaves any
-> already-created proxy container as an *orphan*, which `docker compose down`
-> will no longer remove — and which keeps holding the network. Use
-> `docker compose down --remove-orphans`.
+Any proxy worth bundling has to bind ports 80 and 443, and this host already
+runs nginx doing exactly that. So the bundled one could only fail to start or
+fight the host for the ports, which is the failure the old comment here spent
+three lines warning about — a warning that was really an argument against
+shipping it. Its only purpose was a deployment with no reverse proxy at all,
+and a generic nginx example serves that case without standing up a second TLS
+stack inside the compose file, complete with its own volumes and network.
 
 ### Network egress
 
