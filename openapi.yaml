@@ -10,12 +10,16 @@ info:
     ## The contract
 
     This API is consumed by a **shipped Android client**, so the following
-    properties are part of the contract and are not free to change:
+    properties are part of the contract and are not free to change.
 
-    - **`POST /convert` means "give me a PDF".** The client posts a Word
-      document there and checks for `Content-Type: application/pdf`, refusing
-      anything else - so a stray `text/html` on a `200` is a client-visible
-      failure. That path keeps working exactly as it always has.
+    > **Breaking change: `POST /convert` without a target no longer exists.**
+    > Clients must post to `/convert/pdf`. A client still using the bare path
+    > gets the catch-all `404`, whose message tells the user to update the app.
+
+    - **Success is `200` with the target's own media type.** For `pdf` that is
+      exactly `application/pdf`, with no charset suffix: the client compares the
+      header and refuses anything else, so a stray `text/html` on a `200` is a
+      client-visible failure.
     - **Failure is a non-2xx with the JSON error envelope.** The client reads
       `error.message` and shows it verbatim in a dialog, falling back to
       `"HTTP <status>"` when the body is missing or is not JSON.
@@ -28,8 +32,10 @@ info:
 
     ## Choosing the output format
 
-    `POST /convert/<target>` names the target: `/convert/xlsx`, `/convert/png`,
-    `/convert/epub`. `POST /convert` is exactly `POST /convert/pdf`.
+    The target is part of the path and is REQUIRED: `/convert/pdf`,
+    `/convert/xlsx`, `/convert/png`. There is deliberately no bare `/convert`
+    that assumes a format - one address that means one thing is easier to
+    document and to test than two that mean the same thing.
 
     **Not every source can become every target.** The matrix is finite and
     deliberate - `GET /formats` returns it in full, machine-readably. Asking for
@@ -37,6 +43,14 @@ info:
     for a target that does not exist at all is a `404`. Both messages list the
     alternatives, so a client never has to hard-code the table to give a useful
     error.
+
+    ## Filenames
+
+    The response offers the uploaded file's name with the new extension:
+    `Quarterly report.docx` converted to `pdf` downloads as
+    `Quarterly report.pdf`. The name is sanitised before it is echoed - path
+    segments and control characters are removed - and a name with nothing usable
+    in it becomes `converted.<ext>`.
 
     ## Image targets are archives
 
@@ -76,42 +90,6 @@ tags:
     description: Operational endpoints.
 
 paths:
-  /convert:
-    post:
-      tags: [convert]
-      operationId: convertToPdf
-      summary: Convert a file to PDF
-      description: |
-        Equivalent to `POST /convert/pdf`.
-
-        This is the path the shipped Android client posts to, and it is kept as
-        its own documented operation so that the client's contract is visible in
-        one place: a Word document in, `application/pdf` out.
-      x-max-upload-bytes: 26214400
-      requestBody:
-        $ref: '#/components/requestBodies/Upload'
-      responses:
-        '200':
-          $ref: '#/components/responses/ConvertedToPdf'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '415':
-          $ref: '#/components/responses/Unsupported'
-        '422':
-          $ref: '#/components/responses/Encrypted'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-        '500':
-          $ref: '#/components/responses/ConvertFailed'
-        '503':
-          $ref: '#/components/responses/Busy'
-        '504':
-          $ref: '#/components/responses/Timeout'
-
   /convert/{target}:
     post:
       tags: [convert]
@@ -392,7 +370,7 @@ components:
         Content-Disposition:
           schema:
             type: string
-          example: attachment; filename="converted.pdf"
+          example: attachment; filename="Quarterly report.pdf"; filename*=UTF-8''Quarterly%20report.pdf
       content:
         application/pdf:
           schema:
@@ -415,11 +393,16 @@ components:
             type: string
         Content-Disposition:
           description: |
-            A filename for the download. Server-generated, never derived from
-            the uploaded filename.
+            The uploaded file's name with the target's extension. Sanitised:
+            path segments and control characters are stripped, and a name with
+            nothing usable in it becomes `converted.<ext>`.
+
+            Sent in both RFC 6266 forms - a quoted ASCII `filename` for older
+            clients and a percent-encoded UTF-8 `filename*` for current ones -
+            so a non-ASCII name survives.
           schema:
             type: string
-          example: attachment; filename="converted.xlsx"
+          example: attachment; filename="Quarterly report.xlsx"; filename*=UTF-8''Quarterly%20report.xlsx
       content:
         application/pdf:
           schema:

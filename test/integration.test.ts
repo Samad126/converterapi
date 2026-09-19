@@ -90,7 +90,7 @@ describe('GET /health', () => {
   });
 });
 
-describe('POST /convert - success', () => {
+describe('POST /convert/pdf - success', () => {
   it('converts a real .docx and returns PDF bytes', async () => {
     const response = await upload(server.baseUrl, 'sample.docx', SAMPLE_DOCX);
 
@@ -142,7 +142,7 @@ describe('POST /convert - success', () => {
   });
 });
 
-describe('POST /convert - rejections', () => {
+describe('POST /convert/pdf - rejections', () => {
   it('rejects an oversized upload with 413', async () => {
     const response = await upload(
       server.baseUrl,
@@ -222,6 +222,61 @@ describe('POST /convert - rejections', () => {
     const before_ = await listWorkspaces();
     await upload(server.baseUrl, 'broken.docx', buildMalformedDocx());
     assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
+describe('the target segment is required', () => {
+  it('does not serve the bare /convert path', async () => {
+    // The alias was removed deliberately. A request to it now lands on the
+    // catch-all 404, whose message happens to be the right thing to say to
+    // someone on an out-of-date client: "please update the app".
+    const form = new FormData();
+    form.append('file', new Blob([SAMPLE_DOCX]), 'sample.docx');
+    const response = await fetch(`${server.baseUrl}/convert`, { method: 'POST', body: form });
+
+    assert.equal(response.status, 404);
+    const body = (await response.json()) as { error: { code: string; message: string } };
+    assert.equal(body.error.code, 'E_BAD_REQUEST');
+    assert.equal(
+      body.error.message,
+      'The converter is not available at this address. Please update the app and try again.',
+    );
+  });
+
+  it('serves the same conversion at /convert/pdf', async () => {
+    const response = await upload(server.baseUrl, 'sample.docx', SAMPLE_DOCX, { target: 'pdf' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    assert.equal(response.body.subarray(0, 5).toString('latin1'), '%PDF-');
+  });
+});
+
+describe('download filenames', () => {
+  it('keeps the upload name and swaps the extension', async () => {
+    const response = await upload(server.baseUrl, 'Quarterly report.docx', SAMPLE_DOCX);
+    assert.equal(response.status, 200);
+    assert.match(response.contentDisposition ?? '', /filename="Quarterly report\.pdf"/);
+  });
+
+  it('names a raster archive after the deck it came from', async () => {
+    // The ENTRIES stay slide-1.png, slide-2.png; only the archive is named
+    // after the upload, so unzipping gives predictable page names either way.
+    const response = await upload(server.baseUrl, 'my deck.odp', buildMinimalOdp(['a', 'b']), {
+      target: 'png',
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.contentDisposition ?? '', /filename="my deck\.zip"/);
+    assert.deepEqual(zipEntryNames(response.body), ['slide-1.png', 'slide-2.png']);
+  });
+
+  it('does not let a hostile filename reach the header', async () => {
+    // The name is attacker-controlled and this value is a response header, so
+    // a CRLF in it would be a header injection. Sanitised, not escaped.
+    const response = await upload(server.baseUrl, '../../etc/evil\r\nX-Loop: 1.docx', SAMPLE_DOCX);
+    assert.equal(response.status, 200);
+    const disposition = response.contentDisposition ?? '';
+    assert.doesNotMatch(disposition, /[\r\n]/, 'a newline reached the header');
+    assert.match(disposition, /filename="evilX-Loop: 1\.pdf"/);
   });
 });
 
@@ -394,7 +449,7 @@ describe('cancellation', () => {
     const form = new FormData();
     form.append('file', new Blob([LARGE_DOCX]), 'large.docx');
 
-    const request = fetch(`${server.baseUrl}/convert`, {
+    const request = fetch(`${server.baseUrl}/convert/pdf`, {
       method: 'POST',
       body: form,
       signal: controller.signal,

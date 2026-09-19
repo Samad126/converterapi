@@ -192,7 +192,7 @@ Push to `master`, then confirm the whole loop:
 
 ```bash
 curl -sS https://converter.alakbaroff.com/health
-curl -sS -F "file=@report.docx" https://converter.alakbaroff.com/convert -o out.pdf
+curl -sS -F "file=@report.docx" https://converter.alakbaroff.com/convert/pdf -o out.pdf
 head -c 5 out.pdf        # %PDF-
 
 # One conversion per document family, since each is a separate LibreOffice

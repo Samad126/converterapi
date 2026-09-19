@@ -18,7 +18,6 @@ contract** with a client that is already shipped and cannot be changed.
 - [Quick start](#quick-start)
 - [Conversion matrix](#conversion-matrix)
 - [API](#api)
-  - [POST /convert](#post-convert)
   - [POST /convert/{target}](#post-converttarget)
   - [GET /formats](#get-formats)
   - [GET /health](#get-health)
@@ -122,25 +121,41 @@ running" in one line.
 
 ## API
 
-### POST /convert
+### POST /convert/{target}
 
-Converts to PDF. This is the path the shipped Android client posts to, and its
-contract is fixed.
-
-`multipart/form-data` with exactly one file part named `file`.
+`multipart/form-data` with exactly one file part named `file`. The target is
+part of the path and is **required**.
 
 ```bash
 curl -F "file=@report.docx;type=application/octet-stream" \
-     https://converter.example.com/convert \
+     https://converter.example.com/convert/pdf \
      -o report.pdf
+
+curl -F "file=@sheet.csv" https://converter.example.com/convert/xlsx -o sheet.xlsx
+curl -F "file=@deck.pptx" https://converter.example.com/convert/png -o slides.zip
 ```
 
+There is deliberately no bare `/convert` that assumes a format. One address that
+means one thing is easier to document, to test and to reason about than two that
+mean the same thing, and `POST /convert/pdf` is not harder to write than
+`POST /convert`. A request to the bare path falls through to the catch-all
+`404`, whose message — *"The converter is not available at this address. Please
+update the app and try again."* — is, by accident, exactly the right thing to
+say to a client built against the old path.
+
 The import filter is chosen from the **filename extension**, not the declared
-MIME type — the client deliberately sends `application/octet-stream`, and a
+MIME type: the client deliberately sends `application/octet-stream`, and a
 hostile client could declare anything at all. Any extension in the
 [conversion matrix](#conversion-matrix) is accepted (case-insensitive).
 
-**Success** — `200`, `Content-Type: application/pdf`, body is the PDF bytes.
+**Success** — `200` with the target's own media type (`application/pdf` for
+`pdf`, and nothing else), plus a `Content-Disposition` filename.
+
+The **image targets are the exception**: `png` and `jpg` answer with
+`application/zip` containing `slide-1.png`, `slide-2.png`, … — one image per
+page. That is true even for a one-page document, deliberately: if the content
+type varied with the page count, every client would have to sniff what it
+received to know whether to unzip it.
 
 **Failure** — `4xx`/`5xx`, `Content-Type: application/json`:
 
@@ -152,24 +167,24 @@ hostile client could declare anything at all. Any extension in the
 person: a complete sentence, no stack traces, no paths, no codes. `code` is for
 logs and metrics only — the client never shows it.
 
-### POST /convert/{target}
+#### Download filenames
 
-Converts to the named format: `/convert/xlsx`, `/convert/epub`, `/convert/png`.
-`POST /convert` is exactly `POST /convert/pdf`.
+The response offers the uploaded file's name with the new extension, so
+`Quarterly report.docx` converted to PDF downloads as `Quarterly report.pdf`.
+Converting three documents should not produce three files called
+`converted.pdf`.
 
-```bash
-curl -F "file=@sheet.csv" https://converter.example.com/convert/xlsx -o sheet.xlsx
-curl -F "file=@deck.pptx" https://converter.example.com/convert/png -o slides.zip
-```
+The name comes from a hostile client and ends up in a response header, so it is
+sanitised rather than trusted: path segments and control characters are removed
+(a `CRLF` in a filename is a header-injection vector), a leading dot is stripped
+so the result is not a hidden file, and the length is capped at
+`MAX_DOWNLOAD_NAME_LENGTH`. A name with nothing usable left in it becomes
+`converted.<ext>`. Only the final extension is replaced, so
+`archive.tar.gz` → `archive.tar.pdf`.
 
-**Success** — `200` with the target's own media type, and a
-`Content-Disposition` filename.
-
-The **image targets are the exception**: `png` and `jpg` answer with
-`application/zip` containing `slide-1.png`, `slide-2.png`, … — one image per
-page. That is true even for a one-page document, deliberately: if the content
-type varied with the page count, every client would have to sniff what it
-received to know whether to unzip it.
+It is sent in both RFC 6266 forms — a quoted ASCII `filename` for older clients
+and a percent-encoded UTF-8 `filename*` for current ones — so `Résumé.docx`
+arrives as `Résumé.pdf` rather than as mojibake.
 
 ### GET /formats
 
@@ -209,7 +224,7 @@ up.
 | `400` | `E_BAD_REQUEST` | The document could not be received. Please try again. |
 | `429` | `E_RATE_LIMITED` | Too many requests. Try again in a moment. |
 | `500` | `E_INTERNAL` | Something went wrong on the server. |
-| `404` | `E_BAD_REQUEST` | The converter is not available at this address. Please update the app and try again. |
+| `404` | `E_BAD_REQUEST` | The converter is not available at this address. Please update the app and try again. *(also what a client on the removed bare `/convert` now receives)* |
 
 The three `E_...` messages that end in a list are long on purpose. They are the
 only place a client can discover the matrix from an error, and a person told
@@ -220,13 +235,23 @@ no file part, a per-IP rate limit, and an unrecognised path. They are additive
 and cannot break a shipped client, which falls back to `HTTP <status>` for
 anything it does not recognise.
 
+`E_UNSUPPORTED_TARGET` and `E_UNKNOWN_TARGET` are new with the matrix. They can
+only be reached by asking for a format, which the original client never did.
+
 ### Wire-compatibility constraints
 
 A shipped Android client depends on each of these. They are not style choices.
 
-1. **Success is `Content-Type: application/pdf`.** The client checks it and
-   refuses anything else, so a stray `text/html` on a `200` is a client-visible
-   failure.
+> **Breaking change: the bare `/convert` path was removed.** The target segment
+> is now required, so a client built against `/convert` receives a `404`. Its
+> message — *"The converter is not available at this address. Please update the
+> app and try again."* — is the correct thing to show, but it is still a
+> **broken client** until that client is updated to post to `/convert/pdf`.
+> Nothing else in the list below changed.
+
+1. **Success is `Content-Type: application/pdf` for a `pdf` target.** The client
+   checks it and refuses anything else, so a stray `text/html` on a `200` is a
+   client-visible failure.
 2. **A non-2xx carries the JSON envelope.** The client reads `error.message` for
    its dialog and falls back to `"HTTP <status>"` when it is absent or not JSON.
    Express's and multer's default HTML error pages violate this, so every error
@@ -836,7 +861,7 @@ make it a choice.
 
 ```bash
 curl -sS https://converter.example.com/health
-curl -sS -F "file=@report.docx" https://converter.example.com/convert -o out.pdf
+curl -sS -F "file=@report.docx" https://converter.example.com/convert/pdf -o out.pdf
 head -c 5 out.pdf        # %PDF-
 ```
 

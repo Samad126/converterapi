@@ -19,7 +19,6 @@
 import type { NextFunction, Request, Response } from 'express';
 
 import {
-  DEFAULT_TARGET,
   TARGET_IDS,
   isTargetId,
   resolveConversion,
@@ -27,6 +26,7 @@ import {
   type TargetId,
 } from '../formats.ts';
 import { AppError, ClientGoneError, Errors } from '../errors.ts';
+import { contentDispositionFor, downloadNameFor } from '../lib/download-name.ts';
 import { BoundedQueue, RateLimiter } from '../lib/queue.ts';
 import { zipStored } from '../lib/zip.ts';
 import { convert } from '../services/conversion.service.ts';
@@ -63,11 +63,10 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
   };
 
   const validateTarget: ConvertController['validateTarget'] = (req, _res, next) => {
-    // `/convert` means `/convert/pdf`. The shipped Android client posts to the
-    // bare path and expects a PDF, and that has to keep working exactly as it
-    // did before this service could produce anything else.
+    // The route is `/convert/:target`, so there is no absent case to default -
+    // a request that does not name a target never reaches this handler.
     const segment = req.params.target;
-    const requested = typeof segment === 'string' && segment !== '' ? segment : DEFAULT_TARGET;
+    const requested = typeof segment === 'string' ? segment : '';
     if (!isTargetId(requested)) {
       // A target id that does not exist is a 404: there is no such address.
       // Distinct from a real target this source cannot become, which is a 415
@@ -138,7 +137,14 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
       // has its file rather than a few milliseconds later.
       await cleanup(ctx);
 
-      sendResult(res, result, conversion.target.mediaType);
+      // The download keeps the upload's name, with the target's extension. Note
+      // that the original filename is read HERE and nowhere else: it is never
+      // used as a path, and it is never logged.
+      const downloadName = downloadNameFor(
+        req.file.originalname ?? '',
+        result.archive ? '.zip' : conversion.target.extension,
+      );
+      sendResult(res, result, conversion.target.mediaType, downloadName);
       logRequest(ctx, 'ok', { status: 200 });
     } catch (error) {
       if (error instanceof ClientGoneError) {
@@ -175,11 +181,15 @@ function sendResult(
   res: Response,
   result: { files: Array<{ name: string; data: Buffer }>; archive: boolean },
   mediaType: string,
+  downloadName: string,
 ): void {
   if (result.archive) {
+    // The entry names inside the archive come from the conversion service -
+    // `slide-1.png`, `slide-2.png` - because those describe the pages. The
+    // archive's own name is the download name, derived from the upload.
     const archive = zipStored(result.files);
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename="slides.zip"');
+    res.setHeader('Content-Disposition', contentDispositionFor(downloadName));
     res.setHeader('Content-Length', String(archive.length));
     res.status(200).end(archive);
     return;
@@ -192,7 +202,7 @@ function sendResult(
   // with no charset suffix: the client inspects this header and refuses
   // anything that does not match.
   res.setHeader('Content-Type', mediaType);
-  res.setHeader('Content-Disposition', `attachment; filename="${file.name}"`);
+  res.setHeader('Content-Disposition', contentDispositionFor(downloadName));
   res.setHeader('Content-Length', String(file.data.length));
   res.status(200).end(file.data);
 }

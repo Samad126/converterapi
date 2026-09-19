@@ -49,14 +49,18 @@ export async function startTestServer(options: { enableDocs?: boolean } = {}): P
 export interface RawResponse {
   status: number;
   contentType: string | null;
+  /** The filename offer, which mirrors the uploaded name. */
+  contentDisposition: string | null;
   body: Buffer;
 }
 
 /**
- * POST an upload to /convert or to /convert/<target>.
+ * POST an upload to /convert/<target>.
  *
- * `target` is appended as a path segment; omitting it exercises the bare path
- * the shipped Android client uses, which defaults to PDF.
+ * `target` defaults to `pdf`, which is the conversion the shipped Android
+ * client asks for - it is a parameter here because most tests care about the
+ * source, not the target, and spelling out `/convert/pdf` in forty places would
+ * add noise without adding meaning.
  */
 export async function upload(
   baseUrl: string,
@@ -70,11 +74,12 @@ export async function upload(
     new Blob([bytes], { type: options.mimeType ?? 'application/octet-stream' }),
     filename,
   );
-  const path = options.target ? `/convert/${options.target}` : '/convert';
+  const path = `/convert/${options.target ?? 'pdf'}`;
   const response = await fetch(`${baseUrl}${path}`, { method: 'POST', body: form });
   return {
     status: response.status,
     contentType: response.headers.get('content-type'),
+    contentDisposition: response.headers.get('content-disposition'),
     body: Buffer.from(await response.arrayBuffer()),
   };
 }
@@ -141,16 +146,18 @@ export async function waitFor(
 /**
  * A real .pptx, produced once per test run by converting an ODP with soffice.
  *
- * The matrix only offers PNG/JPG from .pptx, not from .odp, so testing the
- * raster pipeline needs a genuine PowerPoint file. Hand-writing a minimal PPTX
- * is not the answer: the format needs a theme, a slide master and a slide
- * layout wired together with relationship parts, and a package that is missing
- * one of them is a file LibreOffice may accept here and reject there - which
- * would make this fixture test the fixture rather than the service.
+ * This exists to exercise the **.pptx source**: it has its own import filter,
+ * so "a deck converts" cannot be concluded from the .odp tests. (The raster
+ * pipeline itself is covered with the hand-built ODP, so it does not depend on
+ * this generation step.)
  *
- * So it is generated with the same engine the service uses, from the ODP probe
- * that IS hand-built and verified. That makes this the one fixture in the suite
- * that depends on a working soffice, which the whole file already requires.
+ * Hand-writing a minimal PPTX is not the answer: the format needs a theme, a
+ * slide master and a slide layout wired together with relationship parts, and a
+ * package missing one of them is a file LibreOffice may accept here and reject
+ * there - which would make this fixture test the fixture rather than the
+ * service. So it is generated with the same engine the service uses, from the
+ * ODP probe that IS hand-built and verified. That makes it the one fixture in
+ * the suite that depends on a working soffice, which the file already requires.
  */
 // Keyed by the slide list: a cache keyed by nothing would hand the two-slide
 // deck to a test that asked for one slide, and that test would then pass or

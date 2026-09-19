@@ -1,16 +1,18 @@
 /**
- * The conversion routes.
+ * The conversion route.
  *
- * Two paths, one handler:
+ *   POST /convert/<target>  -> any format in the matrix, `pdf` included
  *
- *   POST /convert           -> PDF, which is what the shipped Android client
- *                              posts to and what it expects back
- *   POST /convert/<target>  -> any format in the matrix
+ * The target segment is REQUIRED. There is deliberately no bare `/convert`
+ * alias: one address that means one thing is easier to document, to test and to
+ * reason about than two addresses that mean the same thing, and a default
+ * target is only ever a convenience for the caller - `POST /convert/pdf` is not
+ * harder to write than `POST /convert`.
  *
- * They share every middleware, including the upload, so the only difference
- * between them is the absence or presence of the target segment. That is the
- * point: the legacy path is not a special case maintained alongside the new
- * one, it is the new one with a default applied.
+ * A request to the bare path now falls through to the catch-all 404, whose
+ * message is "The converter is not available at this address. Please update the
+ * app and try again." For a client built against the old path that is, by
+ * accident, exactly the right thing to say to the person holding the phone.
  */
 import { Router } from 'express';
 
@@ -26,7 +28,7 @@ export function createConvertRouter(deps: ConvertControllerDeps): Router {
   const upload = createUploadMiddleware();
 
   router.post(
-    ['/convert', '/convert/:target'],
+    '/convert/:target',
     controller.admit,
     controller.validateTarget,
     controller.prepareWorkspace,

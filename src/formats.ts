@@ -404,9 +404,6 @@ export function isTargetId(id: string): id is TargetId {
   return Object.prototype.hasOwnProperty.call(TARGETS, id);
 }
 
-/** The default target when a request does not name one. */
-export const DEFAULT_TARGET: TargetId = 'pdf';
-
 export interface ResolvedConversion {
   source: SourceFormat;
   target: TargetFormat;

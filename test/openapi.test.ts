@@ -138,17 +138,21 @@ describe('openapi document', () => {
     assert.match(spec.openapi, /^3\.1\./);
     assert.ok(spec.info.title);
     assert.ok(spec.info.version);
-    for (const path of ['/convert', '/convert/{target}', '/formats', '/health']) {
+    for (const path of ['/convert/{target}', '/formats', '/health']) {
       assert.ok(spec.paths[path], `does not document ${path}`);
     }
-    assert.ok(spec.paths['/convert']!.post, 'does not document POST /convert');
     assert.ok(spec.paths['/convert/{target}']!.post, 'does not document POST /convert/{target}');
     assert.ok(spec.paths['/formats']!.get, 'does not document GET /formats');
     assert.ok(spec.paths['/health']!.get, 'does not document GET /health');
+
+    // The bare path is gone for good, and the document must not resurrect it:
+    // a documented alias that the router does not serve would send every client
+    // generated from this spec to a 404.
+    assert.equal(spec.paths['/convert'], undefined, 'documents a bare /convert that is not served');
   });
 
   it('agrees with the configured upload limit', () => {
-    const operation = spec.paths['/convert']!.post as { 'x-max-upload-bytes': number };
+    const operation = spec.paths['/convert/{target}']!.post as { 'x-max-upload-bytes': number };
     assert.equal(
       operation['x-max-upload-bytes'],
       MAX_UPLOAD_BYTES,
@@ -203,10 +207,6 @@ describe('openapi document', () => {
   });
 
   it('documents every error response it can return', () => {
-    const responses = spec.paths['/convert']!.post as { responses: Record<string, unknown> };
-    for (const status of ['200', '400', '413', '415', '422', '429', '500', '503', '504']) {
-      assert.ok(responses.responses[status], `POST /convert does not document ${status}`);
-    }
     const targeted = spec.paths['/convert/{target}']!.post as {
       responses: Record<string, unknown>;
     };
@@ -230,7 +230,7 @@ describe('openapi endpoints', () => {
 
     const body = (await response.json()) as SpecDocument;
     assert.equal(body.openapi, spec.openapi);
-    assert.ok(body.paths['/convert']);
+    assert.ok(body.paths['/convert/{target}']);
   });
 
   it('serves the document as YAML', async () => {
@@ -263,63 +263,53 @@ describe('documented responses match reality', () => {
     label: string;
     status: number;
     code?: string;
-    /** The path the document describes this failure under. */
-    documentedAt: '/convert' | '/convert/{target}';
     run: () => Promise<unknown>;
   }> = [
     {
       label: 'success',
       status: 200,
-      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX),
     },
     {
       label: 'unsupported extension',
       status: 415,
       code: 'E_UNSUPPORTED',
-      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'animation.gif', SAMPLE_DOCX),
     },
     {
       label: 'oversized',
       status: 413,
       code: 'E_TOO_LARGE',
-      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'big.docx', Buffer.alloc(MAX_UPLOAD_BYTES + 1024, 0x41)),
     },
     {
       label: 'malformed',
       status: 500,
       code: 'E_CONVERT_FAILED',
-      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'broken.docx', buildMalformedDocx()),
     },
     {
       label: 'encrypted',
       status: 422,
       code: 'E_ENCRYPTED',
-      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'secret.docx', buildEncryptedDocxContainer()),
     },
     {
       label: 'no file part',
       status: 400,
       code: 'E_BAD_REQUEST',
-      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { fieldName: 'document' }),
     },
     {
       label: 'unknown target',
       status: 404,
       code: 'E_UNKNOWN_TARGET',
-      documentedAt: '/convert/{target}',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'banana' }),
     },
     {
       label: 'target the source cannot become',
       status: 415,
       code: 'E_UNSUPPORTED_TARGET',
-      documentedAt: '/convert/{target}',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'png' }),
     },
   ];
@@ -335,9 +325,8 @@ describe('documented responses match reality', () => {
       assert.equal(response.status, testCase.status);
 
       if (testCase.status === 200) {
-        // The document promises application/pdf for success on the bare path.
-        // Nothing else.
-        const operation = resolve(spec.paths['/convert']!.post);
+        // A `pdf` target promises application/pdf and nothing else.
+        const operation = resolve(spec.paths['/convert/{target}']!.post);
         const responses = operation.responses as Record<string, unknown>;
         const ok = resolve(responses['200']) as { content?: Record<string, unknown> };
         assert.ok(ok.content?.['application/pdf'], 'the 200 does not document application/pdf');

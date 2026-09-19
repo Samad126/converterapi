@@ -56,6 +56,15 @@ export const MAX_CONCURRENT_CONVERSIONS = intFromEnv('MAX_CONCURRENT_CONVERSIONS
 /** How many requests may wait for a slot before we start returning 503 E_BUSY. */
 export const MAX_QUEUED_CONVERSIONS = intFromEnv('MAX_QUEUED_CONVERSIONS', 8, 0);
 
+/**
+ * Longest basename we will echo back in a Content-Disposition header.
+ *
+ * The uploaded filename is attacker-controlled, so its length is too. Headers
+ * have to be held in memory and logged by every hop, and no real document name
+ * is 255 characters of filename on top of the directory it came from.
+ */
+export const MAX_DOWNLOAD_NAME_LENGTH = intFromEnv('MAX_DOWNLOAD_NAME_LENGTH', 100, 1);
+
 /** Root for per-request temp dirs (input + LO profile + output). */
 export const TEMP_ROOT = process.env.TEMP_ROOT ?? join(tmpdir(), 'file-converter');
 

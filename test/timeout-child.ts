@@ -39,7 +39,7 @@ const form = new FormData();
 form.append('file', new Blob([LARGE_DOCX]), 'large.docx');
 
 const startedAt = Date.now();
-const response = await fetch(`http://127.0.0.1:${port}/convert`, { method: 'POST', body: form });
+const response = await fetch(`http://127.0.0.1:${port}/convert/pdf`, { method: 'POST', body: form });
 const body = await response.text();
 
 let leftover: string[] = [];

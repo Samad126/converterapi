@@ -34,10 +34,13 @@ const {
   inputFileNameFor,
 } = await import('../src/services/workspace.service.ts');
 const { zipStored, safeEntryName } = await import('../src/lib/zip.ts');
+const { downloadNameFor, contentDispositionFor } = await import('../src/lib/download-name.ts');
 const { buildMinimalDocx, buildMinimalOdp, buildSolidPng } = await import(
   '../src/lib/probe-documents.ts'
 );
-const { MAX_UPLOAD_BYTES, TEMP_ROOT } = await import('../src/config.ts');
+const { MAX_UPLOAD_BYTES, MAX_DOWNLOAD_NAME_LENGTH, TEMP_ROOT } = await import(
+  '../src/config.ts'
+);
 const {
   buildEncryptedDocxContainer,
   buildEncryptedLegacyDoc,
@@ -107,8 +110,8 @@ describe('conversion matrix', () => {
   });
 
   it('keeps the Word-to-PDF promises the shipped client depends on', () => {
-    // The Android client posts to /convert with a .docx and expects a PDF, so
-    // these three and their target are a contract, not a feature.
+    // The Android client posts a .docx and expects a PDF back, so these three
+    // and their target are a contract, not a feature.
     for (const extension of ['.docx', '.docm', '.doc'] as const) {
       assert.ok(targetsFor(extension).includes('pdf'), `${extension} lost its PDF target`);
       const resolved = resolveConversion(extension, 'pdf');
@@ -201,6 +204,67 @@ describe('probe documents', () => {
     );
     assert.equal(png.readUInt32BE(16), 4, 'width');
     assert.equal(png.readUInt32BE(20), 3, 'height');
+  });
+});
+
+describe('download names', () => {
+  it('keeps the upload name and takes the target extension', () => {
+    assert.equal(downloadNameFor('Quarterly report.docx', '.pdf'), 'Quarterly report.pdf');
+    assert.equal(downloadNameFor('sheet.csv', '.xlsx'), 'sheet.xlsx');
+    // Only the LAST extension is replaced, so the parts that distinguish the
+    // file survive.
+    assert.equal(downloadNameFor('archive.tar.gz', '.pdf'), 'archive.tar.pdf');
+    assert.equal(downloadNameFor('no-extension', '.pdf'), 'no-extension.pdf');
+  });
+
+  it('strips anything that could escape or break a header', () => {
+    // Path traversal: the directory part must never survive.
+    assert.equal(downloadNameFor('../../etc/passwd.docx', '.pdf'), 'passwd.pdf');
+    assert.equal(downloadNameFor('/absolute/path/report.docx', '.pdf'), 'report.pdf');
+    assert.equal(downloadNameFor('C:\\Users\\me\\report.docx', '.pdf'), 'report.pdf');
+
+    // Header injection: a CRLF in the name would otherwise let a hostile client
+    // write headers of its own choosing.
+    assert.equal(downloadNameFor('evil\r\nX-Injected: yes.docx', '.pdf'), 'evilX-Injected: yes.pdf');
+    assert.equal(downloadNameFor('quote".docx', '.pdf'), 'quote.pdf');
+    // A backslash is a Windows path separator, so it is handled as a directory
+    // boundary rather than as a character to keep.
+    assert.equal(downloadNameFor('back\\slash.docx', '.pdf'), 'slash.pdf');
+
+    // A leading dot would make the result a hidden file.
+    assert.equal(downloadNameFor('.hidden.docx', '.pdf'), 'hidden.pdf');
+  });
+
+  it('falls back to a generic name when nothing usable survives', () => {
+    assert.equal(downloadNameFor('.docx', '.pdf'), 'converted.pdf');
+    assert.equal(downloadNameFor('', '.pdf'), 'converted.pdf');
+    assert.equal(downloadNameFor('../', '.xlsx'), 'converted.xlsx');
+    assert.equal(downloadNameFor('...', '.pdf'), 'converted.pdf');
+  });
+
+  it('bounds a name that is absurdly long', () => {
+    const long = `${'a'.repeat(5000)}.docx`;
+    const name = downloadNameFor(long, '.pdf');
+    assert.ok(name.length <= MAX_DOWNLOAD_NAME_LENGTH + '.pdf'.length, `too long: ${name.length}`);
+    assert.ok(name.endsWith('.pdf'));
+  });
+
+  it('carries a non-ASCII name in both RFC 6266 forms', () => {
+    const header = contentDispositionFor(downloadNameFor('Résumé — final.docx', '.pdf'));
+    // The quoted form is what older clients read and must be plain ASCII.
+    const quoted = /filename="([^"]*)"/.exec(header)?.[1] ?? '';
+    assert.match(quoted, /^[\u0020-\u007e]*$/, `not ASCII: ${quoted}`);
+    // The starred form carries the real name, percent-encoded as UTF-8, so the
+    // recipient gets `Résumé — final.pdf` rather than mojibake.
+    assert.match(header, /filename\*=UTF-8''R%C3%A9sum%C3%A9%20%E2%80%94%20final\.pdf/);
+  });
+
+  it('never emits a header value containing a newline', () => {
+    // Whatever the client sends, the header has to be a single line - Node
+    // throws on an invalid header character, which would be a 500 rather than a
+    // conversion failure.
+    const header = contentDispositionFor(downloadNameFor('a\r\nb\rc\nd.docx', '.pdf'));
+    assert.doesNotMatch(header, /[\r\n]/);
   });
 });
 
