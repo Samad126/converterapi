@@ -110,7 +110,7 @@ That is the intended behaviour, and it is why this is a boot check.
 Then:
 
 ```bash
-curl -sS http://127.0.0.1:3001/health         # {"status":"ok"}
+curl -sS http://127.0.0.1:3010/health         # {"status":"ok"}
 
 # The check that silently passes while producing wrong PDFs. Every line must
 # resolve to a metric-compatible substitute, not to a fallback.

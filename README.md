@@ -56,7 +56,7 @@ Or just use Docker, which installs all of it:
 
 ```bash
 docker compose up -d --build
-curl -sS http://localhost:3001/health      # {"status":"ok"}
+curl -sS http://localhost:3010/health      # {"status":"ok"}
 ```
 
 `-d` matters: `docker compose up` in the foreground stops both the container and
@@ -531,7 +531,7 @@ applies the matching request body limit.
 
 ```bash
 docker compose up -d --build
-curl -sS http://localhost:3001/health      # {"status":"ok"}
+curl -sS http://localhost:3010/health      # {"status":"ok"}
 ```
 
 ### Continuous deployment
@@ -549,10 +549,11 @@ first build watched by hand, and the nginx site — which reuses the existing
 
 Both need three repo secrets: `SSH_HOST`, `SSH_USER`, `SSH_PASSWORD`.
 
-The converter publishes on **loopback only** (`127.0.0.1:3001`), so it is
+The converter publishes on **loopback only** (`127.0.0.1:3010`), so it is
 reachable by a proxy running on this host and by nothing else — not the LAN,
 not the internet. Keep that prefix: dropping it would expose an unauthenticated
-endpoint that parses untrusted documents to your whole network.
+endpoint that parses untrusted documents to your whole network. Keep the port
+too: 3000 and 3001 are what the other services on this host use.
 
 ### With nginx (the common case)
 
@@ -567,7 +568,7 @@ block. The parts that matter:
   its dialog text from `error.message` and would otherwise show a bare
   `HTTP 413`.
 
-Point `proxy_pass` at `http://127.0.0.1:3001`.
+Point `proxy_pass` at `http://127.0.0.1:3010`.
 
 ### With the bundled Caddy (if you have no proxy already)
 

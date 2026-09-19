@@ -28,10 +28,16 @@ services:
     # KEEP THIS. Dropping the 127.0.0.1 prefix would expose the unauthenticated
     # converter to your whole network.
     #
-    # The host port must stay in step with the container's PORT (Dockerfile
-    # ENV PORT). The healthcheck below reads PORT, so it follows automatically.
+    # The HOST port is 3010, not 3001, because this server already runs other
+    # services on 3000 and 3001. Publishing 3001 here would fail to bind - and
+    # worse, would hijack nextudy.alakbaroff.com, whose nginx block also points
+    # at localhost:3001.
+    #
+    # The CONTAINER port stays 3001. The mapping bridges the two, so the
+    # Dockerfile's PORT and EXPOSE are untouched, and the healthcheck below -
+    # which reads PORT inside the container - follows automatically.
     ports:
-      - '127.0.0.1:3001:3001'
+      - '127.0.0.1:3010:3001'
     networks:
       - backend
 

@@ -50,7 +50,7 @@ jobs:
             # 40 x 5s = 200s, roughly double the compose healthcheck's 90s
             # start period, to leave room for the cold build's first-run cost.
             for i in $(seq 1 40); do
-              if curl -fsS -o /dev/null http://127.0.0.1:3001/health; then
+              if curl -fsS -o /dev/null http://127.0.0.1:3010/health; then
                 echo "converter healthy after $((i * 5))s"
                 exit 0
               fi
