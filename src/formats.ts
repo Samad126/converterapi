@@ -52,7 +52,8 @@ export type TargetId =
   | 'png'
   | 'jpg'
   | 'tables'
-  | 'layers';
+  | 'layers'
+  | 'pdfa';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -72,7 +73,8 @@ export type AllowedExtension =
   | '.png'
   | '.jpg'
   | '.jpeg'
-  | '.psd';
+  | '.psd'
+  | '.pdf';
 
 export interface TargetFormat {
   id: TargetId;
@@ -96,6 +98,18 @@ export interface TargetFormat {
    *     whole, which is what makes a PSD's layers available as images. The
    *     engine is named by `extractFrom` rather than by a filter, and it is
    *     this mode that makes the service more than a LibreOffice front end.
+   *
+   * `mode` describes the LIBREOFFICE-OR-NOT route a target normally takes.
+   * `engineFrom`, below, is orthogonal to it: `docx`/`pptx`/`xlsx` are
+   * `direct` LibreOffice exports for every source that reaches them through
+   * `filters` - and, separately, a PDF reaches those same three ids through a
+   * second, non-LibreOffice engine, because a PDF opens in LibreOffice as a
+   * Draw document and Draw has no Writer/Calc/Impress export filter to reach
+   * any of them. `resolveConversion` checks `engineFrom` before `filters`,
+   * so the id a client asks for names the FORMAT, not which engine happened
+   * to produce it - which is the whole point: nobody converting a PDF to a
+   * Word document should have to know that this service uses a different
+   * program to do it than a `.doc` upload does.
    *
    * `mode` says how the bytes are produced and nothing else. What the response
    * LOOKS like is `multiple`, below, because the two genuinely vary apart:
@@ -144,6 +158,25 @@ export interface TargetFormat {
    * archive of them.
    */
   extractFrom?: readonly AllowedExtension[];
+  /**
+   * Sources that reach this target through `pdf_engine.py` (see
+   * `pdf-engine.service.ts`) instead of through `filters` - today, only a
+   * PDF, reaching `docx`/`pptx`/`xlsx`.
+   *
+   * A second, independent route to the SAME target id, not a target of its
+   * own the way `extractFrom` is for `tables`/`layers`: those two are lossy
+   * in a way that a plain `docx`/`xlsx` promise is not, so they earned
+   * separate ids. A PDF's `docx` is a genuine reconstruction of the same
+   * format the id already means, so it answers to the same name - the
+   * engine that produced it is an implementation detail `resolveConversion`
+   * resolves, not something the URL should ever have to say.
+   *
+   * `validateMatrix` checks this the same way it checks `extractFrom`: every
+   * named source must offer this target id, and every source that offers
+   * this id via the engine route (rather than via `filters`) must be named
+   * here.
+   */
+  engineFrom?: readonly AllowedExtension[];
 }
 
 /**
@@ -186,6 +219,12 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { writer: 'MS Word 2007 XML' },
+    // From a PDF, this is `pdf_engine.py`'s docx operation (pdf2docx/PyMuPDF)
+    // rebuilding real paragraphs, tables and images as OOXML - a genuine
+    // reconstruction of a Word document, not a raster fallback, which is why
+    // it answers to the same `docx` id rather than a lossy-extract id of its
+    // own. See the note on `engineFrom` for why this differs from `tables`.
+    engineFrom: ['.pdf'],
   },
   txt: {
     id: 'txt',
@@ -243,6 +282,14 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { calc: 'Calc MS Excel 2007 XML' },
+    // From a PDF, this is `pdf_engine.py`'s xlsx operation (pdfplumber),
+    // finding tables by their drawn lines - lossy in the same direction as
+    // `tables` (prose and images are dropped) but still answering the
+    // `xlsx` id rather than a name of its own, because a workbook is what
+    // both promise and a PDF has no faithful, non-lossy spreadsheet export
+    // to compare it against the way `.docx` -> `xlsx` would. A PDF with no
+    // ruled table found answers E_NO_TABLES, exactly as `tables` does.
+    engineFrom: ['.pdf'],
   },
   csv: {
     id: 'csv',
@@ -277,6 +324,14 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { impress: 'Impress MS PowerPoint 2007 XML' },
+    // From a PDF, this is `pdf_engine.py`'s pptx operation: one slide per
+    // page, each page rendered whole as that slide's image. There is no
+    // PDF-to-Impress import to reconstruct editable shapes from, so this is
+    // the same fallback real "PDF to PowerPoint" tools use for anything not
+    // already a native deck - lossier than the `docx` route (no editable
+    // text) and still a genuine, openable `.pptx`, which is why it answers
+    // to this id rather than a name of its own.
+    engineFrom: ['.pdf'],
   },
   png: {
     id: 'png',
@@ -358,6 +413,31 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: true,
     filters: {},
     extractFrom: ['.psd'],
+  },
+  pdfa: {
+    id: 'pdfa',
+    extension: '.pdf',
+    mediaType: 'application/pdf',
+    /**
+     * Distinct from `pdf`'s label for the same reason `tables` is distinct
+     * from `xlsx`: this is a lossy, standards-flattening re-export of a PDF
+     * that already exists, not the faithful "render this document to PDF"
+     * the `pdf` target promises everywhere else - and a source can never
+     * reach `pdf` with its own extension anyway (see `validateMatrix`'s
+     * self-target check), so this needed its own id regardless.
+     */
+    label: 'PDF/A',
+    /**
+     * A PDF re-exported through Draw with `SelectPdfVersion` forced to 1
+     * (PDF/A-1b) - the one direct, LibreOffice-backed target a PDF source can
+     * reach, since Draw is the only family a PDF ever opens as. Verified with
+     * `soffice --convert-to`: the filter argument is exactly this string,
+     * including the embedded JSON, in the same colon-joined shape the CSV
+     * target already uses for its own filter options.
+     */
+    mode: 'direct',
+    multiple: false,
+    filters: { draw: 'draw_pdf_Export:{"SelectPdfVersion":{"type":"long","value":1}}' },
   },
 };
 
@@ -543,6 +623,26 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // promise a fidelity nothing in this pipeline could deliver.
     targets: ['layers'],
   },
+  '.pdf': {
+    extension: '.pdf',
+    // Real, and deliberately the only family a PDF gets: LibreOffice opens
+    // every PDF as a Draw document, verified by running `soffice
+    // --convert-to` for docx/pptx/xlsx/odt/odp/ods/rtf/txt against a real PDF
+    // and getting "no export filter found" for every one of them, while
+    // pdf/png/jpg/svg/odg/html - Draw's own export filters - all worked. That
+    // is why `pdfa` and the raster targets are `direct`/`raster` here exactly
+    // as they are for any other Draw-family source, while `docx`/`pptx`/
+    // `xlsx` cannot be: there is no filter for them to reach, at any mode,
+    // from this family - which is exactly what their `engineFrom` route
+    // exists for.
+    family: 'draw',
+    mediaType: 'application/pdf',
+    importFilter: 'draw_pdf_Import',
+    // `docx`/`pptx`/`xlsx` sit last because they are the only reconstructive
+    // members of the list - `pdfa` and the raster targets are LibreOffice's
+    // own faithful re-export of the same bytes.
+    targets: ['pdfa', 'png', 'jpg', 'docx', 'pptx', 'xlsx'],
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -572,9 +672,24 @@ export interface ResolvedConversion {
    * The `--convert-to` argument for a `direct` target.
    *
    * Empty for a `raster` target, which is rendered to PDF first and then
-   * rasterised - the caller uses `pdfFilterFor()` for that first step.
+   * rasterised - the caller uses `pdfFilterFor()` for that first step - and
+   * empty for a `viaEngine` pair, which never touches soffice at all.
    */
   convertTo: string;
+  /**
+   * Does THIS PAIR reach `target` through `pdf_engine.py` rather than
+   * through `mode`'s usual route?
+   *
+   * A property of the PAIR, not of the target: `target.mode` for `docx` is
+   * `'direct'`, and stays `'direct'`, because that is how every OTHER source
+   * reaches it - a `.doc` upload asking for `docx` still gets a plain
+   * `soffice --convert-to`. Only a PDF's request for `docx`/`pptx`/`xlsx`
+   * takes the engine route, which is exactly what `target.engineFrom` names.
+   * The caller (`conversion.service.ts`) checks this before falling back to
+   * `target.mode`, so it never has to ask "but which route did THIS one
+   * take" any other way.
+   */
+  viaEngine: boolean;
 }
 
 /**
@@ -593,13 +708,20 @@ export function resolveConversion(
   const target = TARGETS[targetId];
   if (!source.targets.includes(targetId)) return null;
 
+  if (target.engineFrom?.includes(extension)) {
+    // Checked before `mode`: this is a second, independent route to the same
+    // target id, and it says nothing about how any OTHER source reaches it.
+    // See `ResolvedConversion.viaEngine` and the field's own doc comment.
+    return { source, target, convertTo: '', viaEngine: true };
+  }
+
   if (target.mode === 'extract') {
     // Nothing to look up: there is no LibreOffice filter for an engine that
     // does not call LibreOffice. Whether this pair is legal has already been
     // decided by the `targets` check above, and `validateMatrix` guarantees
     // the two lists agree - so reaching here means the extractor can read this
     // source, or the matrix is broken and would have thrown at import.
-    return { source, target, convertTo: '' };
+    return { source, target, convertTo: '', viaEngine: false };
   }
 
   // Everything below asks LibreOffice to do the work, so a source it cannot
@@ -613,12 +735,12 @@ export function resolveConversion(
     // A raster target is built from the family's PDF export, so a family that
     // cannot write a PDF cannot write an image either.
     if (!pdfFilterFor(source.family)) return null;
-    return { source, target, convertTo: '' };
+    return { source, target, convertTo: '', viaEngine: false };
   }
 
   const filter = target.filters[source.family];
   if (!filter) return null;
-  return { source, target, convertTo: `${target.extension.slice(1)}:${filter}` };
+  return { source, target, convertTo: `${target.extension.slice(1)}:${filter}`, viaEngine: false };
 }
 
 /**
@@ -727,6 +849,31 @@ export function validateMatrix(): void {
       }
     } else if (target.extractFrom) {
       problems.push(`target "${id}" declares extractFrom but is not an extract target`);
+    }
+
+    // `engineFrom` is checked independently of `mode`, because it is a
+    // second route to the SAME target id rather than a mode of its own - see
+    // the field's own doc comment. Both directions matter here too: a name
+    // that is not a source, and a source that does not list this id among
+    // its own targets.
+    for (const extension of target.engineFrom ?? []) {
+      const source = SOURCES[extension];
+      if (!source) {
+        problems.push(`target "${id}" names unknown engine source "${extension}"`);
+        continue;
+      }
+      if (!source.targets.includes(id as TargetId)) {
+        problems.push(`target "${id}" names engine source "${extension}", which does not offer it`);
+      }
+      // A source whose family already has a filter for this target would
+      // make `resolveConversion` silently prefer the engine route over a
+      // working LibreOffice one - never useful, and a sign the matrix means
+      // something other than what it says.
+      if (source.family && target.filters[source.family]) {
+        problems.push(
+          `target "${id}" has both a filter and an engine route for "${extension}" - ambiguous`,
+        );
+      }
     }
   }
 

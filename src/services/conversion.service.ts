@@ -1,18 +1,28 @@
 /**
  * One conversion, start to finish: input on disk in, files out.
  *
- * The shape of a request depends on the target:
+ * The shape of a request depends on the resolved conversion:
  *
+ *   - A `viaEngine` pair (today: a PDF asking for `docx`/`pptx`/`xlsx`) is
+ *     handed to `pdf_engine.py`, a second, non-LibreOffice conversion engine,
+ *     checked BEFORE the target's own `mode` - see `ResolvedConversion.
+ *     viaEngine`. It exists because LibreOffice opens every PDF as a Draw
+ *     document, and Draw has no Writer/Calc/Impress export filter to reach
+ *     any of those three, so there is no `soffice --convert-to` this could
+ *     ever be.
  *   - `direct` targets are a single `soffice --convert-to` and the file it
  *     writes is the answer.
  *   - `raster` targets (PNG/JPG) are a presentation rendered to PDF and then
  *     split into one image per page, because LibreOffice's own command-line
  *     image export only ever writes the first page. That is two processes, and
  *     they share one deadline: what is being rationed is the client's patience,
- *     not any one process's runtime.
+ *     not any one process's runtime. A PDF source skips the render step - it
+ *     already is the PDF the other sources have to be turned into - and goes
+ *     straight to the split.
  *   - `extract` targets never reach LibreOffice at all. The upload is opened as
  *     the ZIP of XML parts it is and the answer is built from its contents -
- *     which today means one worksheet per table in a Word document.
+ *     which today means one worksheet per table in a Word document, or one PNG
+ *     per layer of a PSD.
  *
  * Nothing here knows about HTTP. Errors come out as AppError and the caller
  * decides how they are delivered.
@@ -45,6 +55,11 @@ import { isPasswordProtected } from '../lib/encrypted.ts';
 import { extractLayers, MANIFEST_FILENAME, manifestJson } from '../lib/psd-layers.ts';
 import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
+import {
+  PDF_ENGINE_NO_TABLES_EXIT_CODE,
+  runPdfEngine,
+  type PdfEngineOperation,
+} from './pdf-engine.service.ts';
 import { rasterizePdf, runSoffice, type ProcessOutcome } from './soffice.service.ts';
 import { OUTPUT_DIRNAME, inputFileNameFor, PROFILE_DIRNAME } from './workspace.service.ts';
 
@@ -126,8 +141,9 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   await fsp.mkdir(outDir, { recursive: true });
 
   const startedAt = Date.now();
-  const files =
-    target.mode === 'extract'
+  const files = conversion.viaEngine
+    ? await runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline })
+    : target.mode === 'extract'
       ? await runExtractPipeline({ inputPath, target, signal, deadline })
       : target.mode === 'raster'
         ? await runRasterPipeline({
@@ -136,6 +152,11 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
             workspace,
             profileDir,
             target,
+            // The source is already a PDF, so the "render to PDF first" half of
+            // this pipeline is not just unnecessary but wrong to run: soffice
+            // would reopen it as a Draw document and re-export it, spending a
+            // whole process on a lossy round-trip of bytes we already have.
+            sourceIsPdf: source.extension === '.pdf',
             // Resolved here, from the family, rather than passed as a family for
             // the raster pipeline to look up. A source that reaches this branch
             // is one the matrix says has a PDF export, and turning that into the
@@ -220,38 +241,51 @@ async function runRasterPipeline(run: {
   workspace: string;
   profileDir: string;
   target: TargetFormat;
+  /** Is the upload already a PDF? Skips the render-to-PDF step below. */
+  sourceIsPdf: boolean;
   /** The family's PDF export filter, resolved by the caller. */
   pdfFilter: string;
   deadline: number;
   signal?: AbortSignal;
 }): Promise<ProducedFile[]> {
-  const { inputPath, outDir, workspace, profileDir, target, pdfFilter, deadline, signal } = run;
+  const { inputPath, outDir, workspace, profileDir, target, sourceIsPdf, pdfFilter, deadline, signal } =
+    run;
 
-  if (pdfFilter === '') {
-    // Unreachable via the matrix, which refuses to advertise a raster target
-    // for a source with no PDF export. Guarded anyway: the alternative is
-    // handing soffice an empty filter argument and getting back whatever it
-    // decides that means.
-    throw Errors.internal(`no PDF export filter for the ${target.id} target`);
-  }
+  let intermediatePdfPath: string;
+  if (sourceIsPdf) {
+    // The upload already is the PDF this pipeline would otherwise spend a
+    // soffice process rendering. Handing it straight to the rasteriser skips
+    // a lossy round-trip through Draw for no benefit - the bytes on disk are
+    // exactly what a PDF-to-image conversion should render.
+    intermediatePdfPath = inputPath;
+  } else {
+    if (pdfFilter === '') {
+      // Unreachable via the matrix, which refuses to advertise a raster target
+      // for a source with no PDF export. Guarded anyway: the alternative is
+      // handing soffice an empty filter argument and getting back whatever it
+      // decides that means.
+      throw Errors.internal(`no PDF export filter for the ${target.id} target`);
+    }
 
-  const render = await runSoffice({
-    inputPath,
-    outDir,
-    profileDir,
-    workspace,
-    convertTo: `pdf:${pdfFilter}`,
-    deadline,
-    signal,
-  });
-  throwForOutcome(render);
+    const render = await runSoffice({
+      inputPath,
+      outDir,
+      profileDir,
+      workspace,
+      convertTo: `pdf:${pdfFilter}`,
+      deadline,
+      signal,
+    });
+    throwForOutcome(render);
 
-  const pdf = await collectProducedFiles(outDir, '.pdf');
-  const intermediate = pdf[0];
-  if (!intermediate) {
-    throw Errors.convertFailed(
-      `soffice produced no intermediate PDF (exit=${render.exitCode} signal=${render.signal ?? 'none'} stderr=${render.stderr})`,
-    );
+    const pdf = await collectProducedFiles(outDir, '.pdf');
+    const intermediate = pdf[0];
+    if (!intermediate) {
+      throw Errors.convertFailed(
+        `soffice produced no intermediate PDF (exit=${render.exitCode} signal=${render.signal ?? 'none'} stderr=${render.stderr})`,
+      );
+    }
+    intermediatePdfPath = join(outDir, intermediate.name);
   }
 
   // A private directory for the images, so "everything in here" is exactly the
@@ -261,7 +295,7 @@ async function runRasterPipeline(run: {
 
   const format = target.id === 'png' ? 'png' : 'jpg';
   const raster = await rasterizePdf({
-    pdfPath: join(outDir, intermediate.name),
+    pdfPath: intermediatePdfPath,
     outDir: rasterDir,
     prefix: RASTER_PREFIX,
     format,
@@ -304,9 +338,9 @@ async function runRasterPipeline(run: {
  *
  * There is no child process here and no deadline that could be enforced, and
  * that is a deliberate trade rather than an oversight. Everything below runs
- * in-process and, once the XML is in hand, synchronously: a scan of a bounded
- * document cannot be interrupted halfway through, so a deadline would only
- * ever be consulted after the work it was meant to bound. What bounds it
+ * in-process and, once the bytes are in hand, synchronously: a scan of a
+ * bounded document cannot be interrupted halfway through, so a deadline would
+ * only ever be consulted after the work it was meant to bound. What bounds it
  * instead is the input - MAX_DOCUMENT_XML_BYTES before the inflate, and
  * MAX_TABLE_CELLS during the scan - and the abort signal, which is honoured at
  * the two points where honouring it is possible.
@@ -320,7 +354,7 @@ async function runExtractPipeline(run: {
   inputPath: string;
   target: TargetFormat;
   signal?: AbortSignal;
-  /** Not enforced by the extractors; see below for why it is passed anyway. */
+  /** Not enforced by the extractors; see above for why it is passed anyway. */
   deadline: number;
 }): Promise<ProducedFile[]> {
   const { inputPath, target, signal } = run;
@@ -498,6 +532,65 @@ async function extractLayersToArchive(run: {
     ...extraction.layers.map((layer) => ({ name: layer.file, data: layer.data })),
     { name: MANIFEST_FILENAME, data: manifestJson(extraction.manifest) },
   ];
+}
+
+// ---------------------------------------------------------------------------
+// engine: a PDF asking for docx/pptx/xlsx, answered by pdf_engine.py
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `pdf_engine.py` for a `viaEngine` pair - today, only a PDF asking for
+ * `docx`, `pptx` or `xlsx`.
+ *
+ * The target's own id doubles as the operation name: `PdfEngineOperation` is
+ * exactly `'docx' | 'pptx' | 'xlsx'`, which is exactly the three ids
+ * `engineFrom` ever appears on, so there is nothing else to look up. Shaped
+ * like `runDirectPipeline` - write to `outDir`, respect the deadline and the
+ * abort signal, insist the output is really there - because the failure modes
+ * are the same failure modes: a wedged process, a client that left, an empty
+ * file left behind by a crash.
+ */
+async function runEnginePipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+  const operation = target.id as PdfEngineOperation;
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+
+  const outcome = await runPdfEngine({
+    operation,
+    inputPath,
+    outputPath,
+    workspace,
+    deadline,
+    signal,
+  });
+
+  if (outcome.kind === 'exited' && outcome.exitCode === PDF_ENGINE_NO_TABLES_EXIT_CODE) {
+    // Only the xlsx operation uses this exit code (see pdf_engine.py); docx
+    // and pptx never produce it, since there is no "this PDF has no
+    // paragraphs" or "no pages" equivalent worth a dedicated error.
+    throw Errors.noTables();
+  }
+  throwForOutcome(outcome);
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(
+      `pdf_engine.py ${operation} produced no ${target.extension} file ` +
+        `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
+    );
+  }
+
+  return [{ name: outputName, data: file.data }];
 }
 
 // ---------------------------------------------------------------------------

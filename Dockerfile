@@ -40,6 +40,16 @@ FROM node:22-bookworm-slim AS runtime
 # an intermediate PDF is the only way to get one image per slide, which is what
 # the PNG/JPG targets promise.
 #
+# python3 plus pdf2docx/pdfplumber/python-pptx/openpyxl is a SECOND, unrelated
+# conversion engine, needed because LibreOffice cannot produce the `word`,
+# `slides` or `sheet` targets AT ALL: a PDF opens in LibreOffice as a Draw
+# document, and Draw has no Writer/Calc/Impress export filter - confirmed by
+# running `soffice --convert-to docx/pptx/xlsx` against a real PDF and getting
+# "no export filter found" every time. `scripts/pdf_engine.py` is what those
+# three targets run instead. Installed with `--break-system-packages` into the
+# system site-packages (not `--user`) so it resolves regardless of $HOME -
+# `pdf-engine.service.ts` explains why that distinction matters.
+#
 # The font packages are NOT optional and NOT cosmetic. Calibri and Cambria do
 # not exist on Linux; without metric-compatible substitutes LibreOffice picks a
 # font with different glyph widths, so every line breaks in a different place
@@ -69,7 +79,14 @@ RUN apt-get update \
       fonts-opensymbol \
       fontconfig \
       ca-certificates \
+      python3 \
+      python3-pip \
  && fc-cache -f \
+ && pip3 install --no-cache-dir --break-system-packages \
+      pdf2docx \
+      pdfplumber \
+      python-pptx \
+      openpyxl \
  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \
@@ -83,6 +100,10 @@ WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+
+# config.ts resolves this relative to itself (one level up from dist/ or
+# src/), so it has to land at /app/scripts regardless of which one runs.
+COPY scripts ./scripts
 
 # The OpenAPI document is read at runtime (served at /openapi.json and /docs),
 # not compiled, so it has to be copied across separately. src/openapi.ts

@@ -15,16 +15,18 @@
  * family, which is the only way a missing poppler is ever noticed.
  */
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { PDFTOPPM_BIN, REQUIRED_FONT_ALIASES, SOFFICE_BIN } from '../config.ts';
+import { PDFTOPPM_BIN, PDF_ENGINE_SCRIPT, PYTHON_BIN, REQUIRED_FONT_ALIASES, SOFFICE_BIN } from '../config.ts';
 import { PreflightError } from '../errors.ts';
 import { archivesFiles, resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
 import { MANIFEST_FILENAME } from '../lib/psd-layers.ts';
 import {
   calcProbe,
   impressProbe,
+  pdfProbe,
   PSD_PROBE_DRAWABLE_LAYERS,
   psdProbe,
   tablesProbe,
@@ -45,6 +47,7 @@ export async function preflight(): Promise<PreflightReport> {
   const sofficeVersion = assertSofficePresent();
   const rasterizerVersion = assertRasterizerPresent();
   const fonts = assertMetricCompatibleFonts();
+  assertPdfEnginePresent();
   return { sofficeVersion, rasterizerVersion, fonts };
 }
 
@@ -130,6 +133,63 @@ function assertRasterizerPresent(): string {
     );
   }
   return output.split('\n')[0] ?? '';
+}
+
+/**
+ * The `docx`/`pptx`/`xlsx` targets FROM A PDF, needed because LibreOffice
+ * cannot produce them at all that way.
+ *
+ * A PDF opens in LibreOffice as a Draw document, and Draw has no Writer/Calc/
+ * Impress export filter - confirmed by running `soffice --convert-to` for
+ * each of them against a real PDF and getting "no export filter found" every
+ * time. `scripts/pdf_engine.py` is a second, independent conversion engine
+ * for exactly that reason, and it fails exactly the way the LibreOffice
+ * modules do if its dependencies are missing: not at boot, on whichever
+ * user's PDF asks for a Word document first. Checked the same way
+ * `assertSofficePresent` checks its own dependency - can the interpreter be
+ * run at all - plus a check that is specific to this engine: are its three
+ * packages actually importable, since a partially-installed Python
+ * environment runs and then fails, which `spawnSync -c "import ..."` would
+ * rather see happen now.
+ */
+function assertPdfEnginePresent(): void {
+  const result = spawnSync(
+    PYTHON_BIN,
+    ['-c', 'import pdf2docx, pptx, pdfplumber, openpyxl, fitz'],
+    { encoding: 'utf8', timeout: 30_000 },
+  );
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${PYTHON_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It runs scripts/pdf_engine.py, which is what turns a PDF into an',
+        'editable DOCX/PPTX/XLSX - LibreOffice cannot do this at all, because a',
+        'PDF opens in it as a Draw document and Draw has no Writer/Calc/Impress',
+        'export filter.',
+        '  Docker:  use the provided Dockerfile',
+        '',
+        'Set PYTHON_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      [
+        'The PDF engine\'s Python dependencies are not all installed.',
+        '',
+        `  pip install pdf2docx pdfplumber python-pptx openpyxl`,
+        '  Docker:  use the provided Dockerfile',
+        '',
+        `stderr: ${(result.stderr ?? '').trim()}`,
+      ].join('\n'),
+    );
+  }
+  if (!existsSync(PDF_ENGINE_SCRIPT)) {
+    throw new PreflightError(`PDF engine script missing: ${PDF_ENGINE_SCRIPT}`);
+  }
 }
 
 function assertMetricCompatibleFonts(): Array<{ requested: string; resolved: string }> {
@@ -248,6 +308,16 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   // it is a fault in our own reader or our own PNG writer, and the boot check
   // is the only place either can be caught before a user's document is.
   { extension: '.psd', target: 'layers', document: psdProbe },
+  // The PDF engine is a THIRD conversion engine, and a different shape of
+  // fault than either of the above: `assertPdfEnginePresent` already proves
+  // the Python interpreter runs and its packages import, but not that
+  // spawning it from Node, writing its output to `outDir` and reading that
+  // output back all actually work together. A PDF's `docx` exercises that
+  // whole path; its `pptx` and `xlsx` share every part of it except which
+  // `pdf_engine.py` operation runs, so a fault reachable only through one of
+  // them specifically is far more likely to be in the PDF itself than in this
+  // plumbing.
+  { extension: '.pdf', target: 'docx', document: pdfProbe },
 ];
 
 export interface WarmUpReport {
@@ -290,26 +360,46 @@ export async function warmUp(): Promise<WarmUpReport> {
           `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} image(s) for a two-slide document.`,
         );
       }
-      // The extract targets come in two shapes, and which one is expected is
-      // the matrix's answer rather than the mode's: `tables` puts however many
-      // tables it finds into ONE workbook, while `layers` answers with one file
-      // per layer plus a manifest. Checking the wrong shape here would pass a
-      // pipeline that had quietly started unwrapping differently from what
-      // `GET /formats` promises.
-      if (conversion.target.mode === 'extract' && !archivesFiles(conversion.target)) {
+      // A single-file answer comes in more than one shape, and which one is
+      // expected is the matrix's answer rather than the mode's: `tables`
+      // puts however many tables it finds into ONE workbook, while a PDF's
+      // `docx`/`pptx`/`xlsx` (`viaEngine`) produce whichever OOXML package
+      // their id names, which is not a workbook unless that id is `xlsx`.
+      // Checking the wrong shape here would pass a pipeline that had quietly
+      // started unwrapping differently from what `GET /formats` promises.
+      if ((conversion.target.mode === 'extract' || conversion.viaEngine) && !archivesFiles(conversion.target)) {
         if (result.files.length !== 1) {
           throw new PreflightError(
-            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} files for a single-workbook target.`,
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} files for a single-file target.`,
           );
         }
         // Read the workbook back with our own ZIP reader. A file that is the
         // right size but has no workbook part inside it is a package no reader
         // will open - which is precisely the failure this pipeline shipped
-        // with the first time it was run, and the reason boot checks it.
-        const workbook = readZipEntry(result.files[0]!.data, 'xl/workbook.xml', 1024 * 1024);
-        if (workbook.kind !== 'found') {
+        // with the first time it was run, and the reason boot checks it. Only
+        // `tables` produces a workbook here; a PDF's `docx`/`pptx` are proved
+        // instead by the OOXML signature check every single-file target gets
+        // below, and a PDF's `xlsx` is a genuine workbook too but goes
+        // through `pdf_engine.py` rather than this in-process writer, so it
+        // is deliberately left to the same signature check rather than this
+        // one.
+        if (warmUpCase.target === 'tables') {
+          const workbook = readZipEntry(result.files[0]!.data, 'xl/workbook.xml', 1024 * 1024);
+          if (workbook.kind !== 'found') {
+            throw new PreflightError(
+              `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a package with no readable xl/workbook.xml.`,
+            );
+          }
+        }
+        // Every single-file target here writes a ZIP-based OOXML package
+        // (.docx/.pptx/.xlsx all are), so the local-file-header signature is
+        // a cheap, target-agnostic proof that the pipeline - `tables`'s own
+        // writer, or pdf_engine.py for a `viaEngine` pair - wrote a real
+        // package and not, say, an empty file or a stack trace.
+        const zipSignature = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+        if (!result.files[0]!.data.subarray(0, 4).equals(zipSignature)) {
           throw new PreflightError(
-            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a package with no readable xl/workbook.xml.`,
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a file that is not a ZIP-based package.`,
           );
         }
       }
@@ -368,8 +458,14 @@ export async function warmUp(): Promise<WarmUpReport> {
       // The advice has to match the pipeline. Sending someone to apt-get for a
       // fault in our own reader would have them install packages that cannot
       // fix it, which is worse than saying nothing.
-      const advice =
-        conversion.target.mode === 'extract'
+      const advice = conversion.viaEngine
+        ? [
+            'The service can start, but it cannot serve this conversion. This runs',
+            'scripts/pdf_engine.py, not LibreOffice - `assertPdfEnginePresent`',
+            'already proved python3 runs and its packages import, so this is a',
+            'fault in that script or in spawning it, not a missing package.',
+          ]
+        : conversion.target.mode === 'extract'
           ? [
               'The service can start, but it cannot serve this conversion. Nothing',
               'outside this process is involved in it - no LibreOffice, no',

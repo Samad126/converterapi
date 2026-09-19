@@ -276,6 +276,156 @@ export function psdProbe(): Buffer {
   return Buffer.from(writePsd(document as never, { generateThumbnail: false }));
 }
 
+// ---------------------------------------------------------------------------
+// PDF: a minimal, hand-built multi-page document
+// ---------------------------------------------------------------------------
+
+/**
+ * A real PDF, written out object by object rather than produced by soffice.
+ *
+ * Every other probe in this file is hand-built for the same reason: a
+ * fixture nobody can read defeats the point of having no binary fixtures in
+ * the repository. PDF's object/xref/trailer structure is simple enough to
+ * write directly - one page tree, one page per string in `pageTexts`, each
+ * holding a content stream that places its text with the built-in Helvetica
+ * font, so nothing here depends on a font being installed on the machine
+ * that runs the tests.
+ *
+ * This is the probe for `pdfa`/`png`/`jpg`/`word`/`slides`/`sheet` - the
+ * targets a PDF source reaches - and mirrors `impressProbe`'s choice of two
+ * pages: the smallest count that can prove "one output per page" rather than
+ * "the first page, repeated silently."
+ */
+export function buildMinimalPdf(pageTexts: readonly string[]): Buffer {
+  if (pageTexts.length === 0) throw new Error('buildMinimalPdf needs at least one page');
+
+  const pageObjectIds = pageTexts.map((_, index) => 3 + index * 2);
+  const contentObjectIds = pageTexts.map((_, index) => 4 + index * 2);
+  const fontObjectId = 3 + pageTexts.length * 2;
+
+  const objects = new Map<number, string>();
+  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objects.set(
+    2,
+    `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageTexts.length} >>`,
+  );
+  pageTexts.forEach((text, index) => {
+    const pageId = pageObjectIds[index]!;
+    const contentId = contentObjectIds[index]!;
+    objects.set(
+      pageId,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] ` +
+        `/Resources << /Font << /F1 ${fontObjectId} 0 R >> >> /Contents ${contentId} 0 R >>`,
+    );
+    const stream = `BT /F1 14 Tf 20 100 Td (${escapePdfString(text)}) Tj ET`;
+    objects.set(contentId, `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`);
+  });
+  objects.set(fontObjectId, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+
+  const highestId = fontObjectId;
+  const chunks: string[] = ['%PDF-1.4\n'];
+  const offsets = new Map<number, number>();
+  let cursor = Buffer.byteLength(chunks[0]!, 'latin1');
+
+  for (let id = 1; id <= highestId; id += 1) {
+    const body = objects.get(id);
+    if (body === undefined) continue;
+    offsets.set(id, cursor);
+    const text = `${id} 0 obj\n${body}\nendobj\n`;
+    chunks.push(text);
+    cursor += Buffer.byteLength(text, 'latin1');
+  }
+
+  const xrefOffset = cursor;
+  const xrefLines = ['xref', `0 ${highestId + 1}`, '0000000000 65535 f '];
+  for (let id = 1; id <= highestId; id += 1) {
+    const offset = offsets.get(id);
+    xrefLines.push(
+      offset === undefined ? '0000000000 00000 f ' : `${String(offset).padStart(10, '0')} 00000 n `,
+    );
+  }
+  chunks.push(
+    `${xrefLines.join('\n')}\n` +
+      `trailer\n<< /Size ${highestId + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+  );
+
+  return Buffer.from(chunks.join(''), 'latin1');
+}
+
+/** Escape the characters PDF's literal string syntax treats specially. */
+function escapePdfString(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+/** The standard PDF probe: two pages, the second proving we got them both. */
+export function pdfProbe(): Buffer {
+  return buildMinimalPdf([PROBE_TEXT, 'Second page']);
+}
+
+/**
+ * A one-page PDF with a genuine ruled 2x2 table, for the `sheet` target.
+ *
+ * `pdfProbe` cannot double as this fixture: `sheet` extracts tables by their
+ * drawn lines (see `pdf_engine.py`), and a document that merely places text
+ * in a grid without ruling it is not a table as far as that detector is
+ * concerned - it is meant not to be, since a false positive there would be
+ * a worse bug than a false negative. The lines are real PDF path-painting
+ * operators (`re`/`m`/`l`/`S`), not a picture of a table, so this exercises
+ * the same detection a real ruled table in the wild would.
+ */
+export function pdfTableProbe(): Buffer {
+  const content = [
+    'BT /F1 10 Tf 30 105 Td (A1) Tj ET',
+    'BT /F1 10 Tf 160 105 Td (B1) Tj ET',
+    'BT /F1 10 Tf 30 40 Td (A2) Tj ET',
+    'BT /F1 10 Tf 160 40 Td (B2) Tj ET',
+    '20 20 260 110 re S',
+    '20 75 m 280 75 l S',
+    '150 20 m 150 130 l S',
+  ].join('\n');
+
+  return buildPdfWithContent(content);
+}
+
+/** Shared by `pdfTableProbe`; `buildMinimalPdf` covers the plain-text case. */
+function buildPdfWithContent(stream: string): Buffer {
+  const objects = new Map<number, string>([
+    [1, '<< /Type /Catalog /Pages 2 0 R >>'],
+    [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
+    [
+      3,
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] ' +
+        '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    ],
+    [4, `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`],
+    [5, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'],
+  ]);
+
+  const highestId = 5;
+  const chunks: string[] = ['%PDF-1.4\n'];
+  const offsets = new Map<number, number>();
+  let cursor = Buffer.byteLength(chunks[0]!, 'latin1');
+
+  for (let id = 1; id <= highestId; id += 1) {
+    offsets.set(id, cursor);
+    const text = `${id} 0 obj\n${objects.get(id)}\nendobj\n`;
+    chunks.push(text);
+    cursor += Buffer.byteLength(text, 'latin1');
+  }
+
+  const xrefOffset = cursor;
+  const xrefLines = ['xref', `0 ${highestId + 1}`, '0000000000 65535 f '];
+  for (let id = 1; id <= highestId; id += 1) {
+    xrefLines.push(`${String(offsets.get(id)).padStart(10, '0')} 00000 n `);
+  }
+  chunks.push(
+    `${xrefLines.join('\n')}\n` +
+      `trailer\n<< /Size ${highestId + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+  );
+
+  return Buffer.from(chunks.join(''), 'latin1');
+}
+
 /** Re-exported so callers do not need both zip helpers. */
 export type { ZipEntry };
 

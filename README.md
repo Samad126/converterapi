@@ -62,6 +62,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.rtf` | DOCX, PDF, ODT |
 | `.png` `.jpg` `.jpeg` | PDF |
 | `.psd` | PNG (one image per layer) |
+| `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX (see below) |
 
 Every filter name in that table was verified by running the real conversion
 against LibreOffice 24.2. That is not ceremony: **a wrong filter name is not an
@@ -139,6 +140,58 @@ A PSD gets no PDF target. LibreOffice's PSD import would be a different feature
 with a different name, and advertising it would promise a fidelity nothing in
 this pipeline could deliver.
 
+### PDF as a source, and why some of its targets are not LibreOffice either
+
+A PDF opens in LibreOffice as a **Draw** document, full stop — there is no
+Writer, Calc or Impress import for it. That is not a gap in the filter table
+above; it is verifiable directly: run `soffice --convert-to docx` (or `pptx`,
+or `xlsx`) against any real PDF and it fails with `no export filter found`,
+every time, on every LibreOffice install. `pdfa` and the `PNG`/`JPG` targets
+work from a PDF because they *are* Draw's own export filters — `pdfa` is
+Draw's PDF export with `SelectPdfVersion` forced to PDF/A-1b, and the raster
+pipeline renders one image per page exactly as it does for a presentation
+(skipping the render-to-PDF step, since the upload already is the PDF).
+
+`docx`, `pptx` and `xlsx` reach no LibreOffice filter from a PDF at all — and
+still answer to those same three ids, not a lookalike name of their own:
+
+| Target | From a PDF | Answer |
+|---|---|---|
+| `docx` | `.pdf` | One `.docx`, reconstructed from the PDF's own text, tables and images |
+| `pptx` | `.pdf` | One `.pptx`, one slide per page, each page as a full-slide image |
+| `xlsx` | `.pdf` | One `.xlsx`, a worksheet per **ruled** table found in the PDF |
+
+This is a **second, independent conversion engine** —
+[`scripts/pdf_engine.py`](scripts/pdf_engine.py), run as a subprocess exactly
+as `soffice`/`pdftoppm` are, with the same deadline and the same abort
+handling — reached through `engineFrom` in `src/formats.ts` rather than
+through `filters`. It is deliberately a second route to the SAME target id,
+not a target of its own the way `tables`/`layers` are: a `.doc` upload asking
+for `docx` gets a plain `soffice --convert-to`, and a PDF asking for `docx`
+gets `pdf_engine.py`, and the client never has to know or care which one ran
+— the URL names the FORMAT, and `resolveConversion` decides the engine.
+
+From a PDF, `docx` uses [pdf2docx](https://github.com/dothinking/pdf2docx)
+(built on PyMuPDF) to rebuild real paragraphs, tables and images as OOXML —
+this is layout reconstruction, not a picture of the page.
+
+`pptx` has no editable-shapes equivalent to fall back on — there is no
+PDF-to-Impress import to reconstruct from — so it does what real "PDF to
+PowerPoint" tools do for anything that is not already a native deck: render
+each page and place it as that slide's image, sized to match. The deck is a
+genuine `.pptx` a person can open, present from and add slides to; the layout
+is pixel-perfect and none of the text is editable.
+
+`xlsx` uses [pdfplumber](https://github.com/jsvine/pdfplumber) to find tables
+by their drawn lines, lossy in the same direction as `tables` and for the same
+reason: prose and images are dropped, and a table set with whitespace alone
+and no visible ruling will not be found. A PDF with no detected table answers
+`E_NO_TABLES`, exactly as `tables` does for a Word document with none — the
+one place this route is a genuinely different, lossier operation from what
+`xlsx` means for every other source, and it still answers to the name, because
+a workbook is a workbook and there is no faithful, non-lossy PDF→spreadsheet
+export to hold it apart from.
+
 ---
 
 ## Quick start
@@ -150,19 +203,31 @@ npm start          # http://localhost:3001
 ```
 
 The service **refuses to boot** if LibreOffice is missing, if the rasteriser is
-missing, or if the metric-compatible fonts are not installed — see
+missing, if the metric-compatible fonts are not installed, or if the PDF
+engine's Python dependencies are not importable — see
 [Fonts](#fonts-and-why-they-are-not-optional). On a bare Debian/Ubuntu box:
 
 ```bash
 sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
   poppler-utils \
-  fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig
+  fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig \
+  python3 python3-pip
 sudo fc-cache -f
+pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl
 ```
 
 All four LibreOffice modules are required, not just the writer. They are
 separate packages, and a machine with only `libreoffice-writer` converts every
 Word document perfectly while failing every spreadsheet and every presentation.
+
+The `pip install` is a **second, unrelated** dependency: it has nothing to do
+with LibreOffice and exists only for `docx`/`pptx`/`xlsx` requested from a
+PDF - see
+[PDF as a source](#pdf-as-a-source-and-why-some-of-its-targets-are-not-libreoffice-either).
+`--break-system-packages` installs into the system site-packages rather than
+`--user`, which matters because the service sandboxes each conversion's `HOME`
+- see `pdf-engine.service.ts` for why a `--user` install would go missing at
+request time even though `pip show` finds it fine.
 
 Or just use Docker, which installs all of it:
 
@@ -286,10 +351,10 @@ disagree with the server the first time the server grows.
 ### GET /health
 
 Returns `200 {"status":"ok"}`. The service only starts listening after
-LibreOffice, the rasteriser and the fonts have been confirmed **and one real
-conversion has succeeded for every document family** — so reaching this
-endpoint at all means the whole matrix is ready, not merely that the process is
-up.
+LibreOffice, the rasteriser, the fonts and the PDF engine's Python
+dependencies have been confirmed **and one real conversion has succeeded for
+every document family** — so reaching this endpoint at all means the whole
+matrix is ready, not merely that the process is up.
 
 ### Error reference
 
@@ -495,10 +560,15 @@ That is the whole of the conversion for a `direct` target. The others do
 something else, and each is described in its own section: `png`/`jpg` render to
 PDF first and then rasterise it, because LibreOffice's command-line image export
 only ever writes the first page ([Image
-targets](#image-targets-and-why-they-need-poppler)); and the two `extract`
-targets do not call LibreOffice at all, reading the document themselves instead
-([Extracting tables](#extracting-tables),
-[Extracting PSD layers](#extracting-psd-layers)).
+targets](#image-targets-and-why-they-need-poppler)) — except from a PDF
+source, which skips straight to the rasterise step, since the upload already
+is the PDF; `tables` and `layers` do not call LibreOffice at all, reading the
+document themselves instead ([Extracting tables](#extracting-tables),
+[Extracting PSD layers](#extracting-psd-layers)); and a PDF asking for
+`docx`/`pptx`/`xlsx` calls a second, unrelated engine —
+[`scripts/pdf_engine.py`](scripts/pdf_engine.py) — because LibreOffice cannot
+produce any of those three from a PDF at all ([PDF as a
+source](#pdf-as-a-source-and-why-some-of-its-targets-are-not-libreoffice-either)).
 
 The `--convert-to` argument is `<extension>:<filter>`, and both halves come from
 the matrix in [`src/formats.ts`](src/formats.ts). Filters are named after the
@@ -564,10 +634,25 @@ anything it cannot parse confidently falls through to LibreOffice, because a
 false negative costs a less specific error message while a false positive would
 reject a document that could have been converted.
 
-It covers the OOXML and Word binary formats. An encrypted ODF file or PDF is
-left to LibreOffice, which reports those the same way it reports a damaged file
-— acceptable, because the formats this check exists for are the ones the client
-actually sends.
+A PDF is checked too, since an encrypted PDF would otherwise reach
+`pdf_engine.py` (or soffice, for `pdfa`/`png`/`jpg`) and come back as the same
+generic failure. Per the PDF spec, an encrypted file's `/Encrypt` key must be
+in the trailer of its LAST update, so the detector follows the file's final
+`startxref` to that trailer (or, in a PDF 1.5+ file with no `xref`/`trailer`
+keywords at all, to the cross-reference stream object that serves as one) and
+looks for `/Encrypt` only there. This is deliberately **not** a blind
+whole-file search for the token, which is what an earlier version did and
+which has a real false-positive mode: a PDF that was ever encrypted and later
+re-saved without a password keeps its earlier revision's bytes - `/Encrypt`
+entry included - physically in the file, even though that revision no longer
+governs anything. A blind search finds the stale entry and rejects a document
+that opens and converts perfectly well; following the actual current trailer
+does not.
+
+It covers the OOXML, Word binary and PDF formats. An encrypted ODF file is
+left to LibreOffice, which reports it the same way it reports a damaged file —
+acceptable, because that is not a format this service reaches through
+LibreOffice for anything that would otherwise give a worse error.
 
 ---
 

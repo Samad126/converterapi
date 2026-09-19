@@ -106,6 +106,22 @@ export const RASTER_DPI = intFromEnv('RASTER_DPI', 150, 36);
 export const RASTER_JPEG_QUALITY = intFromEnv('RASTER_JPEG_QUALITY', 90, 1);
 
 /**
+ * Interpreter for `scripts/pdf_engine.py`, the `word`/`slides`/`sheet` targets.
+ *
+ * A PDF opens in LibreOffice as a Draw document, and Draw has no Writer/Calc/
+ * Impress export filter - verified against the shipped LibreOffice by actually
+ * running `soffice --convert-to docx/pptx/xlsx` on a real PDF and watching
+ * every one fail with "no export filter found". Editable Word/PowerPoint/Excel
+ * output from a PDF is therefore not a `soffice --convert-to` job at all, and
+ * this is a second, unrelated conversion engine rather than a gap in the
+ * filter table above.
+ */
+export const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3';
+
+/** Absolute path to the PDF engine script, resolved once at import. */
+export const PDF_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'pdf_engine.py');
+
+/**
  * How many pages we will rasterise into one archive.
  *
  * The whole archive is built in memory before it is sent, so this is a memory

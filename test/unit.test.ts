@@ -38,7 +38,7 @@ const { EXTRACT_TARGET_IDS } = await import('../src/services/conversion.service.
 const { decodeUploadName, downloadNameFor, contentDispositionFor } = await import(
   '../src/lib/download-name.ts'
 );
-const { buildMinimalDocx, buildMinimalOdp, buildSolidPng } = await import(
+const { buildMinimalDocx, buildMinimalOdp, buildSolidPng, pdfProbe } = await import(
   '../src/lib/probe-documents.ts'
 );
 const { MAX_UPLOAD_BYTES, MAX_DOWNLOAD_NAME_LENGTH, TEMP_ROOT } = await import(
@@ -47,6 +47,8 @@ const { MAX_UPLOAD_BYTES, MAX_DOWNLOAD_NAME_LENGTH, TEMP_ROOT } = await import(
 const {
   buildEncryptedDocxContainer,
   buildEncryptedLegacyDoc,
+  buildEncryptedPdfContainer,
+  buildFormerlyEncryptedPdf,
   buildPlainLegacyDoc,
 } = await import('./fixtures.ts');
 
@@ -63,14 +65,17 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 17);
+    assert.equal(ALLOWED_EXTENSIONS.length, 18);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
     // Prototype keys must not fool the allowlist check.
     assert.equal(isAllowedExtension('constructor'), false);
     assert.equal(isAllowedExtension('.DOCX'), false, 'callers must lower-case first');
-    assert.equal(isAllowedExtension('.pdf'), false, 'PDF is a target, not a source');
+    // PDF is both a source (pdfa/png/jpg/docx/pptx/xlsx) and a target
+    // (everything else that can become one) - the one extension in the matrix
+    // that is genuinely both.
+    assert.equal(isAllowedExtension('.pdf'), true, 'PDF is now also a source');
     assert.equal(isAllowedExtension(''), false);
   });
 
@@ -81,6 +86,18 @@ describe('conversion matrix', () => {
       for (const target of targets) {
         const resolved = resolveConversion(extension, target);
         assert.ok(resolved, `${extension} -> ${target} does not resolve`);
+
+        if (resolved.viaEngine) {
+          // A second, non-LibreOffice route to this target id - see
+          // `engineFrom`'s doc comment. Checked before `mode`, because `mode`
+          // describes how every OTHER source reaches this same id.
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          assert.ok(
+            TARGETS[target].engineFrom?.includes(extension),
+            `${extension} -> ${target}, but the target does not list it as an engine source`,
+          );
+          continue;
+        }
 
         if (TARGETS[target].mode === 'raster') {
           // A raster target has no filter of its own: it is rendered to PDF
@@ -138,7 +155,7 @@ describe('conversion matrix', () => {
   });
 
   it('exposes every target under a distinct id and extension', () => {
-    const extensions = new Map<string, string>();
+    const extensions = new Map<string, (typeof TARGET_IDS)[number]>();
     for (const id of TARGET_IDS) {
       assert.equal(isTargetId(id), true);
       const target = TARGETS[id];
@@ -148,15 +165,27 @@ describe('conversion matrix', () => {
 
       const existing = extensions.get(target.extension);
       if (existing !== undefined) {
-        // Two targets may share an extension only when one of them is an
-        // extract, because then they produce the SAME FORMAT by different
-        // means - `tables` writes a workbook exactly as `xlsx` does, and only
-        // the contents differ, so the download is honest either way. Two
-        // conversions sharing one extension would instead mean the same
-        // filename for two pieces of genuinely different work, which is the
-        // thing this test exists to catch.
+        // Two targets may share an extension when one of them is an extract,
+        // because then they produce the SAME FORMAT by different means -
+        // `tables` writes a workbook exactly as `xlsx` does, and only the
+        // contents differ, so the download is honest either way.
         const extraction = TARGETS[existing]?.mode === 'extract' || target.mode === 'extract';
-        assert.ok(extraction, `${target.extension} is produced by two targets: ${existing}, ${id}`);
+        // Or when no single source ever offers both: `pdf` and `pdfa` are
+        // both `direct` .pdf exports, but no source's `targets` list contains
+        // both of them - `.pdf` reaches `pdfa`, everything else reaches
+        // `pdf`, and a source can never target its own extension - so a
+        // client asking for one can never have meant the other. What the
+        // test actually guards against is the SAME FORMAT being reachable
+        // two ways from one upload, and that is what "no source lists both"
+        // rules out directly, more precisely than "one of them is an
+        // extract" does.
+        const neverAmbiguous = !Object.values(SOURCES).some(
+          (source) => source.targets.includes(existing) && source.targets.includes(id),
+        );
+        assert.ok(
+          extraction || neverAmbiguous,
+          `${target.extension} is produced by two targets: ${existing}, ${id}`,
+        );
       }
       extensions.set(target.extension, id);
     }
@@ -180,17 +209,19 @@ describe('conversion matrix', () => {
     }
   });
 
-  it('routes only presentations to the raster pipeline', () => {
-    // A raster target is rendered to PDF and split into images, which only
-    // means anything for a document with pages to show.
+  it('routes only presentations and PDFs to the raster pipeline', () => {
+    // A raster target is split into one image per page, which only means
+    // anything for a document with pages to show - a presentation, or a PDF,
+    // which is pages already and skips the render-to-PDF half of the
+    // pipeline entirely (see conversion.service.ts's `sourceIsPdf`).
     for (const id of TARGET_IDS) {
       if (TARGETS[id].mode !== 'raster') continue;
       for (const extension of ALLOWED_EXTENSIONS) {
         if (!targetsFor(extension).includes(id)) continue;
-        assert.equal(
-          SOURCES[extension].family,
-          'impress',
-          `${extension} -> ${id} is not a presentation`,
+        const family = SOURCES[extension].family;
+        assert.ok(
+          family === 'impress' || extension === '.pdf',
+          `${extension} -> ${id} is not a presentation or a PDF`,
         );
       }
     }
@@ -568,6 +599,26 @@ describe('password-protected detection', () => {
 
   it('leaves a normal .docx alone', async () => {
     const path = await write('a.docx', buildMinimalDocx(['hello']));
+    assert.equal(await isPasswordProtected(path), false);
+  });
+
+  it('detects a PDF whose trailer names an /Encrypt dictionary', async () => {
+    const path = await write('a.pdf', buildEncryptedPdfContainer());
+    assert.equal(await isPasswordProtected(path), true);
+  });
+
+  it('leaves a normal PDF alone', async () => {
+    const path = await write('a.pdf', pdfProbe());
+    assert.equal(await isPasswordProtected(path), false);
+  });
+
+  it('does not mistake a stale /Encrypt from an earlier revision for a current one', async () => {
+    // The bug this regression test pins: a whole-file search for "/Encrypt"
+    // finds one in this fixture's FIRST revision, but the file's current
+    // trailer (the one `startxref` actually points at) has no /Encrypt at
+    // all - the password was removed by a later incremental save. Reporting
+    // this as encrypted would reject a document soffice could convert fine.
+    const path = await write('a.pdf', buildFormerlyEncryptedPdf());
     assert.equal(await isPasswordProtected(path), false);
   });
 

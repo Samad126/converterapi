@@ -59,7 +59,13 @@ interface RunProcessOptions {
  * failure: a timeout is an expected result that the caller turns into a
  * specific HTTP error, not an exception to be caught somewhere far away.
  */
-function runProcess(options: RunProcessOptions): Promise<ProcessOutcome> {
+/**
+ * Exported for `pdf-engine.service.ts`: the PDF-sourced `word`/`slides`/`sheet`
+ * targets spawn a Python script rather than soffice, but they fail the same
+ * ways - a wedged process, a client that left, a deadline shared with the rest
+ * of the pipeline - so they reuse this runner rather than a second copy of it.
+ */
+export function runProcess(options: RunProcessOptions): Promise<ProcessOutcome> {
   const { bin, args, workspace, deadline, signal, env } = options;
 
   return new Promise<ProcessOutcome>((resolve) => {

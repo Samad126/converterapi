@@ -138,6 +138,64 @@ export function buildPlainLegacyDoc(): Buffer {
 }
 
 /**
+ * A minimal but structurally real PDF whose CURRENT trailer names an
+ * `/Encrypt` dictionary.
+ *
+ * `startxref` genuinely points at a real `xref` section, which genuinely is
+ * followed by a `trailer` dictionary holding `/Encrypt` - `pdfLooksEncrypted`
+ * follows exactly that path rather than searching the file blindly, so the
+ * fixture has to be a real (if tiny) instance of the structure it reads, not
+ * just the token, somewhere in the bytes.
+ */
+export function buildEncryptedPdfContainer(): Buffer {
+  const header = '%PDF-1.4\n';
+  const object = '1 0 obj\n<< /Type /Catalog >>\nendobj\n';
+  const xrefOffset = Buffer.byteLength(header + object, 'latin1');
+  const xref = 'xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \n';
+  const trailer = 'trailer\n<< /Size 2 /Root 1 0 R /Encrypt 2 0 R >>\n';
+  const footer = `startxref\n${xrefOffset}\n%%EOF`;
+
+  return Buffer.from(header + object + xref + trailer + footer, 'latin1');
+}
+
+/**
+ * A PDF that WAS encrypted, then re-saved without a password - the shape of
+ * the false positive that a whole-file `/Encrypt` search used to produce.
+ *
+ * The file holds two revisions, as an incrementally-updated PDF genuinely
+ * would: an original one whose trailer names `/Encrypt`, and a second one
+ * appended after it whose trailer does not. `startxref` points at the
+ * SECOND, current xref section, so a correct reader has to conclude "not
+ * encrypted" even though the literal bytes "/Encrypt" are still sitting
+ * earlier in the file, in a trailer that no longer governs anything.
+ */
+export function buildFormerlyEncryptedPdf(): Buffer {
+  const header = '%PDF-1.4\n';
+  const object = '1 0 obj\n<< /Type /Catalog >>\nendobj\n';
+  const firstXrefOffset = Buffer.byteLength(header + object, 'latin1');
+  const firstXref = 'xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \n';
+  // The revision that is no longer current: its trailer names /Encrypt, and
+  // its own startxref is never followed by anything - it exists only to
+  // plant the stale bytes a naive detector would find.
+  const firstTrailer = 'trailer\n<< /Size 2 /Root 1 0 R /Encrypt 5 0 R >>\n';
+  const firstFooter = `startxref\n${firstXrefOffset}\n%%EOF\n`;
+
+  const secondXrefOffset = Buffer.byteLength(
+    header + object + firstXref + firstTrailer + firstFooter,
+    'latin1',
+  );
+  const secondXref = 'xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \n';
+  // The CURRENT trailer: same document, password removed.
+  const secondTrailer = 'trailer\n<< /Size 2 /Root 1 0 R >>\n';
+  const secondFooter = `startxref\n${secondXrefOffset}\n%%EOF`;
+
+  return Buffer.from(
+    header + object + firstXref + firstTrailer + firstFooter + secondXref + secondTrailer + secondFooter,
+    'latin1',
+  );
+}
+
+/**
  * A .docx whose bytes are a broken package: the ZIP local header promises a
  * document but nothing behind it parses.
  *

@@ -25,14 +25,21 @@ import {
 import {
   buildEncryptedDocxContainer,
   buildEncryptedLegacyDoc,
+  buildEncryptedPdfContainer,
   buildMalformedDocx,
 } from './fixtures.ts';
 
 const execFileAsync = promisify(execFile);
 
-const { buildMinimalDocx, buildMinimalOdp, buildSolidPng, psdProbe, tablesProbe } = await import(
-  '../src/lib/probe-documents.ts'
-);
+const {
+  buildMinimalDocx,
+  buildMinimalOdp,
+  buildSolidPng,
+  pdfProbe,
+  pdfTableProbe,
+  psdProbe,
+  tablesProbe,
+} = await import('../src/lib/probe-documents.ts');
 const { readZipEntry } = await import('../src/lib/unzip.ts');
 const { MAX_UPLOAD_BYTES } = await import('../src/config.ts');
 
@@ -597,6 +604,127 @@ describe('POST /convert/layers', () => {
     const before_ = await listWorkspaces();
     await upload(server.baseUrl, 'design.psd', psdProbe(), { target: 'layers' });
     assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
+describe('POST /convert/<target> - PDF sources', () => {
+  /**
+   * `pdfa`/`png`/`jpg` are direct/raster LibreOffice targets - a PDF is
+   * always opened as a Draw document, and these are Draw's own export
+   * filters. `docx`/`pptx`/`xlsx` reach no LibreOffice filter at all from a
+   * PDF - confirmed by actually running `soffice --convert-to docx/pptx/xlsx`
+   * against a real PDF and watching every one fail with "no export filter
+   * found" - so a PDF reaches those same three ids through `pdf_engine.py`
+   * instead (`engineFrom` in formats.ts). The id is the same one a `.doc`
+   * upload reaches through soffice; only the engine behind it differs.
+   */
+  const TWO_PAGE_PDF = pdfProbe();
+
+  it('re-exports as PDF/A through Draw', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'pdfa' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    assert.ok(response.body.subarray(0, 5).equals(Buffer.from('%PDF-', 'latin1')));
+    // PDF/A-1b declares its conformance in the XMP metadata soffice embeds.
+    assert.ok(response.body.includes(Buffer.from('pdfaid')), 'not tagged as PDF/A');
+  });
+
+  it('rasterises every page, skipping the render-to-PDF step', async () => {
+    // The probe has two pages, which is the point: one image each proves the
+    // source was rasterised directly rather than silently dropped to one
+    // page the way LibreOffice's own image export would.
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'png' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/zip');
+    assert.deepEqual(zipEntryNames(response.body).sort(), ['slide-1.png', 'slide-2.png']);
+  });
+
+  it('reconstructs an editable DOCX with pdf_engine.py', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'docx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'not a ZIP-based package');
+    const document = readZipEntry(response.body, 'word/document.xml', 4 * 1024 * 1024);
+    assert.equal(document.kind, 'found');
+    const xml = document.kind === 'found' ? document.data.toString('utf8') : '';
+    for (const text of ['Converter warm-up', 'Second page']) {
+      assert.ok(xml.includes(text), `"${text}" did not survive the reconstruction`);
+    }
+  });
+
+  it('builds one slide per page, each a full-page image', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'pptx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'not a ZIP-based package');
+    assert.deepEqual(
+      zipEntryNames(response.body)
+        .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+        .sort(),
+      ['ppt/slides/slide1.xml', 'ppt/slides/slide2.xml'],
+    );
+  });
+
+  it('extracts a ruled table into a workbook', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', pdfTableProbe(), { target: 'xlsx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    const sheet = readZipEntry(response.body, 'xl/worksheets/sheet1.xml', 1024 * 1024);
+    assert.equal(sheet.kind, 'found');
+    const xml = sheet.kind === 'found' ? sheet.data.toString('utf8') : '';
+    for (const value of ['A1', 'B1', 'A2', 'B2']) {
+      assert.ok(xml.includes(value), `"${value}" did not survive the table extraction`);
+    }
+  });
+
+  it('answers E_NO_TABLES for a PDF with no ruled table', async () => {
+    // The PDF-source twin of the same case for a Word document: the document
+    // opened and was read successfully, and simply has nothing to extract.
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'xlsx' });
+    const error = expectJsonEnvelope(response, 422, 'E_NO_TABLES');
+    assert.equal(error.message, 'This document does not contain any tables.');
+  });
+
+  it('offers the same docx/pptx/xlsx ids a .doc upload would, not lookalikes', async () => {
+    // There is no separate "from PDF" id to fall out of step with: a PDF
+    // lists exactly `docx`/`pptx`/`xlsx` among the formats it can become,
+    // the same ids GET /formats advertises for every other source.
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'odt' });
+    const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+    assert.match(error.message, /A \.pdf file can be converted to: PDF\/A, PNG, JPG, DOCX, PPTX, XLSX\./);
+  });
+
+  it('names the download after the upload, with the target extension', async () => {
+    const response = await upload(server.baseUrl, 'Contract.pdf', TWO_PAGE_PDF, { target: 'docx' });
+    assert.equal(response.status, 200);
+    assert.match(response.contentDisposition ?? '', /filename="Contract\.docx"/);
+  });
+
+  it('deletes the workspace after a PDF-engine conversion', async () => {
+    const before_ = await listWorkspaces();
+    await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'docx' });
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+
+  it('rejects an encrypted PDF with 422 rather than a generic failure', async () => {
+    // Without the PDF branch in isPasswordProtected, this would reach
+    // pdf_engine.py (or soffice, for pdfa/png/jpg) and come back as
+    // E_CONVERT_FAILED - technically true but the wrong explanation, exactly
+    // the failure this check exists to avoid for OOXML and legacy Word.
+    const response = await upload(server.baseUrl, 'secret.pdf', buildEncryptedPdfContainer(), {
+      target: 'docx',
+    });
+    const error = expectJsonEnvelope(response, 422, 'E_ENCRYPTED');
+    assert.equal(error.message, 'This document is password protected.');
   });
 });
 

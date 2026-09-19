@@ -51,6 +51,13 @@ services:
     # plus MAX_LAYER_OUTPUT_BYTES rather than by MAX_UPLOAD_BYTES - see the
     # bounds pass in src/lib/psd-layers.ts. At the shipped defaults that is
     # roughly 240MB per concurrent request.
+    #
+    # `word`/`slides`/`sheet` add a THIRD kind of process to this budget: a
+    # Python subprocess (pdf2docx/PyMuPDF for `word` and `slides`, pdfplumber
+    # for `sheet`) rather than soffice, sharing the same MAX_CONCURRENT_
+    # CONVERSIONS slot. It has not been load-tested against this limit the way
+    # the LibreOffice pipelines have - watch for OOM kills on these three
+    # targets specifically if raising MAX_CONCURRENT_CONVERSIONS.
     mem_limit: 1g
     memswap_limit: 1g
     cpus: 2
