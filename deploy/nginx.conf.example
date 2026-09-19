@@ -1,7 +1,8 @@
 # Example nginx site for the converter.
 #
-# Copy to /etc/nginx/sites-available/converter, adjust server_name and the
-# certificate paths, then `nginx -t && systemctl reload nginx`.
+# Copy to /etc/nginx/conf.d/converter.conf, adjust server_name and the
+# certificate paths, then `nginx -t && systemctl reload nginx`. Keep the .conf
+# extension - the directory is included as `conf.d/*.conf`.
 #
 # Assumes the converter is running from docker-compose.yml, published on
 # 127.0.0.1:3001. If your nginx is in its own container rather than on the
@@ -25,9 +26,11 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    # Written for nginx 1.24 (Ubuntu 24.04), where HTTP/2 is switched on with
+    # the parameter on `listen`. The standalone `http2 on;` directive needs
+    # nginx 1.25.1+ and fails `nginx -t` on 1.24 with `unknown directive`.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name converter.example.com;
 
     ssl_certificate     /etc/letsencrypt/live/converter.example.com/fullchain.pem;

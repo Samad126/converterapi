@@ -28,7 +28,7 @@ Substitute the real values throughout:
 - **Proxied** (orange cloud, like `nextudy.alakbaroff.com`): Cloudflare
   terminates TLS at its edge first. Two consequences:
   1. Uncomment the `proxy_set_header X-Forwarded-For $http_cf_connecting_ip;`
-     line in [`nginx.converter.alakbaroff.com.conf`](nginx.converter.alakbaroff.com.conf).
+     line in [`converter.alakbaroff.com.conf`](converter.alakbaroff.com.conf).
      Without it, `TRUST_PROXY=1` makes Express trust the one hop and read the
      **Cloudflare edge IP** as the client — so the rate limiter buckets
      everyone at that edge together instead of per phone.
@@ -128,12 +128,22 @@ docker compose exec converter sh -c '
 
 ## 5. nginx
 
+Sites on this host live in `/etc/nginx/conf.d`, so this is a single-file drop —
+no `sites-available` / `sites-enabled` symlink pair:
+
 ```bash
-sudo cp /pool/www/converter.alakbaroff.com/deploy/nginx.converter.alakbaroff.com.conf \
-  /etc/nginx/sites-available/converter.alakbaroff.com
-sudo ln -s /etc/nginx/sites-available/converter.alakbaroff.com \
-  /etc/nginx/sites-enabled/converter.alakbaroff.com
+sudo cp /pool/www/converter.alakbaroff.com/deploy/converter.alakbaroff.com.conf \
+  /etc/nginx/conf.d/converter.alakbaroff.com.conf
 sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Keep the `.conf` extension.** nginx.conf includes that directory as
+`include /etc/nginx/conf.d/*.conf`, so a file named without it is silently
+skipped — `nginx -t` passes, the reload passes, and the site just does not
+exist. Worth a glance to confirm the include is what you expect:
+
+```bash
+grep -r 'conf.d' /etc/nginx/nginx.conf
 ```
 
 Then confirm TLS actually serves the hostname — `*.alakbaroff.com` must cover
