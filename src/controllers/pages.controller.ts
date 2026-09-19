@@ -14,9 +14,10 @@
  * and the response shape (a file, or a ZIP when the answer is several files).
  */
 import fsp from 'node:fs/promises';
+import { join } from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 
-import { MAX_PAGE_OPERATION_TOTAL_BYTES } from '../config.ts';
+import { CONVERT_TIMEOUT_MS, MAX_PAGE_OPERATION_TOTAL_BYTES } from '../config.ts';
 import { AppError, ClientGoneError, Errors } from '../errors.ts';
 import { contentDispositionFor, downloadNameFor } from '../lib/download-name.ts';
 import { isPasswordProtected } from '../lib/encrypted.ts';
@@ -24,14 +25,17 @@ import { isPermutationOfAllPages, parsePageSelection } from '../lib/page-ranges.
 import { BoundedQueue, RateLimiter } from '../lib/queue.ts';
 import { zipStored } from '../lib/zip.ts';
 import {
+  addWatermark,
   imagesToPdf,
   mergePdfs,
   pdfPageCount,
   removePages,
+  rotatePages,
   selectPages,
   splitPdf,
   type ScanImage,
 } from '../services/pdf-pages.service.ts';
+import { protectWithQpdf, unlockWithQpdf } from '../services/qpdf.service.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest } from '../middleware/request-context.ts';
 
@@ -49,6 +53,10 @@ export interface PagesController {
   extractPages: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   organize: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   scanToPdf: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  rotate: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  watermark: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  protect: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  unlock: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 }
 
 interface PagesResult {
@@ -255,6 +263,114 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const rotate: PagesController['rotate'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'rotate', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const pageCount = await pdfPageCount(buffer);
+      const delta = parseRotationDegrees(req.body?.degrees);
+      const pagesField = req.body?.pages;
+      const indices =
+        typeof pagesField === 'string' && pagesField.trim() !== ''
+          ? parsePageSelection(pagesField, pageCount)
+          : undefined;
+
+      const result = await rotatePages(buffer, delta, indices);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const watermark: PagesController['watermark'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'watermark', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const pageCount = await pdfPageCount(buffer);
+      const text = requireNonEmptyField(req, 'text');
+      const pagesField = req.body?.pages;
+      const indices =
+        typeof pagesField === 'string' && pagesField.trim() !== ''
+          ? parsePageSelection(pagesField, pageCount)
+          : undefined;
+
+      const result = await addWatermark(buffer, text, indices);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const protect: PagesController['protect'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'protect', async () => {
+      const file = requireSingleFile(req);
+      // A file that is already encrypted cannot be re-encrypted by qpdf
+      // without first supplying the password it already has - "protect an
+      // already-protected file" is not a coherent request, so it gets the
+      // same E_ENCRYPTED every other page endpoint gives an encrypted input.
+      await assertUploadsUsable([file]);
+      const password = requireNonEmptyField(req, 'password');
+
+      const workspace = requireWorkspace(req);
+      const outputPath = join(workspace, 'output.pdf');
+      const outcome = await protectWithQpdf({
+        inputPath: file.path,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+        password,
+      });
+      const result = await readQpdfOutput(outcome, outputPath);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const unlock: PagesController['unlock'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'unlock', async () => {
+      const file = requireSingleFile(req);
+      // Deliberately skip the usual encryption check: the whole point of
+      // this endpoint is that the input IS encrypted, and refusing it for
+      // being encrypted would make the endpoint refuse every file it is
+      // meant to accept.
+      await assertUploadsUsable([file], { skipEncryptionCheck: true });
+      const password = requireNonEmptyField(req, 'password');
+
+      const workspace = requireWorkspace(req);
+      const outputPath = join(workspace, 'output.pdf');
+      const outcome = await unlockWithQpdf({
+        inputPath: file.path,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+        password,
+      });
+      const result = await readQpdfOutput(outcome, outputPath, { wrongPasswordAware: true });
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
   return {
     admit,
     prepareWorkspace,
@@ -264,6 +380,10 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     extractPages,
     organize,
     scanToPdf,
+    rotate,
+    watermark,
+    protect,
+    unlock,
   };
 }
 
@@ -273,6 +393,13 @@ function requireSingleFile(req: Request): Express.Multer.File {
   return req.file;
 }
 
+/** The workspace `prepareWorkspace` created, for handlers that need its path directly. */
+function requireWorkspace(req: Request): string {
+  const workspace = getContext(req).workspace;
+  if (!workspace) throw Errors.internal('workspace missing after prepareWorkspace');
+  return workspace;
+}
+
 /** A required multipart text field, trimmed - `pages`, `order`. */
 function requireField(req: Request, name: string): string {
   const value = req.body?.[name];
@@ -280,6 +407,57 @@ function requireField(req: Request, name: string): string {
     throw Errors.badPageRange(`The "${name}" field is required.`);
   }
   return value;
+}
+
+/** A required, non-blank multipart text field - `text` and `password`. */
+function requireNonEmptyField(req: Request, name: string): string {
+  const value = req.body?.[name];
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw Errors.invalidField(`The "${name}" field is required.`);
+  }
+  return value;
+}
+
+/** `degrees` for `/pdf/rotate`: any multiple of 90, clockwise. */
+function parseRotationDegrees(raw: unknown): number {
+  if (typeof raw !== 'string' || !/^-?\d+$/.test(raw.trim())) {
+    throw Errors.invalidField('The "degrees" field must be a whole number of degrees.');
+  }
+  const value = Number.parseInt(raw, 10);
+  if (value % 90 !== 0) {
+    throw Errors.invalidField('The "degrees" field must be a multiple of 90.');
+  }
+  return value;
+}
+
+/**
+ * Turn a qpdf run into either the bytes it produced or the right AppError.
+ *
+ * qpdf writes nothing and exits non-zero on failure, so success is "exit 0
+ * and a file appeared" - the same "exit code alone carries no information"
+ * caution `soffice.service.ts` documents for LibreOffice, checked the same
+ * way: look at what actually landed on disk.
+ */
+async function readQpdfOutput(
+  outcome: import('../services/soffice.service.ts').ProcessOutcome,
+  outputPath: string,
+  options: { wrongPasswordAware?: boolean } = {},
+): Promise<Buffer> {
+  if (outcome.kind === 'timeout') throw Errors.timeout();
+  if (outcome.kind === 'aborted') throw new ClientGoneError();
+  if (outcome.kind === 'exited' && outcome.exitCode !== 0) {
+    if (options.wrongPasswordAware && /invalid password/i.test(outcome.stderr)) {
+      throw Errors.wrongPassword();
+    }
+    throw Errors.convertFailed(outcome.stderr || `qpdf exited ${outcome.exitCode}`);
+  }
+  try {
+    const data = await fsp.readFile(outputPath);
+    if (data.length === 0) throw new Error('qpdf produced an empty file');
+    return data;
+  } catch (error) {
+    throw Errors.convertFailed(error);
+  }
 }
 
 /** `every` for `/pdf/split`: a positive whole number of pages, defaulting to 1. */

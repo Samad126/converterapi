@@ -20,6 +20,7 @@ contract** with a client that is already shipped and cannot be changed.
 - [API](#api)
   - [POST /convert/{target}](#post-converttarget)
   - [POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}](#post-pdfmergesplitremove-pagesextract-pagesorganizescan-to-pdf)
+  - [POST /pdf/{rotate,watermark,protect,unlock}](#post-pdfrotatewatermarkprotectunlock)
   - [GET /formats](#get-formats)
   - [GET /health](#get-health)
   - [Error reference](#error-reference)
@@ -204,15 +205,15 @@ npm start          # http://localhost:3001
 ```
 
 The service **refuses to boot** if LibreOffice is missing, if the rasteriser is
-missing, if the metric-compatible fonts are not installed, or if the PDF
-engine's Python dependencies are not importable — see
+missing, if the metric-compatible fonts are not installed, if the PDF
+engine's Python dependencies are not importable, or if `qpdf` is missing — see
 [Fonts](#fonts-and-why-they-are-not-optional). On a bare Debian/Ubuntu box:
 
 ```bash
 sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
   poppler-utils \
   fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig \
-  python3 python3-pip
+  python3 python3-pip qpdf
 sudo fc-cache -f
 pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl
 ```
@@ -407,6 +408,58 @@ documents](#password-protected-documents) — because pdf-lib on an encrypted
 PDF would otherwise fail with the same unhelpful "damaged" message LibreOffice
 gives.
 
+### POST /pdf/{rotate,watermark,protect,unlock}
+
+Four more page-level operations, each one PDF plus one or two text fields —
+the same shape `remove-pages`/`extract-pages`/`organize` already use.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/rotate` | One PDF, field `file`, text field `degrees` (multiple of 90), optional `pages` | The PDF with the named pages (or all) rotated |
+| `POST /pdf/watermark` | One PDF, field `file`, text field `text`, optional `pages` | The PDF with `text` stamped across the named pages (or all) |
+| `POST /pdf/protect` | One PDF, field `file`, text field `password` | The same PDF, encrypted with `password` |
+| `POST /pdf/unlock` | One encrypted PDF, field `file`, text field `password` | The same PDF, decrypted |
+
+```bash
+curl -F "file=@scan.pdf" -F "degrees=90" -F "pages=1,3" \
+     https://converterapi.example.com/pdf/rotate -o scan-rotated.pdf
+
+curl -F "file=@contract.pdf" -F "text=DRAFT" \
+     https://converterapi.example.com/pdf/watermark -o contract-draft.pdf
+
+curl -F "file=@contract.pdf" -F "password=hunter2" \
+     https://converterapi.example.com/pdf/protect -o contract-locked.pdf
+
+curl -F "file=@contract-locked.pdf" -F "password=hunter2" \
+     https://converterapi.example.com/pdf/unlock -o contract.pdf
+```
+
+**`rotate` and `watermark` are `pdf-lib`**, the same as every other page
+operation — `rotate` adds `degrees` to whatever rotation a page already
+carries rather than replacing it, and `watermark` draws its text horizontally
+(not at a diagonal: poppler's `pdftotext`, and other tooling like it, commonly
+falls back to one character per line for a rotated glyph run, which buys
+nothing visually and makes the result harder for downstream tools to read).
+Both default to every page when `pages` is omitted.
+
+**`protect` and `unlock` are not `pdf-lib` at all.** `pdf-lib` is explicit in
+its own README that PDF encryption is out of scope for it — there is no path
+in it that sets or removes a password. These two endpoints shell out to
+[`qpdf`](https://qpdf.sourceforge.io/) instead, a small, dependency-free CLI
+built for exactly this, reusing the same subprocess runner (`runProcess` in
+`soffice.service.ts`) that LibreOffice and `pdf_engine.py` use — the failure
+modes are identical (a wedged process, a client that left, a shared
+deadline), so there is no reason to write a second copy of handling them.
+
+`protect` refuses a file that is already encrypted with the usual
+`422 E_ENCRYPTED` — re-encrypting an already-encrypted file without first
+supplying the password it already has is not a coherent request. `unlock` is
+the mirror image: it deliberately **skips** that check, since the whole point
+of the endpoint is that the input is encrypted, and a wrong password against
+it is its own error, `422 E_WRONG_PASSWORD` — distinct from `E_ENCRYPTED`
+because it means something different: not "refused because it's locked" but
+"tried, and that password doesn't open it."
+
 ### GET /formats
 
 The [conversion matrix](#conversion-matrix) as JSON — every accepted extension,
@@ -447,6 +500,8 @@ matrix is ready, not merely that the process is up.
 | `400` | `E_BAD_REQUEST` | The document could not be received. Please try again. |
 | `400` | `E_BAD_PAGE_RANGE` | *(the specific problem, e.g. "Page 9 does not exist in this 5-page document.")* |
 | `400` | `E_TOO_FEW_FILES` | *(e.g. "Merging needs at least two PDF files.")* |
+| `400` | `E_INVALID_FIELD` | *(e.g. "The \"degrees\" field must be a multiple of 90.")* |
+| `422` | `E_WRONG_PASSWORD` | That password does not unlock this PDF. |
 | `429` | `E_RATE_LIMITED` | Too many requests. Try again in a moment. |
 | `500` | `E_INTERNAL` | Something went wrong on the server. |
 | `404` | `E_BAD_REQUEST` | The converter is not available at this address. Please update the app and try again. *(also what a client on the removed bare `/convert` now receives)* |
@@ -1117,6 +1172,7 @@ All configuration is environment variables read in
 | `TEMP_ROOT` | `$TMPDIR/converterapi` | Must be writable; should be a tmpfs |
 | `SOFFICE_BIN` | `soffice` | If not on `PATH` |
 | `PDFTOPPM_BIN` | `pdftoppm` | If not on `PATH`; needed by the PNG/JPG targets |
+| `QPDF_BIN` | `qpdf` | If not on `PATH`; needed by `/pdf/protect` and `/pdf/unlock` |
 | `RASTER_DPI` | `150` | Resolution of a rasterised page |
 | `RASTER_JPEG_QUALITY` | `90` | For the `jpg` target |
 | `MAX_RASTER_PAGES` | `100` | Refused with `E_TOO_LARGE` beyond this |

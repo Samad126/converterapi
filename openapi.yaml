@@ -321,6 +321,123 @@ paths:
         '503':
           $ref: '#/components/responses/Busy'
 
+  /pdf/rotate:
+    post:
+      tags: [pages]
+      operationId: rotatePdf
+      summary: Rotate a PDF's pages
+      description: |
+        Rotates the named pages (or every page, if `pages` is omitted) by
+        `degrees` clockwise, added to whatever rotation each page already
+        carries rather than replacing it.
+      requestBody:
+        $ref: '#/components/requestBodies/RotateUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/watermark:
+    post:
+      tags: [pages]
+      operationId: watermarkPdf
+      summary: Stamp text across a PDF's pages
+      description: |
+        Draws `text` across the named pages (or every page, if `pages` is
+        omitted), semi-transparent, sized to each page's own dimensions. The
+        original page content is untouched underneath it.
+      requestBody:
+        $ref: '#/components/requestBodies/WatermarkUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/protect:
+    post:
+      tags: [pages]
+      operationId: protectPdf
+      summary: Add a password to a PDF
+      description: |
+        Encrypts the PDF with `password` as both its user and owner password.
+        Refuses a file that is already encrypted with `422` - re-protecting an
+        already-protected file is not a coherent request; unlock it first.
+      requestBody:
+        $ref: '#/components/requestBodies/ProtectUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/unlock:
+    post:
+      tags: [pages]
+      operationId: unlockPdf
+      summary: Remove a PDF's password
+      description: |
+        Decrypts the PDF using `password`. A password that does not open the
+        file is refused with `422 E_WRONG_PASSWORD`, distinct from the
+        `E_ENCRYPTED` every other page endpoint gives an encrypted input -
+        this endpoint's whole purpose is to accept one.
+      requestBody:
+        $ref: '#/components/requestBodies/UnlockUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/WrongPassword'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /formats:
     get:
       tags: [discovery]
@@ -614,6 +731,90 @@ components:
                   or `.jpeg`. Each page is sized to its own image's pixel
                   dimensions, so mixing portrait and landscape photos is fine.
 
+    RotateUpload:
+      required: true
+      description: One PDF, how far to rotate it, and optionally which pages.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, degrees]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to rotate.
+              degrees:
+                type: string
+                description: |
+                  Clockwise rotation in degrees, as a multiple of 90 (may be
+                  negative). Added to each page's existing rotation.
+                example: '90'
+              pages:
+                type: string
+                description: |
+                  1-based page numbers and inclusive ranges to rotate, comma
+                  separated: `2,5-7,10`. Omit to rotate every page.
+                example: '1,3'
+
+    WatermarkUpload:
+      required: true
+      description: One PDF, the text to stamp, and optionally which pages.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, text]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to watermark.
+              text:
+                type: string
+                description: The text to stamp across each page.
+                example: CONFIDENTIAL
+              pages:
+                type: string
+                description: |
+                  1-based page numbers and inclusive ranges to stamp, comma
+                  separated. Omit to stamp every page.
+                example: '1,3'
+
+    ProtectUpload:
+      required: true
+      description: One PDF, plus the password to encrypt it with.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, password]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to encrypt. Must not already be encrypted.
+              password:
+                type: string
+                description: Used as both the user and owner password.
+
+    UnlockUpload:
+      required: true
+      description: One encrypted PDF, plus the password that opens it.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, password]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The encrypted PDF to decrypt.
+              password:
+                type: string
+                description: The password that opens the file.
+
   schemas:
     TargetId:
       type: string
@@ -639,6 +840,8 @@ components:
         - E_NO_LAYERS
         - E_BAD_PAGE_RANGE
         - E_TOO_FEW_FILES
+        - E_WRONG_PASSWORD
+        - E_INVALID_FIELD
         - E_BUSY
         - E_BAD_REQUEST
         - E_RATE_LIMITED
@@ -962,6 +1165,44 @@ components:
             error:
               code: E_TOO_FEW_FILES
               message: Merging needs at least two PDF files.
+
+    InvalidField:
+      description: |
+        A form field for `/pdf/rotate`, `/pdf/watermark`, `/pdf/protect` or
+        `/pdf/unlock` (`degrees`, `text`, `password`) is missing or malformed.
+        The message names the specific field and what is wrong with it.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            missingDegrees:
+              summary: '`/pdf/rotate`: not a multiple of 90.'
+              value:
+                error:
+                  code: E_INVALID_FIELD
+                  message: The "degrees" field must be a multiple of 90.
+            missingText:
+              summary: '`/pdf/watermark`: no text given.'
+              value:
+                error:
+                  code: E_INVALID_FIELD
+                  message: The "text" field is required.
+
+    WrongPassword:
+      description: |
+        `/pdf/unlock` was given a password that does not open the file.
+        Distinct from `E_ENCRYPTED`: that code means the file was refused
+        because it is locked; this one means a password was tried and it was
+        the wrong one.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_WRONG_PASSWORD
+              message: That password does not unlock this PDF.
 
     RateLimited:
       description: |

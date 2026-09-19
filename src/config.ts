@@ -122,6 +122,16 @@ export const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3';
 export const PDF_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'pdf_engine.py');
 
 /**
+ * `qpdf`, for `/pdf/protect` and `/pdf/unlock`.
+ *
+ * `pdf-lib` (everything else in the page-operations family) does not
+ * implement PDF encryption at all - by its own README, that is out of scope
+ * for it. qpdf is a small, single-purpose CLI built for exactly this, with no
+ * further dependencies of its own. See qpdf.service.ts.
+ */
+export const QPDF_BIN = process.env.QPDF_BIN ?? 'qpdf';
+
+/**
  * How many pages we will rasterise into one archive.
  *
  * The whole archive is built in memory before it is sent, so this is a memory

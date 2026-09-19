@@ -1,6 +1,6 @@
 /**
- * Page-level PDF operations: merge, split, remove, extract, reorder, and
- * building a PDF from a set of images ("scan to PDF").
+ * Page-level PDF operations: merge, split, remove, extract, reorder, rotate,
+ * watermark, and building a PDF from a set of images ("scan to PDF").
  *
  * Unlike every other pipeline in this service, none of this touches
  * LibreOffice or `pdf_engine.py` - there is no document conversion happening
@@ -20,7 +20,7 @@
  * Uploads are capped at 25MB (`MAX_UPLOAD_BYTES`), so the second parse is
  * bounded, not unbounded rework.
  */
-import { PDFDocument } from 'pdf-lib';
+import { degrees, PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
 import { Errors } from '../errors.ts';
 
@@ -119,6 +119,77 @@ export async function removePages(bytes: Buffer, toRemove: ReadonlySet<number>):
   const pages = await output.copyPages(source, keep);
   for (const page of pages) output.addPage(page);
   return Buffer.from(await output.save());
+}
+
+/**
+ * Rotate the named 0-based pages (or every page, if `indices` is omitted) by
+ * `delta` degrees clockwise, added to whatever rotation the page already
+ * carries rather than replacing it - a page already rotated 90 by its source
+ * document and then rotated another 90 here should end up at 180, not back
+ * at 90.
+ *
+ * `delta` is validated by the caller to be a multiple of 90: the PDF
+ * `/Rotate` entry is only ever defined for multiples of 90, and pdf-lib
+ * itself does not stop you from setting something else.
+ */
+export async function rotatePages(
+  bytes: Buffer,
+  delta: number,
+  indices?: readonly number[],
+): Promise<Buffer> {
+  const document = await loadPdf(bytes);
+  const targets = indices ?? document.getPageIndices();
+  for (const index of targets) {
+    const page = document.getPage(index);
+    const current = page.getRotation().angle;
+    page.setRotation(degrees(((current + delta) % 360 + 360) % 360));
+  }
+  return Buffer.from(await document.save());
+}
+
+/**
+ * Stamp `text` centered across the named 0-based pages (or every page),
+ * semi-transparent and behind nothing - there is no page content to stack it
+ * under, so "behind" is not a meaningful option here the way it is in an
+ * editor that already has layers.
+ *
+ * Drawn horizontally rather than at a diagonal: a rotated run of text is
+ * exactly as visible to a reader, but text renderers (poppler's `pdftotext`
+ * among them) commonly fall back to one character per line for rotated
+ * glyph runs, which would make an otherwise ordinary stamp far harder for
+ * downstream tooling to get right for no visual benefit.
+ *
+ * Sized as a fraction of each page's own dimensions rather than a fixed
+ * point size, because a scanned receipt and an A3 poster are both real
+ * inputs to this endpoint and a fixed size is either invisible on one or
+ * absurd on the other.
+ */
+export async function addWatermark(
+  bytes: Buffer,
+  text: string,
+  indices?: readonly number[],
+): Promise<Buffer> {
+  const document = await loadPdf(bytes);
+  const font = await document.embedFont(StandardFonts.HelveticaBold);
+  const targets = indices ?? document.getPageIndices();
+
+  for (const index of targets) {
+    const page = document.getPage(index);
+    const { width, height } = page.getSize();
+    const fontSize = Math.max(8, Math.min(width, height) * 0.12);
+    const textWidth = font.widthOfTextAtSize(text, fontSize);
+
+    page.drawText(text, {
+      x: width / 2 - textWidth / 2,
+      y: height * 0.1,
+      size: fontSize,
+      font,
+      color: rgb(0.5, 0.5, 0.5),
+      opacity: 0.45,
+    });
+  }
+
+  return Buffer.from(await document.save());
 }
 
 export type ScanImageFormat = 'png' | 'jpg';

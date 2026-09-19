@@ -29,6 +29,8 @@ export type ErrorCode =
   | 'E_NO_LAYERS'
   | 'E_BAD_PAGE_RANGE'
   | 'E_TOO_FEW_FILES'
+  | 'E_WRONG_PASSWORD'
+  | 'E_INVALID_FIELD'
   | 'E_BUSY'
   | 'E_BAD_REQUEST'
   | 'E_RATE_LIMITED'
@@ -193,6 +195,29 @@ export const Errors = {
    * so each gets its own sentence rather than sharing `badRequest`'s.
    */
   tooFewFiles: (message: string) => new AppError('E_TOO_FEW_FILES', 400, message),
+
+  /**
+   * `/pdf/unlock` was given a password that does not open the file.
+   *
+   * Distinct from `E_ENCRYPTED`: that code means "we refused to touch this
+   * file because it is locked and you did not ask us to unlock it";
+   * this one means "you asked, and the password you gave is not the one
+   * that opens it" - a different fact the person holding the phone can act
+   * on differently (try again versus this just is not the right endpoint).
+   */
+  wrongPassword: () =>
+    new AppError('E_WRONG_PASSWORD', 422, 'That password does not unlock this PDF.'),
+
+  /**
+   * A form field for `/pdf/rotate`, `/pdf/watermark`, `/pdf/protect` or
+   * `/pdf/unlock` (`degrees`, `text`, `password`) is missing or malformed.
+   *
+   * Its own code rather than `badRequest`'s fixed sentence, and for the same
+   * reason `badPageRange` has its own: the message names the specific field
+   * and what is wrong with it, which is something a person can fix, where a
+   * generic "the document could not be received" is not.
+   */
+  invalidField: (message: string) => new AppError('E_INVALID_FIELD', 400, message),
 
   /** No free conversion slot. */
   busy: () =>

@@ -19,7 +19,14 @@ import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { PDFTOPPM_BIN, PDF_ENGINE_SCRIPT, PYTHON_BIN, REQUIRED_FONT_ALIASES, SOFFICE_BIN } from '../config.ts';
+import {
+  PDFTOPPM_BIN,
+  PDF_ENGINE_SCRIPT,
+  PYTHON_BIN,
+  QPDF_BIN,
+  REQUIRED_FONT_ALIASES,
+  SOFFICE_BIN,
+} from '../config.ts';
 import { PreflightError } from '../errors.ts';
 import { archivesFiles, resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
 import { MANIFEST_FILENAME } from '../lib/psd-layers.ts';
@@ -34,6 +41,7 @@ import {
 } from '../lib/probe-documents.ts';
 import { readZipEntry } from '../lib/unzip.ts';
 import { convert } from './conversion.service.ts';
+import { protectWithQpdf, unlockWithQpdf } from './qpdf.service.ts';
 import { createWorkspace, inputFileNameFor, removeWorkspace } from './workspace.service.ts';
 
 export interface PreflightReport {
@@ -48,6 +56,7 @@ export async function preflight(): Promise<PreflightReport> {
   const rasterizerVersion = assertRasterizerPresent();
   const fonts = assertMetricCompatibleFonts();
   assertPdfEnginePresent();
+  assertQpdfPresent();
   return { sofficeVersion, rasterizerVersion, fonts };
 }
 
@@ -189,6 +198,40 @@ function assertPdfEnginePresent(): void {
   }
   if (!existsSync(PDF_ENGINE_SCRIPT)) {
     throw new PreflightError(`PDF engine script missing: ${PDF_ENGINE_SCRIPT}`);
+  }
+}
+
+/**
+ * qpdf, needed by `/pdf/protect` and `/pdf/unlock`.
+ *
+ * pdf-lib does every other page operation in this service, but its own
+ * README says encryption is out of scope for it - there is no path in it
+ * that sets a PDF password at all. qpdf is checked the same way soffice and
+ * the rasteriser are: can it even be run, before any request depends on it.
+ */
+function assertQpdfPresent(): void {
+  const result = spawnSync(QPDF_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${QPDF_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It adds and removes PDF passwords for /pdf/protect and /pdf/unlock -',
+        'pdf-lib, which does every other page operation, does not implement PDF',
+        'encryption at all.',
+        '  Debian/Ubuntu:  apt-get install -y qpdf',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        'Set QPDF_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${QPDF_BIN} --version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
   }
 }
 
@@ -494,5 +537,83 @@ export async function warmUp(): Promise<WarmUpReport> {
     }
   }
 
+  await warmUpQpdf(cases);
+
   return { cases };
+}
+
+/**
+ * A real protect-then-unlock round trip, at boot.
+ *
+ * Not a `WarmUpCase`: qpdf is not part of the conversion matrix
+ * `resolveConversion` describes at all, it is a fourth engine reached only
+ * from `/pdf/protect` and `/pdf/unlock`. `assertQpdfPresent` already proves
+ * the binary runs; this proves spawning it, writing its output next to a
+ * request's input, and reading that output back all actually work together -
+ * the same gap between "the interpreter runs" and "the whole pipeline works"
+ * that `assertPdfEnginePresent`/this warm-up pair covers for the PDF engine.
+ */
+async function warmUpQpdf(cases: WarmUpReport['cases']): Promise<void> {
+  const workspace = await createWorkspace();
+  try {
+    const inputPath = join(workspace, 'probe.pdf');
+    const protectedPath = join(workspace, 'protected.pdf');
+    const unlockedPath = join(workspace, 'unlocked.pdf');
+    await fsp.writeFile(inputPath, pdfProbe());
+
+    const password = 'preflight-probe';
+    const deadline = Date.now() + 30_000;
+
+    const protectOutcome = await protectWithQpdf({
+      inputPath,
+      outputPath: protectedPath,
+      workspace,
+      deadline,
+      password,
+    });
+    if (protectOutcome.kind !== 'exited' || protectOutcome.exitCode !== 0) {
+      throw new PreflightError(
+        `Warm-up qpdf --encrypt failed: ${JSON.stringify(protectOutcome)}`,
+      );
+    }
+    const protectedBytes = await fsp.readFile(protectedPath);
+    if (protectedBytes.length === 0) {
+      throw new PreflightError('Warm-up qpdf --encrypt produced an empty file.');
+    }
+
+    const unlockOutcome = await unlockWithQpdf({
+      inputPath: protectedPath,
+      outputPath: unlockedPath,
+      workspace,
+      deadline,
+      password,
+    });
+    if (unlockOutcome.kind !== 'exited' || unlockOutcome.exitCode !== 0) {
+      throw new PreflightError(
+        `Warm-up qpdf --decrypt failed: ${JSON.stringify(unlockOutcome)}`,
+      );
+    }
+    const unlockedBytes = await fsp.readFile(unlockedPath);
+    if (unlockedBytes.length === 0) {
+      throw new PreflightError('Warm-up qpdf --decrypt produced an empty file.');
+    }
+
+    cases.push({ extension: '.pdf', target: 'protect+unlock (qpdf)', bytes: unlockedBytes.length });
+  } catch (error) {
+    if (error instanceof PreflightError) throw error;
+    throw new PreflightError(
+      [
+        'Warm-up qpdf protect/unlock round trip failed.',
+        '',
+        'The service can start, but /pdf/protect and /pdf/unlock will not work.',
+        'assertQpdfPresent already proved qpdf runs, so this is a fault in',
+        'spawning it or in reading its output back, not a missing package.',
+        '',
+        `Underlying error: ${error instanceof Error ? error.message : String(error)}`,
+      ].join('\n'),
+      { cause: error },
+    );
+  } finally {
+    await removeWorkspace(workspace).catch(() => {});
+  }
 }

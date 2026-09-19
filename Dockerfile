@@ -50,6 +50,12 @@ FROM node:22-bookworm-slim AS runtime
 # system site-packages (not `--user`) so it resolves regardless of $HOME -
 # `pdf-engine.service.ts` explains why that distinction matters.
 #
+# qpdf is a FOURTH, unrelated engine, needed because pdf-lib (which does every
+# other page operation - merge, split, rotate, watermark) is explicit in its
+# own README that it does not implement PDF encryption at all. `/pdf/protect`
+# and `/pdf/unlock` shell out to qpdf instead, a small dependency-free CLI
+# built for exactly this. See qpdf.service.ts.
+#
 # The font packages are NOT optional and NOT cosmetic. Calibri and Cambria do
 # not exist on Linux; without metric-compatible substitutes LibreOffice picks a
 # font with different glyph widths, so every line breaks in a different place
@@ -81,6 +87,7 @@ RUN apt-get update \
       ca-certificates \
       python3 \
       python3-pip \
+      qpdf \
  && fc-cache -f \
  && pip3 install --no-cache-dir --break-system-packages \
       pdf2docx \

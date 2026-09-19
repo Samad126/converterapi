@@ -8,6 +8,10 @@
  *   POST /pdf/extract-pages  one PDF        -> a PDF of only `pages`, in that order
  *   POST /pdf/organize       one PDF        -> a PDF reordered to `order`
  *   POST /pdf/scan-to-pdf    multiple images -> one PDF, one page per image
+ *   POST /pdf/rotate         one PDF        -> a PDF with `pages` (or all) rotated `degrees`
+ *   POST /pdf/watermark      one PDF        -> a PDF with `text` stamped across `pages` (or all)
+ *   POST /pdf/protect        one PDF        -> the same PDF encrypted with `password`
+ *   POST /pdf/unlock         one PDF        -> the same PDF decrypted with `password`
  */
 import { Router } from 'express';
 
@@ -68,6 +72,38 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createScanImagesUploadMiddleware(),
     controller.scanToPdf,
+  );
+
+  router.post(
+    '/pdf/rotate',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.rotate,
+  );
+
+  router.post(
+    '/pdf/watermark',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.watermark,
+  );
+
+  router.post(
+    '/pdf/protect',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.protect,
+  );
+
+  router.post(
+    '/pdf/unlock',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.unlock,
   );
 
   return router;

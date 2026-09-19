@@ -21,6 +21,10 @@ import {
   type TestServer,
 } from './helpers.ts';
 import { buildEncryptedPdfContainer } from './fixtures.ts';
+import { isPasswordProtected } from '../src/lib/encrypted.ts';
+import fsp from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const { buildMinimalPdf, buildSolidPng } = await import('../src/lib/probe-documents.ts');
 
@@ -299,5 +303,181 @@ describe('POST /pdf/scan-to-pdf', () => {
     assert.equal(response.status, 415);
     assert.equal(body.error.code, 'E_UNSUPPORTED');
     assert.equal(body.error.message, 'Only .png, .jpg and .jpeg images can be scanned to PDF.');
+  });
+});
+
+describe('POST /pdf/rotate', () => {
+  it('rotates every page by "degrees" clockwise', async () => {
+    const pdf = buildMinimalPdf(['A', 'B']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/rotate',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { degrees: '90' },
+    );
+
+    assert.equal(response.status, 200);
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getPageCount(), 2);
+    for (const page of document.getPages()) {
+      assert.equal(page.getRotation().angle, 90);
+    }
+    // Rotation, not re-rendering: the page text is still there.
+    assert.equal(await pdfPageText(response.body, 1), 'A');
+  });
+
+  it('rotates only the named pages, adding to any existing rotation', async () => {
+    const pdf = buildMinimalPdf(['A', 'B', 'C']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/rotate',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { degrees: '180', pages: '2' },
+    );
+
+    const document = await PDFDocument.load(response.body);
+    const angles = document.getPages().map((page) => page.getRotation().angle);
+    assert.deepEqual(angles, [0, 180, 0]);
+  });
+
+  it('refuses a non-multiple-of-90 rotation', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/rotate',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { degrees: '45' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('requires the degrees field', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/rotate', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});
+
+describe('POST /pdf/watermark', () => {
+  it('stamps text across every page without disturbing the original content', async () => {
+    const pdf = buildMinimalPdf(['A', 'B']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/watermark',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { text: 'CONFIDENTIAL' },
+    );
+
+    assert.equal(response.status, 200);
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getPageCount(), 2);
+    // Both the original content and the stamp have to survive - watermarking
+    // adds a layer, it does not replace what was already on the page.
+    const page1 = await pdfPageText(response.body, 1);
+    assert.match(page1, /\bA\b/);
+    assert.match(page1, /CONFIDENTIAL/);
+    const page2 = await pdfPageText(response.body, 2);
+    assert.match(page2, /\bB\b/);
+    assert.match(page2, /CONFIDENTIAL/);
+  });
+
+  it('requires the text field', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/watermark', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});
+
+describe('POST /pdf/protect and /pdf/unlock', () => {
+  it('protects a PDF so it reads as password protected', async () => {
+    const pdf = buildMinimalPdf(['A']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/protect',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { password: 'sesame' },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+
+    const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-protect-check-'));
+    try {
+      const path = join(dir, 'out.pdf');
+      await fsp.writeFile(path, response.body);
+      assert.equal(await isPasswordProtected(path), true);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to protect an already-encrypted file', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/protect',
+      [{ filename: 'secret.pdf', fieldName: 'file', bytes: buildEncryptedPdfContainer() }],
+      { password: 'sesame' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 422);
+    assert.equal(body.error.code, 'E_ENCRYPTED');
+  });
+
+  it('unlocks a PDF this endpoint itself protected, byte for byte the same text', async () => {
+    const pdf = buildMinimalPdf(['Round', 'Trip']);
+    const protectedResponse = await postPages(
+      server.baseUrl,
+      '/pdf/protect',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { password: 'sesame' },
+    );
+    assert.equal(protectedResponse.status, 200);
+
+    const unlockedResponse = await postPages(
+      server.baseUrl,
+      '/pdf/unlock',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: protectedResponse.body }],
+      { password: 'sesame' },
+    );
+
+    assert.equal(unlockedResponse.status, 200);
+    assert.equal(await pdfPageText(unlockedResponse.body, 1), 'Round');
+    assert.equal(await pdfPageText(unlockedResponse.body, 2), 'Trip');
+  });
+
+  it('refuses to unlock with the wrong password', async () => {
+    const pdf = buildMinimalPdf(['A']);
+    const protectedResponse = await postPages(
+      server.baseUrl,
+      '/pdf/protect',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { password: 'sesame' },
+    );
+
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/unlock',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: protectedResponse.body }],
+      { password: 'wrong' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 422);
+    assert.equal(body.error.code, 'E_WRONG_PASSWORD');
+  });
+
+  it('requires the password field', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/protect', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
   });
 });
