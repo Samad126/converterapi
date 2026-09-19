@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env
+.DS_Store
+
+# Caddy local-development root CA, extracted from the proxy container.
+# Do not commit: it is per-machine and trusts a local CA.
+caddy-root.crt

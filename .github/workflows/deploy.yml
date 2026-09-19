@@ -1,0 +1,63 @@
+name: Deploy Converter
+
+on:
+  push:
+    branches: [master]
+  # Lets you re-run a deploy without pushing a commit - the useful case being a
+  # server-side fix that needs the same deploy applied again.
+  workflow_dispatch:
+
+# Two pushes in quick succession would otherwise run two `docker compose up
+# --build` calls against the same checkout at the same time. Serialise them,
+# and let an in-flight deploy finish rather than cancelling it half-applied.
+concurrency:
+  group: deploy-converter
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy converter to server
+        env:
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          sshpass -e ssh -p 44544 -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            set -e
+
+            APP_DIR=/pool/www/converter.alakbaroff.com
+
+            # The checkout is owned by whatever user first cloned it, which is
+            # not necessarily the one this deploy logs in as. Without this, git
+            # refuses to touch it: "detected dubious ownership in repository".
+            git config --global --add safe.directory "$APP_DIR"
+            git -C "$APP_DIR" pull origin master
+
+            # Rebuild and replace the converter service only. The compose file
+            # lives in this repo, so -f points into the checkout rather than at
+            # a parent directory. Relative paths inside it (the seccomp profile)
+            # resolve against the compose file's own directory, so the working
+            # directory here is irrelevant.
+            docker compose -f "$APP_DIR/docker-compose.yml" up -d --no-deps --build converter
+
+            # `up -d` returns once the container is *started*, which is not the
+            # same as ready - and it reports success just as happily for a
+            # container that is about to crashloop. /health only answers after
+            # preflight AND the warm-up conversion have both passed, so polling
+            # it is what actually separates a good deploy from a dead one.
+            #
+            # 40 x 5s = 200s, roughly double the compose healthcheck's 90s
+            # start period, to leave room for the cold build's first-run cost.
+            for i in $(seq 1 40); do
+              if curl -fsS -o /dev/null http://127.0.0.1:3001/health; then
+                echo "converter healthy after $((i * 5))s"
+                exit 0
+              fi
+              sleep 5
+            done
+
+            echo "converter did not become healthy within 200s" >&2
+            docker compose -f "$APP_DIR/docker-compose.yml" logs --tail 100 converter >&2
+            exit 1
+          EOF

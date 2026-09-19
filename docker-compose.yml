@@ -1,0 +1,147 @@
+# Deployment shape for the converter.
+#
+# This file runs the CONVERTER ONLY. It expects a reverse proxy in front of it
+# - nginx on the host, in the common case - which terminates TLS and applies
+# the matching request body limit. See deploy/nginx.conf.example.
+#
+# A bundled Caddy proxy is available for anyone who does not already have one,
+# but it is deliberately OPT-IN:
+#
+#     docker compose --profile proxy up -d
+#
+# It is off by default because it binds host ports 80 and 443, which on a
+# server that already runs nginx means Caddy fails to start and takes the
+# deployment down with it.
+#
+# TLS terminates at the proxy, because the Android client speaks https://.
+
+services:
+  converter:
+    build: .
+    image: docx-to-pdf-converter
+    restart: unless-stopped
+
+    # --- How your proxy reaches it ------------------------------------------
+    # Published on LOOPBACK ONLY, so a reverse proxy running on this host can
+    # reach it and nothing else can - not the LAN, not the internet.
+    #
+    # KEEP THIS. Dropping the 127.0.0.1 prefix would expose the unauthenticated
+    # converter to your whole network.
+    #
+    # The host port must stay in step with the container's PORT (Dockerfile
+    # ENV PORT). The healthcheck below reads PORT, so it follows automatically.
+    ports:
+      - '127.0.0.1:3001:3001'
+    networks:
+      - backend
+
+    # --- Resource caps ------------------------------------------------------
+    # soffice is CPU- and memory-heavy and handles one document per process.
+    # These caps are what stop a hostile or pathological document from taking
+    # the host with it. MAX_CONCURRENT_CONVERSIONS should be set so that
+    # concurrent x per-conversion memory stays under mem_limit - otherwise the
+    # kernel OOM-kills soffice and every request becomes a 500.
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2
+    pids_limit: 256
+
+    # --- Filesystem ---------------------------------------------------------
+    # Nothing the service does needs to write to its own image, so the root
+    # filesystem is read-only. /tmp is the one writable path, and it is the
+    # only place the service ever writes: per-request workspaces holding the
+    # upload, that request's LibreOffice profile, and the output.
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+
+    # --- Privileges ---------------------------------------------------------
+    # soffice parses untrusted documents, and that parser is the entire attack
+    # surface. Give it as little as possible to work with.
+    user: '1000:1000'
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      # Tightens Docker's default profile further (see deploy/make-seccomp.mjs).
+      - seccomp=./deploy/seccomp.json
+
+    environment:
+      TEMP_ROOT: /tmp/docx-to-pdf
+      MAX_CONCURRENT_CONVERSIONS: '2'
+      MAX_QUEUED_CONVERSIONS: '8'
+      CONVERT_TIMEOUT_MS: '90000'
+      RATE_LIMIT_MAX: '30'
+      RATE_LIMIT_WINDOW_MS: '60000'
+      # One proxy hop. Your proxy sets X-Forwarded-For; without this every
+      # request shares one rate limit bucket and the limiter does nothing.
+      TRUST_PROXY: '1'
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # ---------------------------------------------------------------------------
+  # Optional bundled proxy. Skip this if you already run nginx.
+  #
+  #   docker compose --profile proxy up -d
+  #
+  # Terminates TLS using Caddy's internal CA for localhost, or Let's Encrypt
+  # for a real DOMAIN. See deploy/Caddyfile.
+  # ---------------------------------------------------------------------------
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: ['proxy']
+    ports:
+      - '80:80'
+      - '443:443'
+    networks:
+      - backend
+      - edge
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Set this to the hostname the APK uses. Caddy provisions TLS for it
+      # automatically.
+      DOMAIN: ${DOMAIN:-localhost}
+    depends_on:
+      - converter
+
+networks:
+  # A NORMAL bridge, deliberately NOT `internal: true`.
+  #
+  # THIS IS THE PART THAT BITES. Publishing a port and blocking egress are
+  # mutually exclusive on one Docker network: an internal network has no route
+  # in or out, so `ports:` silently stops working - the container starts, looks
+  # correct in `docker ps`, and the host gets a connection refused. Verified:
+  # the host cannot reach a published port on an internal network at all.
+  #
+  # Since your proxy runs on the host and has to reach this container, the
+  # published port wins and the network stays a plain bridge.
+  #
+  # The trade-off is real: the container can now reach the internet. See
+  # README "Network egress" for how to get that property back.
+  backend:
+
+  # Only created when the `proxy` profile is active.
+  edge:
+
+volumes:
+  caddy_data:
+  caddy_config:

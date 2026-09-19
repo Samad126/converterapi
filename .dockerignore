@@ -1,0 +1,22 @@
+# The build stage installs and compiles from source, so none of this needs to
+# travel in the build context.
+node_modules
+dist
+
+# Tests are not part of the runtime image. The container is verified end to end
+# by posting a real document to the running service instead.
+test
+
+.git
+.gitignore
+*.md
+
+# Deployment scaffolding: the proxy config and seccomp profile are mounted at
+# runtime, not baked in.
+deploy
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Local dev CA, extracted from the running proxy. Never baked into the image.
+caddy-root.crt

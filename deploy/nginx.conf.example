@@ -1,0 +1,92 @@
+# Example nginx site for the converter.
+#
+# Copy to /etc/nginx/sites-available/converter, adjust server_name and the
+# certificate paths, then `nginx -t && systemctl reload nginx`.
+#
+# Assumes the converter is running from docker-compose.yml, published on
+# 127.0.0.1:3001. If your nginx is in its own container rather than on the
+# host, change proxy_pass to the service name and put nginx on the same
+# Docker network - and note that the bundled Caddy profile is then redundant.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name converter.example.com;
+
+    # Certbot's webroot, or delete this and the TLS block below if you
+    # terminate TLS somewhere else.
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name converter.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/converter.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/converter.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # ---------------------------------------------------------------------
+    # MUST match MAX_UPLOAD_BYTES in src/config.ts - 25 MB, 26214400 bytes.
+    #
+    # Matching it exactly is the point: an upload over the limit is refused
+    # here, before a single byte of it reaches Node, so a large body cannot
+    # tie up a worker or fill the container's tmpfs. If you change the
+    # application limit, change this in the same commit; they are two halves
+    # of one number.
+    # ---------------------------------------------------------------------
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # The application's own deadline is 90s and the client gives up at
+        # 120s. Neither is any use if nginx cuts the connection first, so give
+        # the app room to answer with its own error rather than a bare 504.
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    120s;
+        proxy_read_timeout    120s;
+
+        # Hand the upload straight through instead of spooling it to disk
+        # first. Optional, but it halves the disk traffic for a 25 MB body.
+        request_buffering off;
+
+        # The response is a PDF the client saves whole; there is nothing to
+        # gain from buffering it.
+        proxy_buffering off;
+    }
+
+    # ---------------------------------------------------------------------
+    # nginx's own 413 is an HTML page, but the client reads `error.message`
+    # out of the JSON envelope and shows it in a dialog. Without this, an
+    # oversized upload shows the user a bare "HTTP 413" instead of a sentence.
+    #
+    # Keep the text byte-identical to src/errors.ts.
+    # ---------------------------------------------------------------------
+    error_page 413 /__too_large.json;
+
+    location = /__too_large.json {
+        internal;
+        default_type application/json;
+        return 413 '{"error":{"code":"E_TOO_LARGE","message":"This document is too large to convert."}}';
+    }
+
+    # Access log. Note the application logs no filenames and no document
+    # contents, and neither should this - the request line is enough.
+    access_log /var/log/nginx/converter.access.log;
+    error_log  /var/log/nginx/converter.error.log;
+}

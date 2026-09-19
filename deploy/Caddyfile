@@ -1,0 +1,47 @@
+# Reverse proxy in front of the converter.
+#
+# TLS terminates here: the Android client speaks https://, and the app itself
+# speaks plain HTTP on the internal network.
+
+{$DOMAIN:localhost} {
+	# MUST match MAX_UPLOAD_BYTES in src/config.ts (25 MB).
+	#
+	# Matching it exactly is the point: an oversized upload is refused here,
+	# before a single byte of it reaches Node, so a large body cannot tie up a
+	# worker or fill the tmpfs. If you change the application limit, change this
+	# one in the same commit - they are two halves of one number.
+	request_body {
+		max_size 25MB
+	}
+
+	reverse_proxy converter:3001 {
+		# The application's own deadline is 90s and the client gives up at 120s.
+		# Neither is any use if the proxy cuts the connection first, so give the
+		# app room to answer with its own error rather than a bare 502.
+		transport http {
+			read_timeout 120s
+			write_timeout 120s
+		}
+	}
+
+	# A proxy-generated error would otherwise be an HTML page, and the client
+	# reads `error.message` out of a JSON envelope for its dialog - without
+	# this the user sees a bare "HTTP 413".
+	#
+	# Only the 413 case is handled explicitly, because that is the one this
+	# proxy generates in normal operation. Other proxy-generated errors (502,
+	# 504) fall through to Caddy's default page, where the client's documented
+	# fallback of showing "HTTP <status>" applies.
+	handle_errors {
+		@too_large expression {http.error.status_code} == 413
+		handle @too_large {
+			header Content-Type application/json
+			respond `{"error":{"code":"E_TOO_LARGE","message":"This document is too large to convert."}}` 413
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

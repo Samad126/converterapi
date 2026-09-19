@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    /*
+     * Imports are written with a `.ts` extension so Node can run the source
+     * directly via --experimental-strip-types (type stripping does not rewrite
+     * specifiers, so `./config.js` would not resolve to `./config.ts`).
+     * tsc rewrites them back to `.js` for the build output.
+     */
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src/**/*.ts"]
+}

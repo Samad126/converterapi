@@ -1,0 +1,358 @@
+openapi: 3.1.0
+
+info:
+  title: Word to PDF converter
+  version: 1.0.0
+  summary: Converts Word documents to PDF using LibreOffice headless.
+  description: |
+    Backend for an Android app that uploads a Word document and receives a PDF.
+
+    ## The contract
+
+    This API is consumed by a **shipped Android client**, so the following
+    properties are part of the contract and are not free to change:
+
+    - **Success is `200` with `Content-Type: application/pdf`.** The client
+      checks that header and refuses anything else, so a stray `text/html` on a
+      `200` is a client-visible failure.
+    - **Failure is a non-2xx with the JSON error envelope.** The client reads
+      `error.message` and shows it verbatim in a dialog, falling back to
+      `"HTTP <status>"` when the body is missing or is not JSON.
+    - **A failure is never a `200`.** The client checks the status before it
+      reads anything, so a `200` is treated as a PDF and fails downstream.
+    - **`error.message` is user-facing prose.** It is a complete sentence with
+      no stack traces, no paths and no codes, because a person reads it.
+      `error.code` is for logs and metrics only; the client never displays it.
+
+    ## Timing
+
+    The client aborts the whole request after **120 seconds**. The server's own
+    conversion deadline is **90 seconds** so that it can still answer with a
+    proper `504` instead of being killed mid-conversion.
+
+    ## Uploads
+
+    Requests are `multipart/form-data` with exactly one file part. The import
+    filter is chosen from the **filename extension**, never from the declared
+    MIME type: the client deliberately sends `application/octet-stream`, and a
+    hostile client could declare anything at all.
+  contact:
+    name: Converter maintainers
+  license:
+    name: Proprietary
+
+servers:
+  - url: /
+    description: This server
+
+tags:
+  - name: convert
+    description: Document conversion.
+  - name: ops
+    description: Operational endpoints.
+
+paths:
+  /convert:
+    post:
+      tags: [convert]
+      operationId: convertDocument
+      summary: Convert a Word document to PDF
+      description: |
+        Accepts one Word document and returns the converted PDF.
+
+        The document is parsed by LibreOffice, which is a large C++ codebase
+        handling untrusted input. **Treat a conversion failure as an expected,
+        normal event**, not as an incident.
+
+        The endpoint is unauthenticated and cannot be otherwise: the client is
+        an APK, so any secret shipped inside it is public. Requests are
+        rate-limited per IP and conversions run under a bounded concurrency
+        limit; both are sources of `429` and `503` that a well-formed request
+        can hit.
+      x-max-upload-bytes: 26214400
+      requestBody:
+        required: true
+        description: |
+          Exactly one file part named `file`. Additional parts, or a part under
+          a different name, are rejected with `400`.
+
+          The overall body limit is **26214400 bytes (25 MB)**, matching the
+          client's own `MAX_UPLOAD_BYTES` and the reverse proxy's body limit.
+          Exceeding it at any layer produces `413`.
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              additionalProperties: false
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: |
+                    The document to convert. Its **filename extension** selects
+                    the import filter and must be one of `.docx`, `.docm` or
+                    `.doc` (case-insensitive). The declared `Content-Type` of
+                    this part is ignored.
+
+                    The filename is never used as a path on disk: the upload is
+                    written to a server-generated name inside a per-request
+                    temporary directory, so a name like `../../etc/passwd.docx`
+                    is harmless.
+            encoding:
+              file:
+                contentType: application/octet-stream
+      responses:
+        '200':
+          description: |
+            The converted document.
+          headers:
+            X-Request-Id:
+              description: |
+                Identifier for this request, also present in the server log
+                line. Quote it when reporting a problem.
+              schema:
+                type: string
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+                description: The PDF bytes, beginning with `%PDF-`.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Encrypted'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /health:
+    get:
+      tags: [ops]
+      operationId: health
+      summary: Liveness check
+      description: |
+        Returns `ok` once the service is ready to convert.
+
+        The service only begins listening after LibreOffice has been confirmed
+        on `PATH`, the metric-compatible fonts have been verified, and a
+        warm-up conversion has succeeded, so reaching this endpoint at all
+        means the conversion pipeline is ready. It does not exercise a
+        conversion.
+      responses:
+        '200':
+          description: The service is ready.
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+              example:
+                status: ok
+
+components:
+  schemas:
+    ErrorCode:
+      type: string
+      description: |
+        Stable machine-readable identifier for the failure. For logs, metrics
+        and support only - the client never shows this to the user.
+      enum:
+        - E_CONVERT_FAILED
+        - E_TIMEOUT
+        - E_ENCRYPTED
+        - E_UNSUPPORTED
+        - E_TOO_LARGE
+        - E_BUSY
+        - E_BAD_REQUEST
+        - E_RATE_LIMITED
+        - E_INTERNAL
+
+    ErrorEnvelope:
+      type: object
+      description: |
+        The body of every non-2xx response. There are no exceptions: error
+        paths that Express or multer would normally render as an HTML page are
+        overridden to produce this shape.
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: |
+                A complete sentence shown verbatim in a dialog on the phone.
+                Never a stack trace, a file path or a bare code.
+              minLength: 1
+
+  responses:
+    # Each response carries the exact sentence the user will see. If you
+    # change a message in src/errors.ts, change it here in the same commit -
+    # test/openapi.test.ts fails the build if the two disagree.
+
+    BadRequest:
+      description: |
+        The request was not a usable upload: no file part named `file`, several
+        files, or a part under a different name.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_BAD_REQUEST
+              message: The document could not be received. Please try again.
+
+    NotFound:
+      description: |
+        No such endpoint. In practice this means the client is older than the
+        server, which is why the message tells the user to update the app.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_BAD_REQUEST
+              message: The converter is not available at this address. Please update the app and try again.
+
+    TooLarge:
+      description: |
+        The upload exceeds 26214400 bytes (25 MB). Applied by the reverse proxy,
+        by the multipart parser and by the client, all using the same limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_TOO_LARGE
+              message: This document is too large to convert.
+
+    Unsupported:
+      description: |
+        The filename extension is not one of `.docx`, `.docm` or `.doc`.
+        The extension - not the declared MIME type - selects the import filter.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_UNSUPPORTED
+              message: Only Word documents (.docx, .docm, .doc) can be converted.
+
+    Encrypted:
+      description: |
+        The document is password protected. Detected before LibreOffice runs,
+        because LibreOffice reports an encrypted document the same way it
+        reports a corrupt one, and telling a user their file is damaged when it
+        merely needs a password is both wrong and unhelpful.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_ENCRYPTED
+              message: This document is password protected.
+
+    RateLimited:
+      description: |
+        Too many requests from this address in the current window.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_RATE_LIMITED
+              message: Too many requests. Try again in a moment.
+
+    ConvertFailed:
+      description: |
+        LibreOffice did not produce a PDF. Covers a damaged document, a
+        document whose content does not match its extension, and a zero-byte
+        upload.
+
+        Note that LibreOffice's exit code is **not** used to decide this:
+        `--convert-to` exits `0` even when it converts nothing, so the only
+        trustworthy signal is whether a non-empty file that starts with `%PDF-`
+        appeared.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          # A 500 is either a document LibreOffice refused or an unanticipated
+          # fault. Both are documented, because a client that only handles the
+          # first will be surprised by the second.
+          examples:
+            damaged:
+              summary: LibreOffice produced no PDF
+              value:
+                error:
+                  code: E_CONVERT_FAILED
+                  message: This document could not be converted. It may be damaged or in a format the converter does not support.
+            internal:
+              summary: Unanticipated server fault
+              value:
+                error:
+                  code: E_INTERNAL
+                  message: Something went wrong on the server.
+
+    Busy:
+      description: |
+        Every conversion slot is taken and the waiting queue is full. Returned
+        immediately rather than queueing without bound, so the client gets a
+        fast, honest answer instead of a request that hangs until it times out.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_BUSY
+              message: The converter is busy. Try again in a moment.
+
+    Timeout:
+      description: |
+        The conversion exceeded the server's 90 second deadline. The running
+        LibreOffice process is sent `SIGTERM` and then `SIGKILL`.
+
+        This is deliberately shorter than the client's own 120 second abort, so
+        that the server answers with this response rather than being killed
+        mid-conversion and leaving the phone to report a network failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_TIMEOUT
+              message: This document took too long to convert.
