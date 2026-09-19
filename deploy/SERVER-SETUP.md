@@ -15,17 +15,24 @@ Substitute the real values throughout:
 
 ## 1. DNS
 
-The **backend** hostname is `converterapi.alakbaroff.com`, and it does not
-resolve yet. Add a record in Cloudflare:
+Neither hostname resolves yet. Both are needed, and one nginx file serves
+both — `deploy/converter.alakbaroff.com.conf` — so add both records in
+Cloudflare:
 
 | Type | Name | Content | Proxy |
 | --- | --- | --- | --- |
+| `A` | `converter` | the VPC server's public IP | see below |
 | `A` | `converterapi` | the VPC server's public IP | see below |
 
-`converter.alakbaroff.com` — the **frontend** host — is a different hostname
-with its own server block and its own checkout. It needs its own `A` record
-pointing at the same server, but nothing in this document configures it, and
-the two must not share an nginx `server_name`.
+`converter` is the **frontend** (Next.js, proxied to `127.0.0.1:3011`) and
+`converterapi` is the **API** (proxied to `127.0.0.1:3010`). They are separate
+origins as far as a browser is concerned, which is the whole reason the API
+answers CORS — see [`src/middleware/cors.ts`](../src/middleware/cors.ts).
+
+Only the API host matters to this repository. The frontend is a separate
+checkout with its own deploy; its server block is in the same file here
+because the two share a host and a certificate, not because they share a
+release.
 
 **The proxy setting is not cosmetic — it decides which nginx line is right.**
 
@@ -34,7 +41,7 @@ the two must not share an nginx `server_name`.
 - **Proxied** (orange cloud, like `nextudy.alakbaroff.com`): Cloudflare
   terminates TLS at its edge first. Two consequences:
   1. Uncomment the `proxy_set_header X-Forwarded-For $http_cf_connecting_ip;`
-     line in [`converterapi.alakbaroff.com.conf`](converterapi.alakbaroff.com.conf).
+     line in [`converter.alakbaroff.com.conf`](converter.alakbaroff.com.conf).
      Without it, `TRUST_PROXY=1` makes Express trust the one hop and read the
      **Cloudflare edge IP** as the client — so the rate limiter buckets
      everyone at that edge together instead of per phone.
@@ -141,8 +148,8 @@ Sites on this host live in `/etc/nginx/conf.d`, so this is a single-file drop �
 no `sites-available` / `sites-enabled` symlink pair:
 
 ```bash
-sudo cp /pool/www/converter.alakbaroff.com/backend/deploy/converterapi.alakbaroff.com.conf \
-  /etc/nginx/conf.d/converterapi.alakbaroff.com.conf
+sudo cp /pool/www/converter.alakbaroff.com/backend/deploy/converter.alakbaroff.com.conf \
+  /etc/nginx/conf.d/converter.alakbaroff.com.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 

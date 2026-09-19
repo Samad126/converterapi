@@ -20,6 +20,14 @@
  * reaches Node, so no code of ours can put a header on it. That single header
  * lives in the nginx site file, and is the only CORS header there.
  *
+ * The preflight branch below is required rather than defensive, which is worth
+ * stating because the request does not look like one that needs it. The upload
+ * sets no request headers at all, and its `multipart/form-data` body would be
+ * safelisted on its own - but an XHR carrying an `upload` listener, which is
+ * how the frontend drives its progress bar, sets the use-CORS-preflight flag
+ * by specification. The browser therefore asks permission before it sends a
+ * byte, and an unanswered preflight means the upload never happens.
+ *
  * Note what this is not. CORS is a rule BROWSERS enforce on themselves; it is
  * not access control. The Android client sends no `Origin` and is unaffected
  * either way, and anything that can open a socket can simply leave the header
@@ -41,11 +49,12 @@ const EXPOSED_HEADERS = 'Content-Disposition, X-Request-Id';
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 
 /**
- * The only non-safelisted request header a preflight may approve.
+ * Request headers a preflight may approve.
  *
- * `Content-Type` is the one a client sets by hand to lift its request out of
- * the simple-request case - and that is exactly the case for this API's
- * upload, whose body is `multipart/form-data`.
+ * `Content-Type` covers the upload, whose body is `multipart/form-data`. That
+ * is a CORS-safelisted value, so the browser need not ask about it - but a
+ * preflight that omits a header it WAS asked about fails outright, and listing
+ * one extra header here costs nothing.
  */
 const ALLOWED_HEADERS = 'Content-Type';
 
