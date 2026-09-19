@@ -21,7 +21,8 @@ import { join } from 'node:path';
 import { PDFTOPPM_BIN, REQUIRED_FONT_ALIASES, SOFFICE_BIN } from '../config.ts';
 import { PreflightError } from '../errors.ts';
 import { resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
-import { calcProbe, impressProbe, writerProbe } from '../lib/probe-documents.ts';
+import { calcProbe, impressProbe, tablesProbe, writerProbe } from '../lib/probe-documents.ts';
+import { readZipEntry } from '../lib/unzip.ts';
 import { convert } from './conversion.service.ts';
 import { createWorkspace, inputFileNameFor, removeWorkspace } from './workspace.service.ts';
 
@@ -227,6 +228,13 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   { extension: '.docx', target: 'pdf', document: writerProbe },
   { extension: '.csv', target: 'pdf', document: calcProbe },
   { extension: '.odp', target: 'png', document: impressProbe },
+  // The extract pipeline touches none of the above: it is our own reader and
+  // our own workbook writer, so neither a missing LibreOffice module nor a
+  // missing poppler has anything to say about it. It gets a case for the
+  // opposite reason - a fault in it is a fault in OUR code, and the boot check
+  // is the only place it can be caught before a user's document is the thing
+  // that finds it.
+  { extension: '.docx', target: 'tables', document: tablesProbe },
 ];
 
 export interface WarmUpReport {
@@ -269,6 +277,28 @@ export async function warmUp(): Promise<WarmUpReport> {
           `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} image(s) for a two-slide document.`,
         );
       }
+      // An extract target answers with exactly one workbook - several tables
+      // become several sheets, not several files. More than one file would
+      // mean the response shape had changed without formats.ts saying so, and
+      // a client that unwraps a ZIP on the strength of `multiple: false` would
+      // hand the user a workbook it could not read.
+      if (conversion.target.mode === 'extract') {
+        if (result.files.length !== 1) {
+          throw new PreflightError(
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} files for a single-workbook target.`,
+          );
+        }
+        // Read the workbook back with our own ZIP reader. A file that is the
+        // right size but has no workbook part inside it is a package no reader
+        // will open - which is precisely the failure this pipeline shipped
+        // with the first time it was run, and the reason boot checks it.
+        const workbook = readZipEntry(result.files[0]!.data, 'xl/workbook.xml', 1024 * 1024);
+        if (workbook.kind !== 'found') {
+          throw new PreflightError(
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a package with no readable xl/workbook.xml.`,
+          );
+        }
+      }
 
       cases.push({
         extension: warmUpCase.extension,
@@ -277,14 +307,30 @@ export async function warmUp(): Promise<WarmUpReport> {
       });
     } catch (error) {
       if (error instanceof PreflightError) throw error;
+
+      // The advice has to match the pipeline. Sending someone to apt-get for a
+      // fault in our own reader would have them install packages that cannot
+      // fix it, which is worse than saying nothing.
+      const advice =
+        conversion.target.mode === 'extract'
+          ? [
+              'The service can start, but it cannot serve this conversion. Nothing',
+              'outside this process is involved in it - no LibreOffice, no',
+              'rasteriser - so this is a fault in the extractor or in the workbook',
+              'writer, not a missing package.',
+            ]
+          : [
+              'The service can start, but it cannot serve this conversion - which is',
+              'how a container built with only part of LibreOffice behaves. Check that',
+              'every module is installed:',
+              '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
+            ];
+
       throw new PreflightError(
         [
           `Warm-up conversion ${warmUpCase.extension} -> ${warmUpCase.target} failed.`,
           '',
-          'The service can start, but it cannot serve this conversion - which is',
-          'how a container built with only part of LibreOffice behaves. Check that',
-          'every module is installed:',
-          '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
+          ...advice,
           '',
           `Underlying error: ${error instanceof Error ? error.message : String(error)}`,
         ].join('\n'),

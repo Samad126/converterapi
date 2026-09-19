@@ -117,6 +117,7 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.unsupportedTarget('.docx', targetsFor('.docx')),
     Errors.unknownTarget(TARGET_IDS),
     Errors.tooLarge(),
+    Errors.noTables(),
     Errors.busy(),
     Errors.badRequest('test detail'),
     Errors.rateLimited(),
@@ -311,6 +312,15 @@ describe('documented responses match reality', () => {
       status: 415,
       code: 'E_UNSUPPORTED_TARGET',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'png' }),
+    },
+    {
+      // SAMPLE_DOCX is a paragraph and nothing else, so the extractor opens it
+      // successfully and finds no tables - which is the whole point of the
+      // case: it is a 422 rather than a 500 because nothing failed.
+      label: 'a document with no tables',
+      status: 422,
+      code: 'E_NO_TABLES',
+      run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'tables' }),
     },
   ];
 

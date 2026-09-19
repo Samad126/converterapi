@@ -115,6 +115,57 @@ export const RASTER_JPEG_QUALITY = intFromEnv('RASTER_JPEG_QUALITY', 90, 1);
  */
 export const MAX_RASTER_PAGES = intFromEnv('MAX_RASTER_PAGES', 100, 1);
 
+/**
+ * How many grid positions one document may contribute before we refuse.
+ *
+ * Cells and rows BOTH count one each, because both are retained in memory: a
+ * row is an array whether or not anything is in it, so a document of empty
+ * rows costs as much as a document of filled ones while contributing no cells
+ * at all. Counting only cells let 300,000 of them through as a clean
+ * extraction of an empty table.
+ *
+ * The same reasoning as MAX_RASTER_PAGES, and for the same reason: the
+ * workbook is assembled in memory, so this is a memory bound rather than a
+ * taste judgement. What makes it necessary here is that the amplification has
+ * nothing to do with the upload size - a 138KB document with a 5000x10 table
+ * is 50,000 cells, and merges are counted once per column they cover, so
+ * `w:gridSpan` makes a document cost more than its own text suggests. A bound
+ * on bytes would not catch that; a bound on grid positions does.
+ *
+ * 200,000 is roughly four tables of that size, which is far past any document
+ * a person is converting on a phone.
+ */
+export const MAX_TABLE_CELLS = intFromEnv('MAX_TABLE_CELLS', 200_000, 1);
+
+/**
+ * How many tables one document may hold.
+ *
+ * This looks redundant next to MAX_TABLE_CELLS and is not: the two bound
+ * different things, and a document can be pathological through either. The
+ * extractor holds a frame per table while it scans - the tables are only
+ * ordered and filtered once the scan is over - so a document consisting of
+ * nothing but empty tables costs memory per table and no cells at all.
+ *
+ * Measured: a 14MB document of one million empty tables grew the heap by
+ * 305MB while reporting a perfectly clean extraction of zero tables. That is
+ * comfortably inside MAX_DOCUMENT_XML_BYTES and comfortably outside what a
+ * 1GB container can serve twice at once, which is exactly the shape of problem
+ * the raster ceiling exists to prevent.
+ */
+export const MAX_TABLES = intFromEnv('MAX_TABLES', 1_000, 1);
+
+/**
+ * Ceiling on the inflated size of `word/document.xml`.
+ *
+ * This is the decompression-bomb bound. The upload is capped at 25MB, but
+ * 25MB of DEFLATE can inflate to gigabytes - that is what a bomb IS - and the
+ * only place to stop it is before the inflate, against the size the archive's
+ * own directory declares. 32MB is generously above the largest document that
+ * can pass MAX_TABLE_CELLS, so honest documents never meet it and a bomb
+ * always does.
+ */
+export const MAX_DOCUMENT_XML_BYTES = intFromEnv('MAX_DOCUMENT_XML_BYTES', 32 * MB, 1024);
+
 /** Per-IP request budget. Unauthenticated endpoint on the public internet. */
 export const RATE_LIMIT_WINDOW_MS = intFromEnv('RATE_LIMIT_WINDOW_MS', 60_000, 1_000);
 export const RATE_LIMIT_MAX = intFromEnv('RATE_LIMIT_MAX', 30, 1);

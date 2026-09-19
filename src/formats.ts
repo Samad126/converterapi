@@ -50,7 +50,8 @@ export type TargetId =
   | 'odp'
   | 'pptx'
   | 'png'
-  | 'jpg';
+  | 'jpg'
+  | 'tables';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -87,14 +88,35 @@ export interface TargetFormat {
    *     rasterised into ONE IMAGE PER PAGE, because LibreOffice's command-line
    *     image export only ever writes the first page of a presentation. See
    *     `rasterizePdf` in services/conversion.service.ts.
+   *   - `extract` - LibreOffice is not involved at all. A part is read out of
+   *     the upload's own package and turned into the target directly, which is
+   *     what makes a Word document's tables available as a workbook. The
+   *     engine is named by `extractFrom` rather than by a filter, and it is
+   *     this mode that makes the service more than a LibreOffice front end.
    *
    * A raster target always answers with a ZIP, even for a single-page source,
    * so that the response type does not depend on how many slides the upload
-   * happened to have.
+   * happened to have. An `extract` target answers with ONE file - a workbook -
+   * so it does not.
    */
-  mode: 'direct' | 'raster';
+  mode: 'direct' | 'raster' | 'extract';
   /** `direct`: the `--convert-to` argument, for each family that can produce it. */
   filters: Partial<Record<DocumentFamily, string>>;
+  /**
+   * For `extract`: the sources the engine can read, named explicitly.
+   *
+   * Keyed by EXTENSION and not by family, because the property an extract
+   * depends on is not the document family - it is that the upload is a ZIP of
+   * XML parts. `.docx` and `.docm` are both `writer`, and so is `.doc`, which
+   * is a binary container no ZIP reader can open. The family cannot express
+   * that distinction and the extension can, which is also why this is a second
+   * list rather than a reuse of `filters`: the two are keyed on different
+   * things because they mean different things.
+   *
+   * `validateMatrix` checks it in both directions, so this cannot drift out of
+   * agreement with the sources that advertise the target.
+   */
+  extractFrom?: readonly AllowedExtension[];
 }
 
 /**
@@ -233,6 +255,34 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'raster',
     filters: {},
   },
+  tables: {
+    id: 'tables',
+    extension: '.xlsx',
+    mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    /**
+     * Distinct from `xlsx`'s label, because these two are the only targets
+     * that share one and the error messages list labels rather than ids.
+     * Listing "XLSX" twice in one sentence leaves the reader to guess which is
+     * which; naming what is in the workbook does not.
+     */
+    label: 'XLSX (tables)',
+    /**
+     * Every table in the document, as one worksheet each.
+     *
+     * This is its own target rather than letting `.docx` reach `xlsx`,
+     * and the reason is that the two are not the same operation. `xlsx` from a
+     * spreadsheet is a faithful conversion of the whole document by
+     * LibreOffice; this is an extraction that keeps the tables and drops
+     * everything else - the prose, the headings, the images, the styles. If
+     * they shared an id then `GET /formats` would advertise `xlsx` for a .docx
+     * and the person asking for it would reasonably expect a Word-faithful
+     * workbook. The lossy one should not answer to the name of the faithful
+     * one, so the distinction lives in the address.
+     */
+    mode: 'extract',
+    filters: {},
+    extractFrom: ['.docx', '.docm'],
+  },
 };
 
 export interface SourceFormat {
@@ -265,14 +315,21 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'writer',
     mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     importFilter: 'MS Word 2007 XML',
-    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+    // `tables` is the one target here that LibreOffice does not produce: the
+    // document is opened as the ZIP it is and its tables are read out. It sits
+    // last because it is the only lossy member of an otherwise faithful list.
+    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub', 'tables'],
   },
   '.docm': {
     extension: '.docm',
     family: 'writer',
     mediaType: 'application/vnd.ms-word.document.macroEnabled.12',
     importFilter: 'MS Word 2007 XML',
-    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+    // A .docm is the same OOXML package as a .docx with macros alongside it,
+    // so the table extractor reads it unchanged. `.doc` deliberately does NOT
+    // get this target: same family, same audience, but a binary container that
+    // has to go through LibreOffice rather than through a ZIP reader.
+    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub', 'tables'],
   },
   '.doc': {
     extension: '.doc',
@@ -432,6 +489,15 @@ export function resolveConversion(
   const target = TARGETS[targetId];
   if (!source.targets.includes(targetId)) return null;
 
+  if (target.mode === 'extract') {
+    // Nothing to look up: there is no LibreOffice filter for an engine that
+    // does not call LibreOffice. Whether this pair is legal has already been
+    // decided by the `targets` check above, and `validateMatrix` guarantees
+    // the two lists agree - so reaching here means the extractor can read this
+    // source, or the matrix is broken and would have thrown at import.
+    return { source, target, convertTo: '' };
+  }
+
   if (target.mode === 'raster') {
     // A raster target is built from the family's PDF export, so a family that
     // cannot write a PDF cannot write an image either.
@@ -447,6 +513,26 @@ export function resolveConversion(
 /** The PDF export filter for a family, if it has one. */
 export function pdfFilterFor(family: DocumentFamily): string | undefined {
   return TARGETS.pdf.filters[family];
+}
+
+/**
+ * Does this target answer with a ZIP of several files rather than one file?
+ *
+ * A function in this file rather than a comparison written where it is needed,
+ * because two callers need the same answer and they disagreeing is a
+ * client-visible fault rather than a cosmetic one: the response body describes
+ * itself as an archive at `GET /formats` (`multiple`) and is actually sent as
+ * one in the controller. If those two ever disagreed, a client would unwrap a
+ * body that is not a ZIP - or read a ZIP as a document - and fail somewhere
+ * far from the cause.
+ *
+ * Only a raster target archives: it is one image per page and a ZIP is the
+ * only way to put several files in one response. An extract target answers
+ * with a single workbook however many tables the document held, and a direct
+ * target always writes one file.
+ */
+export function archivesFiles(target: TargetFormat): boolean {
+  return target.mode === 'raster';
 }
 
 /** Every target this extension can become, as ids. */
@@ -484,11 +570,31 @@ export function validateMatrix(): void {
     if (!target.extension.startsWith('.')) {
       problems.push(`target "${id}" has a bare extension "${target.extension}"`);
     }
-    if (target.mode === 'direct' && Object.keys(target.filters).length === 0) {
+    const filterCount = Object.keys(target.filters).length;
+    if (target.mode === 'direct' && filterCount === 0) {
       problems.push(`direct target "${id}" declares no filters`);
     }
-    if (target.mode === 'raster' && Object.keys(target.filters).length > 0) {
-      problems.push(`raster target "${id}" should not declare filters`);
+    if (target.mode !== 'direct' && filterCount > 0) {
+      problems.push(`${target.mode} target "${id}" should not declare filters`);
+    }
+
+    if (target.mode === 'extract') {
+      // An extract target names its own sources, so it is the only target
+      // whose reach is not implied by `filters`. Both directions are checked:
+      // a name that is not a source, and a source that does not offer it -
+      // either way the matrix would advertise a conversion that cannot run.
+      const named = target.extractFrom ?? [];
+      if (named.length === 0) problems.push(`extract target "${id}" names no sources`);
+      for (const extension of named) {
+        const source = SOURCES[extension];
+        if (!source) {
+          problems.push(`extract target "${id}" names unknown source "${extension}"`);
+        } else if (!source.targets.includes(id as TargetId)) {
+          problems.push(`extract target "${id}" names "${extension}", which does not offer it`);
+        }
+      }
+    } else if (target.extractFrom) {
+      problems.push(`target "${id}" declares extractFrom but is not an extract target`);
     }
   }
 
@@ -503,6 +609,17 @@ export function validateMatrix(): void {
       if (!resolveConversion(source.extension, targetId)) {
         problems.push(
           `source "${ext}" (${source.family}) advertises "${targetId}" but has no filter for it`,
+        );
+      }
+      // The other half of the extract check above: a source that offers an
+      // extract target must be one the target named, or the extractor would
+      // be handed a document it cannot open.
+      if (
+        TARGETS[targetId].mode === 'extract' &&
+        !(TARGETS[targetId].extractFrom as readonly string[]).includes(ext)
+      ) {
+        problems.push(
+          `source "${ext}" advertises the extract target "${targetId}", which does not name it`,
         );
       }
     }

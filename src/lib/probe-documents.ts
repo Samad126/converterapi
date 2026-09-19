@@ -29,10 +29,40 @@ const PROBE_FONTS = 'Calibri Cambria Arial Times New Roman Courier New 012345678
  * why this stays readable rather than needing a document library.
  */
 export function buildMinimalDocx(paragraphs: readonly string[]): Buffer {
-  const body = paragraphs
-    .map((text) => `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`)
+  return buildDocxPackage(paragraphs.map(paragraph).join(''));
+}
+
+function paragraph(text: string): string {
+  return `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+function cell(text: string): string {
+  return `<w:tc>${paragraph(text)}</w:tc>`;
+}
+
+/**
+ * A Word document holding one small table, for the `tables` warm-up case.
+ *
+ * A probe for the extract pipeline cannot reuse the paragraph-only one: a
+ * document with no tables is a legitimate 422, so warming up with it would
+ * fail the boot check on a perfectly healthy service. This has a header row
+ * and two data rows rather than a single cell, because a workbook produced
+ * from one cell and a workbook produced from nothing are the same size as far
+ * as a byte count can tell.
+ */
+export function tablesProbe(): Buffer {
+  const rows = [
+    ['Header', 'Value'],
+    ['alpha', '1'],
+    ['beta', '2'],
+  ]
+    .map((values) => `<w:tr>${values.map(cell).join('')}</w:tr>`)
     .join('');
 
+  return buildDocxPackage(`<w:tbl>${rows}</w:tbl><w:p/>`);
+}
+
+function buildDocxPackage(body: string): Buffer {
   const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
 

@@ -98,7 +98,7 @@ paths:
       description: |
         Converts the upload to `target`, which must be an id from
         `GET /formats` (`pdf`, `odt`, `docx`, `txt`, `html`, `rtf`, `epub`,
-        `ods`, `xlsx`, `csv`, `odp`, `pptx`, `png`, `jpg`).
+        `ods`, `xlsx`, `csv`, `odp`, `pptx`, `png`, `jpg`, `tables`).
 
         The document is parsed by LibreOffice, which is a large C++ codebase
         handling untrusted input. **Treat a conversion failure as an expected,
@@ -132,7 +132,7 @@ paths:
         '415':
           $ref: '#/components/responses/UnsupportedTarget'
         '422':
-          $ref: '#/components/responses/Encrypted'
+          $ref: '#/components/responses/Unprocessable'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -307,7 +307,7 @@ components:
       description: |
         Identifier of an output format, as used in the `/convert/{target}` path
         and returned by `GET /formats`.
-      enum: [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg]
+      enum: [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables]
 
     ErrorCode:
       type: string
@@ -322,6 +322,7 @@ components:
         - E_UNSUPPORTED_TARGET
         - E_UNKNOWN_TARGET
         - E_TOO_LARGE
+        - E_NO_TABLES
         - E_BUSY
         - E_BAD_REQUEST
         - E_RATE_LIMITED
@@ -494,7 +495,7 @@ components:
           example:
             error:
               code: E_UNKNOWN_TARGET
-              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG.'
+              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables).'
 
     TooLarge:
       description: |
@@ -547,22 +548,42 @@ components:
           example:
             error:
               code: E_UNSUPPORTED_TARGET
-              message: 'A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB.'
+              message: 'A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables).'
 
-    Encrypted:
+    Unprocessable:
       description: |
-        The document is password protected. Detected before LibreOffice runs,
-        because LibreOffice reports an encrypted document the same way it
-        reports a corrupt one, and telling a user their file is damaged when it
-        merely needs a password is both wrong and unhelpful.
+        The document was received and read, and the answer is that there is no
+        answer. Two quite different situations land here, and both are the
+        document's own doing rather than a fault:
+
+        **Password protected.** Detected before LibreOffice runs, because
+        LibreOffice reports an encrypted document the same way it reports a
+        corrupt one, and telling a user their file is damaged when it merely
+        needs a password is both wrong and unhelpful.
+
+        **No tables.** Only a `tables` request can produce this: the target is
+        the only one that reads the document's contents rather than converting
+        the document as a whole, so it is the only one that can open a file
+        successfully and find nothing to work with. Reporting it as a
+        conversion failure would say the file may be damaged when the truth is
+        that it is a perfectly good document with no tables in it.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: E_ENCRYPTED
-              message: This document is password protected.
+          examples:
+            encrypted:
+              summary: The document needs a password.
+              value:
+                error:
+                  code: E_ENCRYPTED
+                  message: This document is password protected.
+            noTables:
+              summary: A `tables` request on a document with no tables.
+              value:
+                error:
+                  code: E_NO_TABLES
+                  message: This document does not contain any tables.
 
     RateLimited:
       description: |

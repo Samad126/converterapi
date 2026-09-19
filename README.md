@@ -27,6 +27,7 @@ contract** with a client that is already shipped and cannot be changed.
 - [Fonts, and why they are not optional](#fonts-and-why-they-are-not-optional)
 - [How conversion works](#how-conversion-works)
 - [Image targets, and why they need poppler](#image-targets-and-why-they-need-poppler)
+- [Extracting tables](#extracting-tables)
 - [Concurrency model](#concurrency-model)
 - [Cleanup and temp files](#cleanup-and-temp-files)
 - [Operational limits](#operational-limits)
@@ -47,7 +48,8 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 
 | From | To |
 |---|---|
-| `.docx` `.docm` `.doc` | PDF, ODT, TXT, HTML, RTF, EPUB |
+| `.docx` `.docm` | PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables) |
+| `.doc` | PDF, ODT, TXT, HTML, RTF, EPUB |
 | `.xlsx` | PDF, ODS, CSV, HTML |
 | `.pptx` | PDF, ODP, PNG/JPG (one image per slide) |
 | `.odt` | PDF, DOCX |
@@ -78,6 +80,25 @@ conversion engine cares about.
 A request for a target that exists but is not reachable from your source is a
 `415` whose message lists what that source *can* become. A target that does not
 exist at all is a `404`.
+
+### `XLSX (tables)`: the one target LibreOffice does not produce
+
+Every other target in that table is a LibreOffice filter. This one is not: the
+document is opened as the ZIP of XML parts it already is, its tables are read
+out, and the answer is a workbook with one worksheet per table. See
+[Extracting tables](#extracting-tables).
+
+It is a target of its own rather than a `.docx` route into `xlsx`, and that is
+deliberate. `xlsx` from a spreadsheet is a faithful conversion of the whole
+document; this keeps the tables and drops everything else — the prose, the
+headings, the images, the styles. If they shared a name then `GET /formats`
+would advertise `xlsx` for a `.docx` and the person asking for it would
+reasonably expect a Word-faithful workbook. The lossy operation should not
+answer to the name of the faithful one, so the distinction lives in the address.
+
+`.doc` deliberately does **not** get this target. It is the same family and the
+same audience as `.docx`, but it is a binary container rather than a ZIP, so
+there is nothing for the extractor to open.
 
 ---
 
@@ -239,8 +260,9 @@ up.
 | `500` | `E_CONVERT_FAILED` | This document could not be converted. It may be damaged or in a format the converter does not support. |
 | `504` | `E_TIMEOUT` | This document took too long to convert. |
 | `422` | `E_ENCRYPTED` | This document is password protected. |
+| `422` | `E_NO_TABLES` | This document does not contain any tables. |
 | `415` | `E_UNSUPPORTED` | This file type cannot be converted. Supported types: .docx, .docm, .doc, … |
-| `415` | `E_UNSUPPORTED_TARGET` | A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB. |
+| `415` | `E_UNSUPPORTED_TARGET` | A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables). |
 | `404` | `E_UNKNOWN_TARGET` | That is not a format this converter can produce. Available: PDF, ODT, DOCX, … |
 | `413` | `E_TOO_LARGE` | This document is too large to convert. |
 | `503` | `E_BUSY` | The converter is busy. Try again in a moment. |
@@ -429,6 +451,14 @@ soffice --headless --norestore --invisible --nolockcheck --nodefault --nofirstst
   --convert-to pdf:writer_pdf_Export --outdir <tmpdir> <input>
 ```
 
+That is the whole of the conversion for a `direct` target. Two targets do
+something else, and both are described in their own sections: `png`/`jpg` render
+to PDF first and then rasterise it, because LibreOffice's command-line image
+export only ever writes the first page ([Image
+targets](#image-targets-and-why-they-need-poppler)); and `tables` does not call
+LibreOffice at all, reading the document's own package instead
+([Extracting tables](#extracting-tables)).
+
 The `--convert-to` argument is `<extension>:<filter>`, and both halves come from
 the matrix in [`src/formats.ts`](src/formats.ts). Filters are named after the
 **document family**, not the file type, which is why the same request looks
@@ -542,6 +572,115 @@ Two consequences worth knowing:
 
 ---
 
+## Extracting tables
+
+`POST /convert/tables` on a `.docx` or `.docm` returns an `.xlsx` workbook with
+one worksheet per table in the document. This is the only target that involves
+**no LibreOffice at all**, and it is the only one whose answer is read out of
+the document rather than converted from it.
+
+A `.docx` is a ZIP of XML parts, so the work is: read `word/document.xml` out of
+that ZIP, walk it for `w:tbl` elements, and write a workbook. Both halves are in
+this repository, with no dependencies beyond Node's own `zlib`:
+
+| Module | What it does |
+|---|---|
+| [`src/lib/unzip.ts`](src/lib/unzip.ts) | Reads one named entry out of a ZIP |
+| [`src/lib/docx-tables.ts`](src/lib/docx-tables.ts) | Walks the XML for tables |
+| [`src/lib/xlsx.ts`](src/lib/xlsx.ts) | Writes the workbook |
+| [`src/lib/xml-text.ts`](src/lib/xml-text.ts) | Decodes entities in cell text |
+
+The reason it is written rather than depended on is the same reason
+[`src/lib/zip.ts`](src/lib/zip.ts) and [`src/lib/encrypted.ts`](src/lib/encrypted.ts)
+are: a format that can be described in a few hundred lines does not justify a
+package, and the reader here is deliberately narrow — it resolves one name to
+bytes and never to a path, which is what makes zip-slip a non-issue rather than
+something to sanitise carefully.
+
+### Merged cells
+
+The part that is actually hard, and the part most implementations get wrong. The
+extractor expands merges so the grid matches what a person sees in Word:
+
+- **`w:gridSpan`** — one cell occupying N columns. It occupies them *all*, so
+  every later cell in the row shifts right. Getting this wrong misaligns the
+  rest of the row rather than just the merged cell.
+- **`w:vMerge`** — a cell continuing the cell above it. The continuing cells are
+  usually **empty in the XML**: the value only exists in the cell that restarts
+  the merge, so it has to be carried down. The carry is tracked per *column*,
+  because the cells of a merged run are not adjacent in the XML.
+
+A merged cell's value is repeated across every position it covers. The cost is
+that it appears more than once in the workbook, which is the right default: the
+alternative is a grid with holes in it, and a hole in a spreadsheet is
+indistinguishable from a cell nobody filled in.
+
+### What it does not do
+
+- **Tables in headers, footers and footnotes are not found.** Only
+  `word/document.xml` is read, which is where the body's tables live. Reading
+  every part would mean building a document model, which is the thing this
+  deliberately is not.
+- **The `w:` prefix is assumed.** Every OOXML producer emits it — Word,
+  LibreOffice, and every library that generates `.docx` — because the format's
+  own examples and test suites use it. A document binding the namespace to some
+  other prefix reads as having no tables, which is a wrong answer rather than a
+  crash.
+- **`.doc` is not supported.** Same family, same audience, binary container.
+
+### Bounds
+
+Two limits, and they exist because the workbook is assembled in memory — the
+same reasoning as `MAX_RASTER_PAGES`:
+
+- `MAX_DOCUMENT_XML_BYTES` (default 32MB) caps the inflated size of
+  `word/document.xml`, checked against the size the archive's own directory
+  declares **before** any inflating happens. 25MB of DEFLATE can inflate to
+  gigabytes, and the only place to stop a decompression bomb is before the work.
+  A second check uses the inflate's own output cap, which is what catches a
+  directory that lied.
+- `MAX_TABLE_CELLS` (default 200,000) caps the grid positions one document may
+  contribute. Cells and rows each count one, because a row is retained in
+  memory whether or not anything is in it. This is deliberately a bound on
+  positions rather than bytes: a merged cell is counted once per column it
+  covers, so a document can cost far more than its own text suggests.
+- `MAX_TABLES` (default 1,000) caps how many tables a document may hold, and is
+  **not** redundant next to the cell count. The extractor retains a frame per
+  table while it scans — tables are only ordered and filtered once the scan is
+  over — so a document of nothing but empty tables costs memory per table and no
+  cells at all. Measured: 14MB of empty tables grew the heap by 305MB while
+  reporting a clean extraction of zero tables; with the bound it is refused in
+  5ms and 15MB.
+
+Past any of these limits the request is refused with `E_TOO_LARGE`.
+
+### Why this one does not run in a subprocess
+
+Every other pipeline spawns a child process, so a slow conversion never occupies
+the event loop. This one runs in-process, and that is a deliberate trade: the
+scan is synchronous once the XML is in hand, so it cannot be interrupted
+halfway, and a deadline would only ever be consulted after the work it was meant
+to bound. The bounds above are what keep it honest instead.
+
+In practice this is not close to mattering — a document at the cell limit is a
+fraction of a second, against the ~130ms *floor* of a soffice conversion. The
+boot check converts a table-bearing document through this pipeline so a fault in
+it fails startup rather than someone's upload.
+
+### The failure case that is not a failure
+
+A document with no tables is a **`422 E_NO_TABLES`**, not a `500`. The document
+opened and was read; it simply has nothing to extract. Reporting it as a
+conversion failure would tell the user their file may be damaged when the truth
+is that it is a perfectly good document with no tables in it.
+
+A `.docx` that is not really a `.docx` — corrupt, truncated, or renamed from
+something else — is the opposite case and *is* a `500 E_CONVERT_FAILED`, because
+there is nothing to say about tables until the document they would be in can be
+read at all.
+
+---
+
 ## Concurrency model
 
 `soffice` converts one document per process and is CPU- and memory-heavy, so the
@@ -612,6 +751,9 @@ a workspace touched between the check and the delete is left alone.
 | Queued conversions | 8 | `MAX_QUEUED_CONVERSIONS` |
 | Requests per IP | 30 / min | `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS` |
 | Pages per image export | 100 | `MAX_RASTER_PAGES` (the archive is built in memory) |
+| Table cells per document | 200,000 | `MAX_TABLE_CELLS` (the workbook is built in memory) |
+| Tables per document | 1,000 | `MAX_TABLES` (a frame is held per table during the scan) |
+| Inflated `word/document.xml` | 32 MB | `MAX_DOCUMENT_XML_BYTES` (the decompression-bomb bound) |
 | Image resolution | 150 DPI | `RASTER_DPI` |
 | JPEG quality | 90 | `RASTER_JPEG_QUALITY` |
 | Stale sweep | every 5 min | `SWEEP_INTERVAL_MS` |
@@ -651,6 +793,9 @@ All configuration is environment variables read in
 | `RASTER_DPI` | `150` | Resolution of a rasterised page |
 | `RASTER_JPEG_QUALITY` | `90` | For the `jpg` target |
 | `MAX_RASTER_PAGES` | `100` | Refused with `E_TOO_LARGE` beyond this |
+| `MAX_TABLE_CELLS` | `200000` | For the `tables` target; refused with `E_TOO_LARGE` |
+| `MAX_TABLES` | `1000` | For the `tables` target; refused with `E_TOO_LARGE` |
+| `MAX_DOCUMENT_XML_BYTES` | `33554432` | Caps the inflated `word/document.xml` |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |
 | `CONVERT_TIMEOUT_MS` | `90000` | Must stay below the client's 120s |

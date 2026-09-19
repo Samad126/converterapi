@@ -13,7 +13,7 @@
  */
 import { Router } from 'express';
 
-import { SOURCES, TARGETS } from '../formats.ts';
+import { archivesFiles, SOURCES, TARGETS } from '../formats.ts';
 
 export function createFormatsRouter(): Router {
   const router = Router();
@@ -31,8 +31,11 @@ export function createFormatsRouter(): Router {
          * True when the response is a ZIP of one file per page rather than a
          * single file - always an archive for these, even for a one-page
          * source, so the content type never depends on the document.
+         *
+         * Asked of the matrix rather than restated, so that this answer and the
+         * one the controller acts on cannot drift apart. See `archivesFiles`.
          */
-        multiple: target.mode === 'raster',
+        multiple: archivesFiles(target),
       })),
       sources: Object.values(SOURCES).map((source) => ({
         extension: source.extension,

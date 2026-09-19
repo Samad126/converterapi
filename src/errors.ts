@@ -25,6 +25,7 @@ export type ErrorCode =
   | 'E_UNSUPPORTED_TARGET'
   | 'E_UNKNOWN_TARGET'
   | 'E_TOO_LARGE'
+  | 'E_NO_TABLES'
   | 'E_BUSY'
   | 'E_BAD_REQUEST'
   | 'E_RATE_LIMITED'
@@ -137,6 +138,18 @@ export const Errors = {
   /** Over MAX_UPLOAD_BYTES, or more pages than we will rasterise at once. */
   tooLarge: (cause?: unknown) =>
     new AppError('E_TOO_LARGE', 413, 'This document is too large to convert.', { cause }),
+
+  /**
+   * The document opened fine and simply has no tables in it.
+   *
+   * Its own code rather than E_CONVERT_FAILED, which is what it would be if
+   * left alone: nothing failed here - the document is exactly what it claims
+   * to be. Telling someone their letter "may be damaged" because it happens to
+   * contain no tables is the same wrong explanation E_ENCRYPTED exists to
+   * avoid, and this is the table-shaped version of it.
+   */
+  noTables: () =>
+    new AppError('E_NO_TABLES', 422, 'This document does not contain any tables.'),
 
   /** No free conversion slot. */
   busy: () =>

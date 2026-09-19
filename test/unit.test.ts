@@ -90,6 +90,20 @@ describe('conversion matrix', () => {
           continue;
         }
 
+        if (TARGETS[target].mode === 'extract') {
+          // An extract target reaches no filter either, and for a stronger
+          // reason: LibreOffice is not involved at all. Our own code reads the
+          // document, so there is nothing for `convertTo` to carry - and the
+          // pair is legal only because the target named this source as one it
+          // can read.
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          assert.ok(
+            TARGETS[target].extractFrom?.includes(extension),
+            `${extension} -> ${target}, but the target does not list it as a source`,
+          );
+          continue;
+        }
+
         assert.notEqual(resolved.convertTo, '', `${extension} -> ${target} has no filter`);
         // The filter argument always starts with the output extension, which is
         // how soffice knows what to write.
@@ -123,15 +137,27 @@ describe('conversion matrix', () => {
   });
 
   it('exposes every target under a distinct id and extension', () => {
-    const extensions = new Set<string>();
+    const extensions = new Map<string, string>();
     for (const id of TARGET_IDS) {
       assert.equal(isTargetId(id), true);
       const target = TARGETS[id];
       assert.equal(target.id, id);
       assert.ok(target.extension.startsWith('.'), `${id} has a bare extension`);
       assert.ok(target.mediaType.length > 0, `${id} has no media type`);
-      assert.equal(extensions.has(target.extension), false, `${target.extension} is used twice`);
-      extensions.add(target.extension);
+
+      const existing = extensions.get(target.extension);
+      if (existing !== undefined) {
+        // Two targets may share an extension only when one of them is an
+        // extract, because then they produce the SAME FORMAT by different
+        // means - `tables` writes a workbook exactly as `xlsx` does, and only
+        // the contents differ, so the download is honest either way. Two
+        // conversions sharing one extension would instead mean the same
+        // filename for two pieces of genuinely different work, which is the
+        // thing this test exists to catch.
+        const extraction = TARGETS[existing]?.mode === 'extract' || target.mode === 'extract';
+        assert.ok(extraction, `${target.extension} is produced by two targets: ${existing}, ${id}`);
+      }
+      extensions.set(target.extension, id);
     }
     assert.equal(isTargetId('banana'), false);
     assert.equal(isTargetId('constructor'), false);

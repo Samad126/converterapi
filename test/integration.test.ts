@@ -30,9 +30,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const { buildMinimalDocx, buildMinimalOdp, buildSolidPng } = await import(
+const { buildMinimalDocx, buildMinimalOdp, buildSolidPng, tablesProbe } = await import(
   '../src/lib/probe-documents.ts'
 );
+const { readZipEntry } = await import('../src/lib/unzip.ts');
 const { MAX_UPLOAD_BYTES } = await import('../src/config.ts');
 
 /** A small but genuine .docx, built from real OOXML parts. */
@@ -414,7 +415,10 @@ describe('POST /convert/<target> - the universal matrix', () => {
     const response = await upload(server.baseUrl, 'sample.docx', SAMPLE_DOCX, { target: 'png' });
 
     const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
-    assert.equal(error.message, 'A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB.');
+    assert.equal(
+      error.message,
+      'A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables).',
+    );
   });
 
   it('rejects an unknown target with 404, without reading the upload', async () => {
@@ -432,6 +436,71 @@ describe('POST /convert/<target> - the universal matrix', () => {
   it('deletes the workspace after a matrix conversion', async () => {
     const before_ = await listWorkspaces();
     await upload(server.baseUrl, 'sheet.csv', SAMPLE_CSV, { target: 'xlsx' });
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
+describe('POST /convert/tables', () => {
+  /** Read one part back out of the workbook the server sent. */
+  function workbookPart(body: Buffer, name: string): string {
+    const part = readZipEntry(body, name, 4 * 1024 * 1024);
+    assert.equal(part.kind, 'found', `${name} is missing from the workbook`);
+    return part.kind === 'found' ? part.data.toString('utf8') : '';
+  }
+
+  it('extracts a Word table into a workbook', async () => {
+    const response = await upload(server.baseUrl, 'report.docx', tablesProbe(), { target: 'tables' });
+
+    assert.equal(response.status, 200);
+    // Exactly the spreadsheet media type, with no charset suffix - a client
+    // that inspects this header refuses anything that does not match.
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+
+    // The workbook is a real one, and the text that was in the document is in
+    // it. Reading the parts back with our own reader also proves the package
+    // is structurally sound, not merely the right size.
+    assert.match(workbookPart(response.body, 'xl/workbook.xml'), /name="Table_1"/);
+    const sheet = workbookPart(response.body, 'xl/worksheets/sheet1.xml');
+    for (const value of ['Header', 'Value', 'alpha', 'beta', '1', '2']) {
+      assert.ok(sheet.includes(value), `"${value}" did not survive the extraction`);
+    }
+  });
+
+  it('names the download after the upload, with the workbook extension', async () => {
+    const response = await upload(server.baseUrl, 'Quarterly report.docx', tablesProbe(), {
+      target: 'tables',
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.contentDisposition ?? '', /filename="Quarterly report\.xlsx"/);
+  });
+
+  it('answers with the workbook itself, not an archive around it', async () => {
+    // `multiple: false` in GET /formats is a promise the client acts on: it
+    // reads the body as a workbook rather than unwrapping it. An .xlsx is
+    // itself a ZIP, so the check is the media type - wrapping it in another
+    // archive would produce a file no client could open.
+    const response = await upload(server.baseUrl, 'report.docx', tablesProbe(), { target: 'tables' });
+    assert.equal(response.contentType?.includes('application/zip'), false);
+    // And the body begins with a local file header: it is the workbook.
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50);
+  });
+
+  it('refuses a legacy .doc, which is not a package it can read', async () => {
+    // `.doc` is the same family as `.docx` and the same audience, but it is a
+    // binary container rather than a ZIP of XML parts, so it deliberately does
+    // not get the `tables` target. The refusal names what it CAN become.
+    const response = await upload(server.baseUrl, 'legacy.doc', SAMPLE_DOCX, { target: 'tables' });
+    const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+    assert.match(error.message, /A \.doc file can be converted to: /);
+    assert.equal(/tables/i.test(error.message), false, 'the .doc list must not offer tables');
+  });
+
+  it('deletes the workspace after an extraction', async () => {
+    const before_ = await listWorkspaces();
+    await upload(server.baseUrl, 'report.docx', tablesProbe(), { target: 'tables' });
     assert.deepEqual(await listWorkspaces(), before_);
   });
 });
@@ -456,7 +525,9 @@ describe('GET /formats', () => {
     }
 
     const docx = body.sources.find((source) => source.extension === '.docx');
-    assert.deepEqual(docx?.targets, ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub']);
+    // `tables` is the one Word target LibreOffice does not produce: it is our
+    // own extractor reading the document's own package.
+    assert.deepEqual(docx?.targets, ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub', 'tables']);
 
     // Every target a source claims has to exist in the target list, or the
     // document is advertising something the server would 404 on.

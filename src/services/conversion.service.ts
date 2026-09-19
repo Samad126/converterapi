@@ -10,6 +10,9 @@
  *     image export only ever writes the first page. That is two processes, and
  *     they share one deadline: what is being rationed is the client's patience,
  *     not any one process's runtime.
+ *   - `extract` targets never reach LibreOffice at all. The upload is opened as
+ *     the ZIP of XML parts it is and the answer is built from its contents -
+ *     which today means one worksheet per table in a Word document.
  *
  * Nothing here knows about HTTP. Errors come out as AppError and the caller
  * decides how they are delivered.
@@ -17,10 +20,27 @@
 import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { CONVERT_TIMEOUT_MS, MAX_RASTER_PAGES, RASTER_DPI, RASTER_JPEG_QUALITY } from '../config.ts';
+import {
+  CONVERT_TIMEOUT_MS,
+  MAX_DOCUMENT_XML_BYTES,
+  MAX_RASTER_PAGES,
+  MAX_TABLES,
+  MAX_TABLE_CELLS,
+  RASTER_DPI,
+  RASTER_JPEG_QUALITY,
+} from '../config.ts';
 import { ClientGoneError, Errors } from '../errors.ts';
-import { pdfFilterFor, type DocumentFamily, type ResolvedConversion, type TargetFormat } from '../formats.ts';
+import {
+  archivesFiles,
+  pdfFilterFor,
+  type DocumentFamily,
+  type ResolvedConversion,
+  type TargetFormat,
+} from '../formats.ts';
+import { extractTables } from '../lib/docx-tables.ts';
 import { isPasswordProtected } from '../lib/encrypted.ts';
+import { readZipEntry } from '../lib/unzip.ts';
+import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
 import { rasterizePdf, runSoffice, type ProcessOutcome } from './soffice.service.ts';
 import { OUTPUT_DIRNAME, inputFileNameFor, PROFILE_DIRNAME } from './workspace.service.ts';
 
@@ -28,6 +48,17 @@ import { OUTPUT_DIRNAME, inputFileNameFor, PROFILE_DIRNAME } from './workspace.s
 const RASTER_DIRNAME = 'raster';
 /** pdftoppm writes `<prefix>-<page><ext>`. */
 const RASTER_PREFIX = 'slide';
+
+/**
+ * The one part of a Word package the table extractor reads.
+ *
+ * Not `document.xml.rels`, not the styles, not the headers: tables live in the
+ * body, and reading one named part is what keeps this from being a document
+ * model. The cost is that a table in a header, a footer or a footnote is not
+ * found - which is a real limitation, and the reason it is stated here rather
+ * than left to be discovered.
+ */
+const DOCUMENT_PART = 'word/document.xml';
 
 export interface ProducedFile {
   /** Suggested filename for the person receiving it. */
@@ -79,29 +110,34 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
 
   const startedAt = Date.now();
   const files =
-    target.mode === 'raster'
-      ? await runRasterPipeline({
-          inputPath,
-          outDir,
-          workspace,
-          profileDir,
-          target,
-          family: source.family,
-          deadline,
-          signal,
-        })
-      : await runDirectPipeline({
-          inputPath,
-          outDir,
-          workspace,
-          profileDir,
-          target,
-          convertTo: conversion.convertTo,
-          deadline,
-          signal,
-        });
+    target.mode === 'extract'
+      ? await runExtractPipeline({ inputPath, target, signal })
+      : target.mode === 'raster'
+        ? await runRasterPipeline({
+            inputPath,
+            outDir,
+            workspace,
+            profileDir,
+            target,
+            family: source.family,
+            deadline,
+            signal,
+          })
+        : await runDirectPipeline({
+            inputPath,
+            outDir,
+            workspace,
+            profileDir,
+            target,
+            convertTo: conversion.convertTo,
+            deadline,
+            signal,
+          });
 
-  return { files, archive: target.mode === 'raster', durationMs: Date.now() - startedAt };
+  // Only a raster target answers with an archive - ask the matrix rather than
+  // restating the rule here, because `GET /formats` tells the client the same
+  // thing and the two answers have to agree. See `archivesFiles`.
+  return { files, archive: archivesFiles(target), durationMs: Date.now() - startedAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +269,101 @@ async function runRasterPipeline(run: {
     name: `${RASTER_PREFIX}-${index + 1}${target.extension}`,
     data: page.data,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// extract: read the upload's own package, with no LibreOffice involved
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the answer out of the document's contents rather than converting it.
+ *
+ * There is no child process here and no deadline that could be enforced, and
+ * that is a deliberate trade rather than an oversight. Everything below runs
+ * in-process and, once the XML is in hand, synchronously: a scan of a bounded
+ * document cannot be interrupted halfway through, so a deadline would only
+ * ever be consulted after the work it was meant to bound. What bounds it
+ * instead is the input - MAX_DOCUMENT_XML_BYTES before the inflate, and
+ * MAX_TABLE_CELLS during the scan - and the abort signal, which is honoured at
+ * the two points where honouring it is possible.
+ *
+ * The cost of doing this in-process rather than in a child is that the scan
+ * occupies the event loop, where soffice does not. That is why the caps are
+ * where they are: a document at the limit is a fraction of a second, and a
+ * document past it is refused rather than merely slow.
+ */
+async function runExtractPipeline(run: {
+  inputPath: string;
+  target: TargetFormat;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, target, signal } = run;
+
+  if (target.id !== 'tables') {
+    // Unreachable via the matrix, which only routes `extract` targets here.
+    // Guarded because the alternative is silently running the wrong extractor.
+    throw Errors.internal(`no extractor for the ${target.id} target`);
+  }
+  if (signal?.aborted) throw new ClientGoneError();
+
+  const archive = await fsp.readFile(inputPath);
+  const part = readZipEntry(archive, DOCUMENT_PART, MAX_DOCUMENT_XML_BYTES);
+
+  if (part.kind === 'too-large') {
+    throw Errors.tooLarge(
+      `${DOCUMENT_PART} declares ${part.declaredBytes} bytes, over the ${MAX_DOCUMENT_XML_BYTES} byte ceiling`,
+    );
+  }
+  if (part.kind === 'missing') {
+    // Not a ZIP at all, or a ZIP without a document part. Either way the
+    // upload is not the .docx its extension claims - which is E_CONVERT_FAILED
+    // and deliberately not E_NO_TABLES, because there is nothing to say about
+    // tables until we can read the document they would be in.
+    throw Errors.convertFailed(`${inputPath} has no readable ${DOCUMENT_PART}`);
+  }
+
+  const extraction = extractTables(part.data.toString('utf8'), MAX_TABLE_CELLS, MAX_TABLES);
+  if (extraction.kind === 'too-large') {
+    throw Errors.tooLarge(
+      extraction.reason === 'cells'
+        ? `document holds more than ${MAX_TABLE_CELLS} table cells`
+        : `document holds more than ${MAX_TABLES} tables`,
+    );
+  }
+  if (extraction.tables.length === 0) {
+    // Not a failure of ours and not a damaged document: it simply has no
+    // tables, and saying so is the whole of the useful answer.
+    throw Errors.noTables();
+  }
+
+  const takenNames = new Set<string>();
+  const sheets: XlsxSheet[] = extraction.tables.map((rows, index) => ({
+    name: sheetNameFor(index + 1, takenNames),
+    rows,
+  }));
+
+  let workbook: Buffer;
+  try {
+    workbook = buildXlsx(sheets);
+  } catch (error) {
+    if (error instanceof WorkbookLimitError) {
+      // Excel refuses the whole workbook over a limit, so an oversized cell or
+      // a worksheet too tall or wide to represent would otherwise produce a
+      // file the user cannot open - or, worse, one silently missing the end of
+      // a table. Refusing says so instead.
+      throw Errors.tooLarge(error.message);
+    }
+    throw error;
+  }
+
+  // The last point at which an abort can still change the outcome. Everything
+  // between the read and here was synchronous, so a client that left during it
+  // could not be noticed until now - and if it did leave, the workbook is
+  // still worth having built: it costs nothing to discard, and the alternative
+  // is a check that cannot be placed anywhere more useful.
+  if (signal?.aborted) throw new ClientGoneError();
+
+  return [{ name: `converted${target.extension}`, data: workbook }];
 }
 
 // ---------------------------------------------------------------------------
