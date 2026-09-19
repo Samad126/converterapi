@@ -10,8 +10,8 @@
  * The document text deliberately includes the metric-compatible font names, so
  * a warm-up log line is also a weak signal that font substitution is working.
  */
-import { crc32, deflateSync } from 'node:zlib';
-
+import { assemblePng } from './png.ts';
+import { writePsd } from './psd.ts';
 import { zipStored, type ZipEntry } from './zip.ts';
 
 const PROBE_TEXT = 'Converter warm-up';
@@ -179,7 +179,15 @@ export function impressProbe(): Buffer {
 // A minimal PNG, for tests of the raster pipeline's output checks
 // ---------------------------------------------------------------------------
 
-/** A solid-colour PNG of the given size, built from scratch (no image library). */
+/**
+ * A solid-colour PNG of the given size, built from scratch (no image library).
+ *
+ * Truecolour without alpha, unlike the layer extractor's output, because this
+ * exists to be a `.png` for the raster and Draw pipelines to import - and it is
+ * also the fixture a test uploads to prove the service accepts a PNG at all.
+ * The chunk framing is shared with `png.ts` so that the two writers cannot
+ * disagree about how a PNG is put together.
+ */
 export function buildSolidPng(width: number, height: number, rgb: [number, number, number]): Buffer {
   // Raw scanlines: one filter byte (0 = none) followed by RGB triples.
   const raw = Buffer.alloc((width * 3 + 1) * height);
@@ -193,28 +201,79 @@ export function buildSolidPng(width: number, height: number, rgb: [number, numbe
     }
   }
 
-  const chunk = (type: string, data: Buffer): Buffer => {
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length, 0);
-    const typed = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(typed) >>> 0, 0);
-    return Buffer.concat([length, typed, crc]);
+  return assemblePng(width, height, 8, 2, raw);
+}
+
+// ---------------------------------------------------------------------------
+// Layers: a minimal .psd
+// ---------------------------------------------------------------------------
+
+/** A solid RGBA block, as ag-psd reads and writes layer pixels. */
+function solidPixels(width: number, height: number, rgba: [number, number, number, number]) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i += 1) {
+    data[i * 4] = rgba[0];
+    data[i * 4 + 1] = rgba[1];
+    data[i * 4 + 2] = rgba[2];
+    data[i * 4 + 3] = rgba[3];
+  }
+  return { width, height, data };
+}
+
+/**
+ * How many of `psdProbe`'s layers have pixels that become files.
+ *
+ * Exported rather than counted at the call site, because the number is only
+ * meaningful as a fact about the probe: the boot check asserts the extraction
+ * produces exactly this many images, and writing the figure out in two places
+ * is how a probe and the check that guards it drift apart.
+ */
+export const PSD_PROBE_DRAWABLE_LAYERS = 3;
+
+/**
+ * A Photoshop document whose layers exercise the counting rule.
+ *
+ * Written with ag-psd's own writer, which is the only way to get a real PSD
+ * into a repository that does not want binary fixtures - and it is a genuine
+ * one: the reader has to walk a real layer section, with real records, real
+ * channel lengths and real group dividers, so the bounds pass in `psd-layers.ts`
+ * is exercised for real rather than against a hand-made approximation.
+ *
+ * Three drawable layers, chosen so that the number of files depends on every
+ * rule at once - the way the ODP probe has two slides for the same reason:
+ *
+ *   Buttons/Normal   in a group - the group is a directory, not a file
+ *   Buttons/Hover    in a group, and hidden - still a file
+ *   Background       at the top level
+ *   Levels           no pixels - NOT a file
+ *
+ * So the answer is three, and it is three only if a group is not counted, a
+ * hidden layer is, and an empty one is not. Get any of those wrong and the
+ * extraction still succeeds, with the wrong number of files, and nothing else
+ * in the system would notice: every file is a valid PNG in a valid archive.
+ */
+export function psdProbe(): Buffer {
+  const document = {
+    width: 16,
+    height: 16,
+    children: [
+      {
+        name: 'Buttons',
+        children: [
+          { name: 'Normal', left: 0, top: 0, right: 8, bottom: 8, imageData: solidPixels(8, 8, [200, 40, 40, 255]) },
+          { name: 'Hover', left: 0, top: 0, right: 8, bottom: 8, imageData: solidPixels(8, 8, [40, 120, 220, 255]), hidden: true },
+        ],
+      },
+      { name: 'Background', left: 0, top: 0, right: 16, bottom: 16, imageData: solidPixels(16, 16, [16, 16, 16, 255]) },
+      // No pixel data, like an adjustment or text layer. Nothing to write, and
+      // it must not be counted as a file.
+      { name: 'Levels', left: 0, top: 0, right: 0, bottom: 0, imageData: { width: 0, height: 0, data: new Uint8ClampedArray(0) } },
+    ],
   };
 
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // colour type: truecolour
-  // bytes 10-12 stay zero: deflate, adaptive filtering, no interlace.
-
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
+  // The cast is ag-psd's: its `Psd` type describes a document it has read, with
+  // every optional field present, while the writer accepts the subset it needs.
+  return Buffer.from(writePsd(document as never, { generateThumbnail: false }));
 }
 
 /** Re-exported so callers do not need both zip helpers. */

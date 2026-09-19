@@ -28,6 +28,7 @@ contract** with a client that is already shipped and cannot be changed.
 - [How conversion works](#how-conversion-works)
 - [Image targets, and why they need poppler](#image-targets-and-why-they-need-poppler)
 - [Extracting tables](#extracting-tables)
+- [Extracting PSD layers](#extracting-psd-layers)
 - [Concurrency model](#concurrency-model)
 - [Cleanup and temp files](#cleanup-and-temp-files)
 - [Operational limits](#operational-limits)
@@ -60,6 +61,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.html` `.htm` | PDF, DOCX, ODT |
 | `.rtf` | DOCX, PDF, ODT |
 | `.png` `.jpg` `.jpeg` | PDF |
+| `.psd` | PNG (one image per layer) |
 
 Every filter name in that table was verified by running the real conversion
 against LibreOffice 24.2. That is not ceremony: **a wrong filter name is not an
@@ -81,11 +83,28 @@ A request for a target that exists but is not reachable from your source is a
 `415` whose message lists what that source *can* become. A target that does not
 exist at all is a `404`.
 
-### `XLSX (tables)`: the one target LibreOffice does not produce
+### The two targets LibreOffice does not produce
 
-Every other target in that table is a LibreOffice filter. This one is not: the
-document is opened as the ZIP of XML parts it already is, its tables are read
-out, and the answer is a workbook with one worksheet per table. See
+Every other target in that table is a LibreOffice filter. Two are not, and they
+are called `extract` targets in `src/formats.ts`: rather than handing the
+document to a converter, the service reads it itself and builds the answer out
+of what is inside. That is the only reason a `.docx` can reach a workbook and a
+`.psd` can reach an image at all — LibreOffice has no filter that would get
+either there.
+
+| Target | From | Answer |
+|---|---|---|
+| `tables` | `.docx` `.docm` | One `.xlsx`, a worksheet per table |
+| `layers` | `.psd` | One PNG per layer, in a ZIP, plus `manifest.json` |
+
+The two differ in what they answer WITH, and that difference is what each
+target's `multiple` field records: several tables become several *sheets* of one
+workbook, while layers become several *files* in one archive.
+
+#### `XLSX (tables)`
+
+The document is opened as the ZIP of XML parts it already is, its tables are
+read out, and the answer is a workbook with one worksheet per table. See
 [Extracting tables](#extracting-tables).
 
 It is a target of its own rather than a `.docx` route into `xlsx`, and that is
@@ -99,6 +118,26 @@ answer to the name of the faithful one, so the distinction lives in the address.
 `.doc` deliberately does **not** get this target. It is the same family and the
 same audience as `.docx`, but it is a binary container rather than a ZIP, so
 there is nothing for the extractor to open.
+
+#### `PNG (layers)`
+
+A Photoshop document is not a document LibreOffice opens, so there is no filter
+to write and no document family to key one on — which is why `.psd` is the one
+source in the matrix with no `family`, and the only target it offers is this
+one. Every layer with pixels becomes a PNG, at the path its group gives it, and
+a `manifest.json` describes the lot. See
+[Extracting PSD layers](#extracting-psd-layers).
+
+It shares the `.png` extension with the `png` target on purpose, exactly as
+`tables` shares `.xlsx`: both write PNG images, and it is the response's shape
+rather than its content that differs. The labels are what tell them apart in a
+message — `PNG` renders a presentation one image per slide, `PNG (layers)`
+writes one image per layer of a PSD — and `multiple` is `true` for both, so a
+client never has to guess whether it is unwrapping a ZIP.
+
+A PSD gets no PDF target. LibreOffice's PSD import would be a different feature
+with a different name, and advertising it would promise a fidelity nothing in
+this pipeline could deliver.
 
 ---
 
@@ -261,6 +300,7 @@ up.
 | `504` | `E_TIMEOUT` | This document took too long to convert. |
 | `422` | `E_ENCRYPTED` | This document is password protected. |
 | `422` | `E_NO_TABLES` | This document does not contain any tables. |
+| `422` | `E_NO_LAYERS` | This PSD file does not contain any layers with images that can be extracted. |
 | `415` | `E_UNSUPPORTED` | This file type cannot be converted. Supported types: .docx, .docm, .doc, … |
 | `415` | `E_UNSUPPORTED_TARGET` | A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables). |
 | `404` | `E_UNKNOWN_TARGET` | That is not a format this converter can produce. Available: PDF, ODT, DOCX, … |
@@ -451,13 +491,14 @@ soffice --headless --norestore --invisible --nolockcheck --nodefault --nofirstst
   --convert-to pdf:writer_pdf_Export --outdir <tmpdir> <input>
 ```
 
-That is the whole of the conversion for a `direct` target. Two targets do
-something else, and both are described in their own sections: `png`/`jpg` render
-to PDF first and then rasterise it, because LibreOffice's command-line image
-export only ever writes the first page ([Image
-targets](#image-targets-and-why-they-need-poppler)); and `tables` does not call
-LibreOffice at all, reading the document's own package instead
-([Extracting tables](#extracting-tables)).
+That is the whole of the conversion for a `direct` target. The others do
+something else, and each is described in its own section: `png`/`jpg` render to
+PDF first and then rasterise it, because LibreOffice's command-line image export
+only ever writes the first page ([Image
+targets](#image-targets-and-why-they-need-poppler)); and the two `extract`
+targets do not call LibreOffice at all, reading the document themselves instead
+([Extracting tables](#extracting-tables),
+[Extracting PSD layers](#extracting-psd-layers)).
 
 The `--convert-to` argument is `<extension>:<filter>`, and both halves come from
 the matrix in [`src/formats.ts`](src/formats.ts). Filters are named after the
@@ -681,6 +722,127 @@ read at all.
 
 ---
 
+## Extracting PSD layers
+
+`POST /convert/layers` on a `.psd` returns a ZIP holding **one PNG per layer**,
+with the document's group structure preserved as directories, plus a
+`manifest.json` describing every layer.
+
+```
+design.zip
+├── Background.png
+├── Buttons/
+│   ├── Normal.png
+│   └── Hover.png
+└── manifest.json
+```
+
+Each image is the layer's **own bounding box**, not the whole canvas — smaller,
+and it is what the layer actually draws. That is why the manifest carries every
+layer's `left`/`top`/`right`/`bottom`: those offsets are the only way to put the
+document back together, so a client that wants a single flattened image has
+everything it needs and one that wants the pieces is not paying for transparent
+padding around each one.
+
+| File | What it is |
+|---|---|
+| [`src/lib/psd-layers.ts`](src/lib/psd-layers.ts) | Bounds pass, layer walk, manifest |
+| [`src/lib/png.ts`](src/lib/png.ts) | The PNG writer |
+| [`src/lib/psd.ts`](src/lib/psd.ts) | The one place ag-psd is configured |
+
+### No `canvas`, and no native dependency
+
+The obvious way to read a PSD in Node is `ag-psd` plus `node-canvas`, and the
+usual write-up says `canvas` is a hard requirement. It is not. ag-psd calls into
+the canvas factory in exactly one place on the read path — `createImageData` for
+8-bit RGBA pixels — and that is a plain object with a `Uint8ClampedArray` in it.
+Registering a `createCanvas` that throws, and a `createImageData` that is three
+lines of arithmetic, is a complete substitute.
+
+This matters more than it sounds. `node-canvas` is a native module: it needs
+cairo and pango in the runtime image and a compiler in the build image, and it
+has to be rebuilt for every Node major. Reading with `useImageData` also avoids
+a correctness trap — a canvas stores colour *premultiplied* by alpha, so
+round-tripping pixel data through one quietly corrupts every semi-transparent
+pixel, which ag-psd's own documentation gives as the reason to prefer the
+`imageData` path.
+
+So `ag-psd` is a pure-JavaScript dependency (its only dependencies are
+`base64-js` and `pako`) and **the Dockerfile is unchanged** by this feature. The
+PNG writer is hand-rolled for the same reason [`src/lib/zip.ts`](src/lib/zip.ts)
+and [`src/lib/xlsx.ts`](src/lib/xlsx.ts) are: the case is narrow — 8-bit or
+16-bit RGBA, non-interlaced, no ancillary chunks — and the failure mode of a
+too-clever image encoder is a file that opens and is subtly wrong.
+
+### The bounds pass, and why it comes first
+
+This is the part worth reading before changing anything.
+
+A PSD declares the byte length of every layer channel **in its own header**, and
+a reader allocates what is declared. ag-psd's byte reader, finding a declared
+length that runs past the end of the file, warns and then allocates
+`new Uint8Array(length)` anyway — up to a 100MB ceiling — and holds that buffer
+per channel until the layer is decoded, which happens only after *every* layer
+record has been read. Layer count and channel length are both read straight from
+the file with no comparison against the file's actual size.
+
+A few hundred kilobytes of carefully arranged PSD can therefore ask for
+terabytes before any pixel data is looked at. On a container with
+`mem_limit: 1g` that is an OOM kill of the whole service, and an OOM kill
+reaches the user as a network error rather than as a sentence about their file.
+
+So `readDeclaredSizes` walks the header and the layer records reading **nothing
+but lengths**, allocating nothing, and refuses the moment the declared total
+passes `MAX_PSD_DECODE_BYTES`. It works on the same principle as the check in
+[`src/lib/unzip.ts`](src/lib/unzip.ts): stop a decompression bomb before the
+inflate, using the sizes the container declares about itself.
+
+The walk is also checked against the file. After the last record comes every
+channel's pixel data, and that occupies exactly the bytes the channel lengths
+declared — so the records plus the declared total have to land on the end of the
+layer section, up to the few bytes of alignment a writer applies. Inflating a
+channel length to force a large allocation cannot survive that, because the
+bytes it claims are not in the file. Measured: a **502-byte** document declaring
+a 90MB channel is refused in under a millisecond, having allocated nothing.
+
+Anything that does not walk cleanly is refused as unreadable rather than guessed
+at, because guessing is how a bounds check stops bounding anything.
+
+### What it does not do
+
+- **No layer styles, masks, opacity or blend modes are applied.** The image is
+  the layer's pixels as the document stores them, not as Photoshop composites
+  them. A layer using a mask or a non-normal blend mode will not look like what
+  you see on screen, and the manifest records `hidden` and `opacity` so a client
+  can tell that the situation arose at all.
+- **Hidden layers are exported**, and flagged `hidden: true`. Dropping them
+  would make the archive's layer count disagree with the document's with nothing
+  anywhere to explain why, and hidden layers are usually alternates a designer
+  wants back.
+- **No 32-bit-per-channel (HDR) layers.** PNG has no floating-point form and
+  there is no honest 8-bit answer to what a linear HDR pixel is in sRGB, so
+  those layers are skipped and recorded rather than squeezed. 16-bit *is*
+  written, at 16 bits, because PNG carries it natively.
+- **No group images.** A group has no pixels of its own; its name becomes a
+  directory.
+- **No `.psb`.** A large-document file renamed to `.psd` is refused by name
+  rather than mis-parsed.
+
+### The failure cases
+
+A PSD that opens but holds nothing drawable — an adjustment-only document, or
+one whose layers are all 32-bit — is a **`422 E_NO_LAYERS`**, the twin of
+`E_NO_TABLES` and for the same reason: the file is exactly what it claims to be,
+and it is not damaged. A file that is not a PSD at all is a
+`500 E_CONVERT_FAILED`, because there is nothing to say about a document's
+layers until the document can be read.
+
+Anything past a limit is a `413 E_TOO_LARGE`: more than `MAX_PSD_LAYERS`
+layers, more than `MAX_PSD_DECODE_BYTES` of declared pixel data, or more than
+`MAX_LAYER_OUTPUT_BYTES` of finished PNG.
+
+---
+
 ## Concurrency model
 
 `soffice` converts one document per process and is CPU- and memory-heavy, so the
@@ -754,6 +916,9 @@ a workspace touched between the check and the delete is left alone.
 | Table cells per document | 200,000 | `MAX_TABLE_CELLS` (the workbook is built in memory) |
 | Tables per document | 1,000 | `MAX_TABLES` (a frame is held per table during the scan) |
 | Inflated `word/document.xml` | 32 MB | `MAX_DOCUMENT_XML_BYTES` (the decompression-bomb bound) |
+| Layers per PSD | 500 | `MAX_PSD_LAYERS` (a record is held per layer) |
+| Declared PSD pixel data | 192 MB | `MAX_PSD_DECODE_BYTES` (the decompression-bomb bound) |
+| PSD image output | 48 MB | `MAX_LAYER_OUTPUT_BYTES` (the archive is built in memory) |
 | Image resolution | 150 DPI | `RASTER_DPI` |
 | JPEG quality | 90 | `RASTER_JPEG_QUALITY` |
 | Stale sweep | every 5 min | `SWEEP_INTERVAL_MS` |
@@ -796,6 +961,9 @@ All configuration is environment variables read in
 | `MAX_TABLE_CELLS` | `200000` | For the `tables` target; refused with `E_TOO_LARGE` |
 | `MAX_TABLES` | `1000` | For the `tables` target; refused with `E_TOO_LARGE` |
 | `MAX_DOCUMENT_XML_BYTES` | `33554432` | Caps the inflated `word/document.xml` |
+| `MAX_PSD_LAYERS` | `500` | For the `layers` target; refused with `E_TOO_LARGE` |
+| `MAX_PSD_DECODE_BYTES` | `201326592` | For the `layers` target; the pixel data a PSD may declare |
+| `MAX_LAYER_OUTPUT_BYTES` | `50331648` | For the `layers` target; refused with `E_TOO_LARGE` |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |
 | `CONVERT_TIMEOUT_MS` | `90000` | Must stay below the client's 120s |

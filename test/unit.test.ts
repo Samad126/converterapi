@@ -34,6 +34,7 @@ const {
   inputFileNameFor,
 } = await import('../src/services/workspace.service.ts');
 const { zipStored, safeEntryName } = await import('../src/lib/zip.ts');
+const { EXTRACT_TARGET_IDS } = await import('../src/services/conversion.service.ts');
 const { decodeUploadName, downloadNameFor, contentDispositionFor } = await import(
   '../src/lib/download-name.ts'
 );
@@ -62,7 +63,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 16);
+    assert.equal(ALLOWED_EXTENSIONS.length, 17);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
@@ -161,6 +162,22 @@ describe('conversion matrix', () => {
     }
     assert.equal(isTargetId('banana'), false);
     assert.equal(isTargetId('constructor'), false);
+  });
+
+  it('has an extractor wired up for every extract target', () => {
+    // `EXTRACTORS` in the service is a Partial record, so the compiler cannot
+    // see that it covers the matrix - and it deliberately cannot, because the
+    // runtime guard that turns a missing entry into an internal error is the
+    // thing that makes an unknown target safe. This is what stops that guard
+    // from ever being the thing a user meets: a new extract target with no
+    // engine fails here instead, at build time.
+    for (const id of TARGET_IDS) {
+      if (TARGETS[id].mode !== 'extract') continue;
+      assert.ok(
+        EXTRACT_TARGET_IDS.includes(id),
+        `"${id}" is an extract target with no engine in conversion.service.ts`,
+      );
+    }
   });
 
   it('routes only presentations to the raster pipeline', () => {

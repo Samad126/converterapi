@@ -26,6 +26,7 @@ export type ErrorCode =
   | 'E_UNKNOWN_TARGET'
   | 'E_TOO_LARGE'
   | 'E_NO_TABLES'
+  | 'E_NO_LAYERS'
   | 'E_BUSY'
   | 'E_BAD_REQUEST'
   | 'E_RATE_LIMITED'
@@ -150,6 +151,23 @@ export const Errors = {
    */
   noTables: () =>
     new AppError('E_NO_TABLES', 422, 'This document does not contain any tables.'),
+
+  /**
+   * The PSD opened fine and holds nothing we can draw.
+   *
+   * The same distinction as E_NO_TABLES, for the same reason: a document of
+   * nothing but adjustment and text layers is a perfectly ordinary document,
+   * and telling its owner it "may be damaged" because none of its layers
+   * rasterise would be the wrong explanation of something that did not go
+   * wrong. The message names both ways a layer can be unusable, because the
+   * person reading it can act on either.
+   */
+  noLayers: () =>
+    new AppError(
+      'E_NO_LAYERS',
+      422,
+      'This PSD file does not contain any layers with images that can be extracted.',
+    ),
 
   /** No free conversion slot. */
   busy: () =>

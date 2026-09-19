@@ -40,7 +40,15 @@ export function createFormatsRouter(): Router {
       sources: Object.values(SOURCES).map((source) => ({
         extension: source.extension,
         mediaType: source.mediaType,
-        family: source.family,
+        /**
+         * `null` rather than omitted, for a source LibreOffice does not open -
+         * `.psd` today. A client reading this list cannot tell an absent key
+         * from a version of the service that never had the field, and the
+         * distinction that matters here is "this source is handled by our own
+         * code rather than by the conversion engine", which is worth saying
+         * out loud rather than leaving to be inferred from a missing key.
+         */
+        family: source.family ?? null,
         targets: source.targets,
       })),
     };

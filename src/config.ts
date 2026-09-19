@@ -166,6 +166,57 @@ export const MAX_TABLES = intFromEnv('MAX_TABLES', 1_000, 1);
  */
 export const MAX_DOCUMENT_XML_BYTES = intFromEnv('MAX_DOCUMENT_XML_BYTES', 32 * MB, 1024);
 
+/**
+ * How many layers a PSD may hold before we refuse to extract its images.
+ *
+ * The direct analogue of MAX_TABLES, and necessary for the same reason: the
+ * extractor holds a record for every layer - exported or skipped - and the
+ * manifest is built from all of them, so a document of nothing but adjustment
+ * layers costs memory per layer while producing no images at all. It is also
+ * the first bound the reader applies, before it has decoded anything, because
+ * the layer count is a field in the file's own header.
+ *
+ * Kept far below the 65535 entries our ZIP writer can address: past that the
+ * archive itself would be corrupt, which is a worse failure than a refusal.
+ */
+export const MAX_PSD_LAYERS = intFromEnv('MAX_PSD_LAYERS', 500, 1);
+
+/**
+ * Ceiling on the pixel data a PSD's layers may declare, in bytes.
+ *
+ * This is the decompression-bomb bound, and unlike MAX_DOCUMENT_XML_BYTES it
+ * cannot be derived from the upload size at all. The same reasoning as
+ * MAX_TABLE_CELLS applies and is sharper here: a PSD declares the byte length
+ * of every layer channel in its own header, a reader allocates what is
+ * declared, and the declared number has nothing to do with how big the file is.
+ * Measured: a 502-byte document declaring one 90MB channel is a file any of us
+ * could write this afternoon.
+ *
+ * The reader refuses on the declared total before decoding anything, so this is
+ * the figure that decides how much memory one conversion can ever ask for. 192MB
+ * is chosen against the compose file's `mem_limit: 1g` together with
+ * MAX_CONCURRENT_CONVERSIONS: two of these at once is under 400MB, which leaves
+ * room for the two soffice processes the same limit has to cover.
+ */
+export const MAX_PSD_DECODE_BYTES = intFromEnv('MAX_PSD_DECODE_BYTES', 192 * MB, 1024);
+
+/**
+ * Ceiling on the PNG output one PSD may produce, in bytes.
+ *
+ * The second half of the same memory bound, and separate from the first because
+ * they measure different things: this one is what we hand back, and the whole
+ * archive is assembled in memory by the controller before any of it is sent -
+ * see MAX_RASTER_PAGES, which exists for exactly this reason.
+ *
+ * The peak is not the archive alone. A layer is decoded (four bytes a pixel),
+ * encoded into a fresh scanline buffer and then deflated, and the finished ZIP
+ * is built by concatenating the parts - so the true high-water mark is several
+ * times this number. 48MB keeps that in the same envelope as a 100-slide deck
+ * at the raster target's 150 DPI, which is the figure the service already
+ * accepted as the most a phone should be asked to download.
+ */
+export const MAX_LAYER_OUTPUT_BYTES = intFromEnv('MAX_LAYER_OUTPUT_BYTES', 48 * MB, 1024);
+
 /** Per-IP request budget. Unauthenticated endpoint on the public internet. */
 export const RATE_LIMIT_WINDOW_MS = intFromEnv('RATE_LIMIT_WINDOW_MS', 60_000, 1_000);
 export const RATE_LIMIT_MAX = intFromEnv('RATE_LIMIT_MAX', 30, 1);

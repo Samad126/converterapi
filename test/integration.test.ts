@@ -30,7 +30,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const { buildMinimalDocx, buildMinimalOdp, buildSolidPng, tablesProbe } = await import(
+const { buildMinimalDocx, buildMinimalOdp, buildSolidPng, psdProbe, tablesProbe } = await import(
   '../src/lib/probe-documents.ts'
 );
 const { readZipEntry } = await import('../src/lib/unzip.ts');
@@ -505,6 +505,101 @@ describe('POST /convert/tables', () => {
   });
 });
 
+describe('POST /convert/layers', () => {
+  /** Every entry name in the archive the server sent. */
+  function entryNames(body: Buffer): string[] {
+    const names: string[] = [];
+    let at = 0;
+    while (at < body.length - 4) {
+      const next = body.indexOf(Buffer.from('PK\u0001\u0002', 'latin1'), at);
+      if (next < 0) break;
+      const nameLength = body.readUInt16LE(next + 28);
+      names.push(body.toString('utf8', next + 46, next + 46 + nameLength));
+      at = next + 46 + nameLength;
+    }
+    return names;
+  }
+
+  function entry(body: Buffer, name: string): Buffer {
+    const part = readZipEntry(body, name, 8 * 1024 * 1024);
+    assert.equal(part.kind, 'found', `${name} is missing from the archive`);
+    return part.kind === 'found' ? part.data : Buffer.alloc(0);
+  }
+
+  it('returns one PNG per layer, in its group, with a manifest', async () => {
+    const response = await upload(server.baseUrl, 'design.psd', psdProbe(), { target: 'layers' });
+
+    assert.equal(response.status, 200);
+    // Always an archive, whatever the document held - the same promise the
+    // image targets make, and for the same reason.
+    assert.equal(response.contentType, 'application/zip');
+    assert.match(response.contentDisposition ?? '', /\.zip"|\?UTF-8''.*\.zip/);
+    assert.ok(response.body.subarray(0, 2).equals(Buffer.from('PK', 'latin1')), 'not a ZIP');
+
+    // The probe is two drawable layers, one of them hidden and one inside a
+    // group, plus an empty layer that must not become a file. Asserting the
+    // exact set is the whole point: the count is the thing that goes wrong
+    // silently, and every file here would still be a valid PNG if it did.
+    const names = entryNames(response.body);
+    assert.deepEqual(names.sort(), [
+      'Background.png',
+      'Buttons/Hover.png',
+      'Buttons/Normal.png',
+      'manifest.json',
+    ]);
+
+    // Each image really is a PNG, not merely a file with the right name.
+    for (const name of names.filter((entry) => entry.endsWith('.png'))) {
+      assert.ok(
+        entry(response.body, name)
+          .subarray(0, 8)
+          .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+        `${name} is not a PNG`,
+      );
+    }
+
+    const manifest = JSON.parse(entry(response.body, 'manifest.json').toString('utf8')) as {
+      canvas: { width: number; height: number };
+      exported: number;
+      skipped: number;
+      layers: Array<{ name: string; file: string | null; hidden: boolean }>;
+    };
+    assert.deepEqual(manifest.canvas, { width: 16, height: 16 });
+    assert.equal(manifest.exported, 3);
+    assert.equal(manifest.skipped, 1, 'the empty layer must be recorded, not dropped');
+    // The manifest describes the skipped layer by name and gives it no file,
+    // so a client can say what was in the document rather than guessing.
+    assert.equal(manifest.layers.find((record) => record.name === 'Levels')?.file, null);
+    assert.equal(manifest.layers.find((record) => record.name === 'Hover')?.hidden, true);
+  });
+
+  it('refuses a document that is not a PSD', async () => {
+    // The extension is the only thing trusted, so a renamed file is a routine
+    // input rather than an exotic one - and it must read as "we could not read
+    // this" rather than as a server fault.
+    const response = await upload(server.baseUrl, 'fake.psd', Buffer.from('not a photoshop file'), {
+      target: 'layers',
+    });
+    expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+  });
+
+  it('offers layers only from a PSD, and a PSD only layers', async () => {
+    const fromDocx = await upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'layers' });
+    const error = expectJsonEnvelope(fromDocx, 415, 'E_UNSUPPORTED_TARGET');
+    assert.equal(/PNG \(layers\)/.test(error.message), false, 'a .docx cannot become layers');
+
+    const fromPsd = await upload(server.baseUrl, 'design.psd', psdProbe(), { target: 'pdf' });
+    const psdError = expectJsonEnvelope(fromPsd, 415, 'E_UNSUPPORTED_TARGET');
+    assert.match(psdError.message, /A \.psd file can be converted to: PNG \(layers\)\./);
+  });
+
+  it('deletes the workspace after an extraction', async () => {
+    const before_ = await listWorkspaces();
+    await upload(server.baseUrl, 'design.psd', psdProbe(), { target: 'layers' });
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
 describe('GET /formats', () => {
   it('describes the matrix the server actually implements', async () => {
     const response = await fetch(`${server.baseUrl}/formats`);
@@ -519,9 +614,12 @@ describe('GET /formats', () => {
     assert.ok(targetIds.includes('pdf'));
     assert.ok(targetIds.includes('png'));
 
-    // Only the raster targets answer with an archive.
+    // The targets whose answer is an archive. The raster ones are one image per
+    // page; `layers` is one image per layer of a PSD. Both are always archives,
+    // so this is a fact about the target and not about the document.
+    const MULTIPLE = ['png', 'jpg', 'layers'];
     for (const target of body.targets) {
-      assert.equal(target.multiple, target.id === 'png' || target.id === 'jpg', target.id);
+      assert.equal(target.multiple, MULTIPLE.includes(target.id), target.id);
     }
 
     const docx = body.sources.find((source) => source.extension === '.docx');

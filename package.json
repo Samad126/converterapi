@@ -15,6 +15,7 @@
     "test": "node --test --experimental-strip-types \"test/**/*.test.ts\""
   },
   "dependencies": {
+    "ag-psd": "^31.0.2",
     "express": "^5.1.0",
     "multer": "^2.0.2",
     "yaml": "^2.9.1"

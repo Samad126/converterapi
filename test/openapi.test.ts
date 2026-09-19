@@ -118,6 +118,7 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.unknownTarget(TARGET_IDS),
     Errors.tooLarge(),
     Errors.noTables(),
+    Errors.noLayers(),
     Errors.busy(),
     Errors.badRequest('test detail'),
     Errors.rateLimited(),

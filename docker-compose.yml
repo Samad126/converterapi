@@ -44,6 +44,13 @@ services:
     # the host with it. MAX_CONCURRENT_CONVERSIONS should be set so that
     # concurrent x per-conversion memory stays under mem_limit - otherwise the
     # kernel OOM-kills soffice and every request becomes a 500.
+    #
+    # The extract targets are in that arithmetic too, and their per-conversion
+    # memory is not a function of the upload size. A PSD's layers declare how
+    # much pixel data they hold, so `layers` is bounded by MAX_PSD_DECODE_BYTES
+    # plus MAX_LAYER_OUTPUT_BYTES rather than by MAX_UPLOAD_BYTES - see the
+    # bounds pass in src/lib/psd-layers.ts. At the shipped defaults that is
+    # roughly 240MB per concurrent request.
     mem_limit: 1g
     memswap_limit: 1g
     cpus: 2

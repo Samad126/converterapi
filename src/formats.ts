@@ -51,7 +51,8 @@ export type TargetId =
   | 'pptx'
   | 'png'
   | 'jpg'
-  | 'tables';
+  | 'tables'
+  | 'layers';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -70,7 +71,8 @@ export type AllowedExtension =
   | '.rtf'
   | '.png'
   | '.jpg'
-  | '.jpeg';
+  | '.jpeg'
+  | '.psd';
 
 export interface TargetFormat {
   id: TargetId;
@@ -88,33 +90,58 @@ export interface TargetFormat {
    *     rasterised into ONE IMAGE PER PAGE, because LibreOffice's command-line
    *     image export only ever writes the first page of a presentation. See
    *     `rasterizePdf` in services/conversion.service.ts.
-   *   - `extract` - LibreOffice is not involved at all. A part is read out of
-   *     the upload's own package and turned into the target directly, which is
-   *     what makes a Word document's tables available as a workbook. The
+   *   - `extract` - LibreOffice is not involved at all. Either a part is read
+   *     out of the upload's own package - which is what makes a Word
+   *     document's tables available as a workbook - or the upload is read
+   *     whole, which is what makes a PSD's layers available as images. The
    *     engine is named by `extractFrom` rather than by a filter, and it is
    *     this mode that makes the service more than a LibreOffice front end.
    *
-   * A raster target always answers with a ZIP, even for a single-page source,
-   * so that the response type does not depend on how many slides the upload
-   * happened to have. An `extract` target answers with ONE file - a workbook -
-   * so it does not.
+   * `mode` says how the bytes are produced and nothing else. What the response
+   * LOOKS like is `multiple`, below, because the two genuinely vary apart:
+   * `tables` and `layers` are both extracts and one answers with a single
+   * workbook while the other answers with an archive.
    */
   mode: 'direct' | 'raster' | 'extract';
+  /**
+   * Does this target answer with a ZIP of several files rather than one file?
+   *
+   * Declared rather than derived, because it is not derivable: a raster target
+   * is always `true` (one image per page, and it archives even for a
+   * single-page source so that the response type does not depend on how many
+   * slides the upload happened to have), a direct target is always `false`, and
+   * the two extract targets differ from each other in exactly this respect.
+   * `validateMatrix` pins the two fixed cases so a target cannot contradict
+   * itself here.
+   *
+   * What this must NOT be confused with is "did the conversion happen to
+   * produce more than one file", which is the tempting derivation and the wrong
+   * one: a one-layer PSD has to answer with a ZIP just as a thirty-slide deck
+   * does, or the content type becomes a function of the document.
+   */
+  multiple: boolean;
   /** `direct`: the `--convert-to` argument, for each family that can produce it. */
   filters: Partial<Record<DocumentFamily, string>>;
   /**
    * For `extract`: the sources the engine can read, named explicitly.
    *
    * Keyed by EXTENSION and not by family, because the property an extract
-   * depends on is not the document family - it is that the upload is a ZIP of
-   * XML parts. `.docx` and `.docm` are both `writer`, and so is `.doc`, which
-   * is a binary container no ZIP reader can open. The family cannot express
-   * that distinction and the extension can, which is also why this is a second
-   * list rather than a reuse of `filters`: the two are keyed on different
-   * things because they mean different things.
+   * depends on is never the document family - it is something about the bytes
+   * that the family cannot express. For `tables` it is "a ZIP of XML parts":
+   * `.docx` and `.docm` are both `writer`, and so is `.doc`, which is a binary
+   * container no ZIP reader can open. For `layers` it is "a Photoshop document",
+   * which belongs to no family at all. A second list rather than a reuse of
+   * `filters`, because the two are keyed on different things and mean different
+   * things.
    *
    * `validateMatrix` checks it in both directions, so this cannot drift out of
    * agreement with the sources that advertise the target.
+   *
+   * Two targets can name the same extension for their output - `xlsx` and
+   * `tables` both write `.xlsx`, `png` and `layers` both write `.png` - because
+   * in each pair one is an extract of the same FORMAT by different means. It is
+   * a target's `multiple` that says whether the response is that file or an
+   * archive of them.
    */
   extractFrom?: readonly AllowedExtension[];
 }
@@ -134,6 +161,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/pdf',
     label: 'PDF',
     mode: 'direct',
+    multiple: false,
     filters: {
       writer: 'writer_pdf_Export',
       calc: 'calc_pdf_Export',
@@ -147,6 +175,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/vnd.oasis.opendocument.text',
     label: 'ODT',
     mode: 'direct',
+    multiple: false,
     filters: { writer: 'writer8' },
   },
   docx: {
@@ -155,6 +184,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     label: 'DOCX',
     mode: 'direct',
+    multiple: false,
     filters: { writer: 'MS Word 2007 XML' },
   },
   txt: {
@@ -163,6 +193,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'text/plain; charset=utf-8',
     label: 'TXT',
     mode: 'direct',
+    multiple: false,
     // `Text (encoded)` with an explicit UTF8 option: the bare `Text` filter
     // writes in the process locale, which would mangle anything non-ASCII into
     // question marks while still reporting success.
@@ -174,6 +205,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'text/html; charset=utf-8',
     label: 'HTML',
     mode: 'direct',
+    multiple: false,
     filters: { writer: 'HTML (StarWriter)', calc: 'HTML (StarCalc)' },
   },
   rtf: {
@@ -182,6 +214,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/rtf',
     label: 'RTF',
     mode: 'direct',
+    multiple: false,
     filters: { writer: 'Rich Text Format' },
   },
   epub: {
@@ -190,6 +223,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/epub+zip',
     label: 'EPUB',
     mode: 'direct',
+    multiple: false,
     filters: { writer: 'EPUB' },
   },
   ods: {
@@ -198,6 +232,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/vnd.oasis.opendocument.spreadsheet',
     label: 'ODS',
     mode: 'direct',
+    multiple: false,
     filters: { calc: 'calc8' },
   },
   xlsx: {
@@ -206,6 +241,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     label: 'XLSX',
     mode: 'direct',
+    multiple: false,
     filters: { calc: 'Calc MS Excel 2007 XML' },
   },
   csv: {
@@ -214,6 +250,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'text/csv; charset=utf-8',
     label: 'CSV',
     mode: 'direct',
+    multiple: false,
     // The filter options are positional, in this order:
     //   field separator (44 = ','), text delimiter (34 = '"'),
     //   character set (76 = UTF-8), first line number (1),
@@ -229,6 +266,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/vnd.oasis.opendocument.presentation',
     label: 'ODP',
     mode: 'direct',
+    multiple: false,
     filters: { impress: 'impress8' },
   },
   pptx: {
@@ -237,6 +275,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     label: 'PPTX',
     mode: 'direct',
+    multiple: false,
     filters: { impress: 'Impress MS PowerPoint 2007 XML' },
   },
   png: {
@@ -245,6 +284,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'image/png',
     label: 'PNG',
     mode: 'raster',
+    multiple: true,
     filters: {},
   },
   jpg: {
@@ -253,6 +293,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'image/jpeg',
     label: 'JPG',
     mode: 'raster',
+    multiple: true,
     filters: {},
   },
   tables: {
@@ -280,14 +321,60 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
      * one, so the distinction lives in the address.
      */
     mode: 'extract',
+    multiple: false,
     filters: {},
     extractFrom: ['.docx', '.docm'],
+  },
+  layers: {
+    id: 'layers',
+    /**
+     * A PNG, because that is what the archive holds - one per layer. The
+     * RESPONSE is always a ZIP, which is what `multiple` says; `extension` and
+     * `mediaType` describe the files inside it, exactly as they do for `png`
+     * and `jpg`, whose responses are also always archives. A client that wants
+     * to know what it is unwrapping reads `multiple` for the shape and this for
+     * the contents.
+     */
+    extension: '.png',
+    mediaType: 'image/png',
+    /**
+     * Distinct from `png`'s label for the same reason `tables` is distinct from
+     * `xlsx`: a 415 or a bad target id gets answered with a list of labels, and
+     * "PNG" appearing twice in one sentence tells the reader nothing about
+     * which one they wanted.
+     */
+    label: 'PNG (layers)',
+    /**
+     * Every layer of a Photoshop document, as its own PNG.
+     *
+     * Not reachable from any LibreOffice format, and not a conversion in any
+     * sense LibreOffice would recognise: a PSD is not a document LibreOffice
+     * opens, so there is no filter to write and no family to key one on. What
+     * it shares with `tables` is the shape of the work - the upload is read by
+     * our own code and the answer is built from what is inside it - which is
+     * what `mode: 'extract'` means here.
+     */
+    mode: 'extract',
+    multiple: true,
+    filters: {},
+    extractFrom: ['.psd'],
   },
 };
 
 export interface SourceFormat {
   extension: AllowedExtension;
-  family: DocumentFamily;
+  /**
+   * The LibreOffice family that handles this file, when one does.
+   *
+   * Absent for a source LibreOffice cannot open at all - `.psd` today - which
+   * is only possible because the target it reaches, `layers`, reads the
+   * document itself and never hands it to soffice. `validateMatrix` enforces
+   * exactly that: a source with no family may advertise only extract targets,
+   * and a source with a family must have something for it to convert. Adding
+   * `family` to a source is therefore a statement that soffice handles it, and
+   * the build fails if the rest of the matrix disagrees.
+   */
+  family?: DocumentFamily;
   /** Media type soffice would call it, for `GET /formats`. */
   mediaType: string;
   /**
@@ -296,8 +383,11 @@ export interface SourceFormat {
    * Informational only - soffice infers the filter from the extension of the
    * file it is handed, and we never pass an import filter on the command line.
    * It is recorded so the whole mapping stays auditable in one place.
+   *
+   * Absent in the same case `family` is: soffice never opens this file, so
+   * there is no filter for it to infer.
    */
-  importFilter: string;
+  importFilter?: string;
   /** What this source can become, in the order it should be advertised. */
   targets: readonly TargetId[];
 }
@@ -439,6 +529,20 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     importFilter: 'draw_jpg_Import',
     targets: ['pdf'],
   },
+  '.psd': {
+    extension: '.psd',
+    mediaType: 'image/vnd.adobe.photoshop',
+    // No `family` and no `importFilter`, and their absence is the point:
+    // LibreOffice has no PSD support to speak of, and more to the point this
+    // service never asks it for any. `layers` reads the document itself, which
+    // is the whole reason a source with no document family can exist here at
+    // all - see the note on `SourceFormat.family`.
+    //
+    // One target, deliberately. A PSD rendered by LibreOffice would be a
+    // different feature with a different name, and offering `pdf` here would
+    // promise a fidelity nothing in this pipeline could deliver.
+    targets: ['layers'],
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -498,6 +602,13 @@ export function resolveConversion(
     return { source, target, convertTo: '' };
   }
 
+  // Everything below asks LibreOffice to do the work, so a source it cannot
+  // open has nothing to offer here. Unreachable as the matrix stands -
+  // `validateMatrix` refuses a family-less source that advertises anything but
+  // an extract - but the guard is what keeps that a fact about the matrix
+  // rather than an assumption made at the one place it would be expensive.
+  if (!source.family) return null;
+
   if (target.mode === 'raster') {
     // A raster target is built from the family's PDF export, so a family that
     // cannot write a PDF cannot write an image either.
@@ -510,9 +621,17 @@ export function resolveConversion(
   return { source, target, convertTo: `${target.extension.slice(1)}:${filter}` };
 }
 
-/** The PDF export filter for a family, if it has one. */
-export function pdfFilterFor(family: DocumentFamily): string | undefined {
-  return TARGETS.pdf.filters[family];
+/**
+ * The PDF export filter for a family, if it has one.
+ *
+ * Takes an absent family as well as a present one, because the raster pipeline
+ * asks this question on behalf of a source that may have no family at all. Its
+ * honest answer then is "no filter", which the caller already knows how to
+ * handle - and which is the same answer it gives for a family that has no PDF
+ * export.
+ */
+export function pdfFilterFor(family: DocumentFamily | undefined): string | undefined {
+  return family ? TARGETS.pdf.filters[family] : undefined;
 }
 
 /**
@@ -526,13 +645,15 @@ export function pdfFilterFor(family: DocumentFamily): string | undefined {
  * body that is not a ZIP - or read a ZIP as a document - and fail somewhere
  * far from the cause.
  *
- * Only a raster target archives: it is one image per page and a ZIP is the
- * only way to put several files in one response. An extract target answers
- * with a single workbook however many tables the document held, and a direct
- * target always writes one file.
+ * The answer is now the target's own declaration rather than a rule about its
+ * mode. It used to be `mode === 'raster'`, which was a fine way of saying it
+ * while every raster target archived and nothing else did. `layers` ended that:
+ * it is an extract, like `tables`, and answers with one file per layer rather
+ * than the one workbook `tables` produces. The two facts were never the same
+ * fact, and this is the one that decides what a response is.
  */
 export function archivesFiles(target: TargetFormat): boolean {
-  return target.mode === 'raster';
+  return target.multiple;
 }
 
 /** Every target this extension can become, as ids. */
@@ -578,6 +699,17 @@ export function validateMatrix(): void {
       problems.push(`${target.mode} target "${id}" should not declare filters`);
     }
 
+    // Two of the three modes fix what a response looks like, so a target that
+    // disagrees with its own mode is a contradiction rather than a choice. The
+    // extract targets are the one place `multiple` is free, which is exactly
+    // why it stopped being derivable from `mode`.
+    if (target.mode === 'raster' && !target.multiple) {
+      problems.push(`raster target "${id}" does not declare itself an archive`);
+    }
+    if (target.mode === 'direct' && target.multiple) {
+      problems.push(`direct target "${id}" declares itself an archive but writes one file`);
+    }
+
     if (target.mode === 'extract') {
       // An extract target names its own sources, so it is the only target
       // whose reach is not implied by `filters`. Both directions are checked:
@@ -608,7 +740,15 @@ export function validateMatrix(): void {
       }
       if (!resolveConversion(source.extension, targetId)) {
         problems.push(
-          `source "${ext}" (${source.family}) advertises "${targetId}" but has no filter for it`,
+          `source "${ext}" (${source.family ?? 'no family'}) advertises "${targetId}" but has no filter for it`,
+        );
+      }
+      // The other half of the family rule below, in the direction that catches
+      // a source claiming to be convertable by LibreOffice when it has also
+      // said LibreOffice cannot open it.
+      if (TARGETS[targetId].mode !== 'extract' && !source.family) {
+        problems.push(
+          `source "${ext}" has no family but advertises "${targetId}", which LibreOffice must produce`,
         );
       }
       // The other half of the extract check above: a source that offers an
@@ -627,6 +767,16 @@ export function validateMatrix(): void {
     // soffice process and, worse, reads as a supported request.
     if ((source.targets as readonly string[]).includes(ext.slice(1))) {
       problems.push(`source "${ext}" lists its own format as a target`);
+    }
+    // `family` is a claim that LibreOffice opens this file, so a source that
+    // makes the claim and then offers nothing but extracts is either missing a
+    // target or has a family it does not use. Both halves matter: without this,
+    // a `.docx` could lose its family and every soffice target would silently
+    // become a 415 while the matrix still advertised them.
+    if (source.family && !source.targets.some((id) => TARGETS[id]?.mode !== 'extract')) {
+      problems.push(
+        `source "${ext}" declares family "${source.family}" but offers only extract targets`,
+      );
     }
   }
 

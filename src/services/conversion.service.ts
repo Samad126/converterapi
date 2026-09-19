@@ -23,6 +23,9 @@ import { join } from 'node:path';
 import {
   CONVERT_TIMEOUT_MS,
   MAX_DOCUMENT_XML_BYTES,
+  MAX_LAYER_OUTPUT_BYTES,
+  MAX_PSD_DECODE_BYTES,
+  MAX_PSD_LAYERS,
   MAX_RASTER_PAGES,
   MAX_TABLES,
   MAX_TABLE_CELLS,
@@ -33,12 +36,13 @@ import { ClientGoneError, Errors } from '../errors.ts';
 import {
   archivesFiles,
   pdfFilterFor,
-  type DocumentFamily,
   type ResolvedConversion,
   type TargetFormat,
+  type TargetId,
 } from '../formats.ts';
 import { extractTables } from '../lib/docx-tables.ts';
 import { isPasswordProtected } from '../lib/encrypted.ts';
+import { extractLayers, MANIFEST_FILENAME, manifestJson } from '../lib/psd-layers.ts';
 import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
 import { rasterizePdf, runSoffice, type ProcessOutcome } from './soffice.service.ts';
@@ -48,6 +52,19 @@ import { OUTPUT_DIRNAME, inputFileNameFor, PROFILE_DIRNAME } from './workspace.s
 const RASTER_DIRNAME = 'raster';
 /** pdftoppm writes `<prefix>-<page><ext>`. */
 const RASTER_PREFIX = 'slide';
+
+/**
+ * What the layer extractor is allowed to spend, gathered in one place.
+ *
+ * The defaults live in `config.ts` with the reasoning for each figure; this is
+ * only the wiring, so that the three bounds that have to agree about one
+ * request are read together rather than scattered through the pipeline.
+ */
+const LAYER_LIMITS = {
+  maxDecodeBytes: MAX_PSD_DECODE_BYTES,
+  maxOutputBytes: MAX_LAYER_OUTPUT_BYTES,
+  maxLayers: MAX_PSD_LAYERS,
+};
 
 /**
  * The one part of a Word package the table extractor reads.
@@ -111,7 +128,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   const startedAt = Date.now();
   const files =
     target.mode === 'extract'
-      ? await runExtractPipeline({ inputPath, target, signal })
+      ? await runExtractPipeline({ inputPath, target, signal, deadline })
       : target.mode === 'raster'
         ? await runRasterPipeline({
             inputPath,
@@ -119,7 +136,13 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
             workspace,
             profileDir,
             target,
-            family: source.family,
+            // Resolved here, from the family, rather than passed as a family for
+            // the raster pipeline to look up. A source that reaches this branch
+            // is one the matrix says has a PDF export, and turning that into the
+            // filter string once means the pipeline below cannot be handed a
+            // family it has no filter for - which is the only way it could ever
+            // have failed.
+            pdfFilter: pdfFilterFor(source.family) ?? '',
             deadline,
             signal,
           })
@@ -134,9 +157,9 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
             signal,
           });
 
-  // Only a raster target answers with an archive - ask the matrix rather than
-  // restating the rule here, because `GET /formats` tells the client the same
-  // thing and the two answers have to agree. See `archivesFiles`.
+  // Does the response carry a ZIP? Ask the matrix rather than restating the
+  // rule here, because `GET /formats` tells the client the same thing and the
+  // two answers have to agree. See `archivesFiles`.
   return { files, archive: archivesFiles(target), durationMs: Date.now() - startedAt };
 }
 
@@ -197,18 +220,19 @@ async function runRasterPipeline(run: {
   workspace: string;
   profileDir: string;
   target: TargetFormat;
-  family: DocumentFamily;
+  /** The family's PDF export filter, resolved by the caller. */
+  pdfFilter: string;
   deadline: number;
   signal?: AbortSignal;
 }): Promise<ProducedFile[]> {
-  const { inputPath, outDir, workspace, profileDir, target, family, deadline, signal } = run;
+  const { inputPath, outDir, workspace, profileDir, target, pdfFilter, deadline, signal } = run;
 
-  const pdfFilter = pdfFilterFor(family);
-  if (!pdfFilter) {
+  if (pdfFilter === '') {
     // Unreachable via the matrix, which refuses to advertise a raster target
-    // for a family with no PDF export. Guarded anyway: the alternative is
-    // handing soffice an `undefined` filter argument.
-    throw Errors.internal(`no PDF export filter for family ${family}`);
+    // for a source with no PDF export. Guarded anyway: the alternative is
+    // handing soffice an empty filter argument and getting back whatever it
+    // decides that means.
+    throw Errors.internal(`no PDF export filter for the ${target.id} target`);
   }
 
   const render = await runSoffice({
@@ -296,17 +320,72 @@ async function runExtractPipeline(run: {
   inputPath: string;
   target: TargetFormat;
   signal?: AbortSignal;
+  /** Not enforced by the extractors; see below for why it is passed anyway. */
+  deadline: number;
 }): Promise<ProducedFile[]> {
   const { inputPath, target, signal } = run;
 
-  if (target.id !== 'tables') {
-    // Unreachable via the matrix, which only routes `extract` targets here.
-    // Guarded because the alternative is silently running the wrong extractor.
+  // One entry per extract target, and the guard is the point of the table: a
+  // target whose engine nobody wired up has to be a loud failure rather than a
+  // silent run of some other extractor on a document it was never meant to see.
+  // `test/unit.test.ts` checks the table covers every extract target the matrix
+  // declares, so the failure lands at build time rather than on a request.
+  const extractor = EXTRACTORS[target.id];
+  if (!extractor) {
     throw Errors.internal(`no extractor for the ${target.id} target`);
   }
   if (signal?.aborted) throw new ClientGoneError();
 
   const archive = await fsp.readFile(inputPath);
+  return extractor({ archive, inputPath, target, signal });
+}
+
+type Extractor = (run: {
+  /** The whole upload, in memory. */
+  archive: Buffer;
+  inputPath: string;
+  target: TargetFormat;
+  signal?: AbortSignal;
+}) => Promise<ProducedFile[]>;
+
+/**
+ * The extract targets, and the code that answers each of them.
+ *
+ * `Partial` and not `Record`, deliberately: the compiler cannot then be fooled
+ * into thinking the table is complete, the lookup above keeps its runtime
+ * guard, and the completeness is asserted by a test instead - where a missing
+ * entry is a failed build rather than a 500 in production.
+ */
+const EXTRACTORS: Partial<Record<TargetId, Extractor>> = {
+  tables: extractTablesToWorkbook,
+  layers: extractLayersToArchive,
+};
+
+/**
+ * Test seam: the extract targets that have an engine.
+ *
+ * Exported so `test/unit.test.ts` can hold the table above to the matrix. The
+ * type is `Partial` precisely so the compiler does not demand completeness, so
+ * something else has to - and a test is the right place for it, because the
+ * alternative is finding out on the first request that asks.
+ */
+export const EXTRACT_TARGET_IDS = Object.keys(EXTRACTORS) as TargetId[];
+
+/**
+ * Every table in a Word document, as one worksheet each.
+ *
+ * The original extract pipeline, unchanged: read `word/document.xml` out of the
+ * upload's own package, scan it for tables, and write a workbook. Nothing here
+ * reaches LibreOffice, which is what makes a `.docx` reach a target the
+ * conversion matrix could not otherwise offer it.
+ */
+async function extractTablesToWorkbook(run: {
+  archive: Buffer;
+  inputPath: string;
+  target: TargetFormat;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { archive, inputPath, target, signal } = run;
   const part = readZipEntry(archive, DOCUMENT_PART, MAX_DOCUMENT_XML_BYTES);
 
   if (part.kind === 'too-large') {
@@ -364,6 +443,61 @@ async function runExtractPipeline(run: {
   if (signal?.aborted) throw new ClientGoneError();
 
   return [{ name: `converted${target.extension}`, data: workbook }];
+}
+
+/**
+ * Every layer of a Photoshop document, as its own PNG, in one archive.
+ *
+ * The second engine that reaches no LibreOffice, and a different shape of
+ * answer from the first: `tables` puts however many tables a document holds
+ * into one workbook, while this returns one file per layer plus a manifest -
+ * which is why its target declares `multiple` and `tables` does not.
+ *
+ * The `name` on each produced file is the archive entry name rather than a
+ * download filename: `Buttons/Hover.png` is where the layers panel put it, and
+ * nesting is how the document's own grouping survives the trip. `manifest.json`
+ * sits alongside them and describes every layer, including the ones that
+ * produced no file and why.
+ *
+ * Everything expensive here already happened in `extractLayers`, which is
+ * synchronous and cannot be interrupted part-way. The abort checks below are
+ * therefore only about the work still to come, and there is exactly one piece
+ * of it - assembling the manifest - so this is the honest place for the last
+ * one, not a deadline that would be consulted after the fact.
+ */
+async function extractLayersToArchive(run: {
+  archive: Buffer;
+  target: TargetFormat;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { archive, target, signal } = run;
+
+  const extraction = extractLayers(archive, LAYER_LIMITS, signal);
+
+  switch (extraction.kind) {
+    case 'too-large':
+      throw Errors.tooLarge(extraction.reason);
+    case 'no-layers':
+      // The layer-shaped twin of E_NO_TABLES: the document opened and was read,
+      // and simply holds nothing this service can draw.
+      throw Errors.noLayers();
+    case 'unreadable':
+      // Not a PSD, or not one we can read. E_CONVERT_FAILED for the same reason
+      // the tables path uses it for a .docx that is not a ZIP: there is nothing
+      // to say about a document's layers until the document can be read.
+      throw Errors.convertFailed(`could not read ${target.id} from the upload: ${extraction.reason}`);
+    case 'cancelled':
+      throw new ClientGoneError();
+    case 'ok':
+      break;
+  }
+
+  if (signal?.aborted) throw new ClientGoneError();
+
+  return [
+    ...extraction.layers.map((layer) => ({ name: layer.file, data: layer.data })),
+    { name: MANIFEST_FILENAME, data: manifestJson(extraction.manifest) },
+  ];
 }
 
 // ---------------------------------------------------------------------------

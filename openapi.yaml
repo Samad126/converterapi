@@ -98,7 +98,7 @@ paths:
       description: |
         Converts the upload to `target`, which must be an id from
         `GET /formats` (`pdf`, `odt`, `docx`, `txt`, `html`, `rtf`, `epub`,
-        `ods`, `xlsx`, `csv`, `odp`, `pptx`, `png`, `jpg`, `tables`).
+        `ods`, `xlsx`, `csv`, `odp`, `pptx`, `png`, `jpg`, `tables`, `layers`).
 
         The document is parsed by LibreOffice, which is a large C++ codebase
         handling untrusted input. **Treat a conversion failure as an expected,
@@ -181,11 +181,18 @@ paths:
                         mediaType:
                           type: string
                         family:
-                          type: string
+                          type: [string, 'null']
                           description: |
                             The LibreOffice document family that handles it.
                             Sources in the same family convert the same way.
-                          enum: [writer, calc, impress, draw]
+
+                            `null` for a source LibreOffice does not open at
+                            all - `.psd` today. Such a source is handled
+                            entirely by this service's own code, which is why
+                            it can only ever offer `extract` targets; its
+                            absence is a fact about the source rather than a
+                            field this version happens to omit.
+                          enum: [writer, calc, impress, draw, null]
                         targets:
                           type: array
                           items:
@@ -307,7 +314,7 @@ components:
       description: |
         Identifier of an output format, as used in the `/convert/{target}` path
         and returned by `GET /formats`.
-      enum: [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables]
+      enum: [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers]
 
     ErrorCode:
       type: string
@@ -323,6 +330,7 @@ components:
         - E_UNKNOWN_TARGET
         - E_TOO_LARGE
         - E_NO_TABLES
+        - E_NO_LAYERS
         - E_BUSY
         - E_BAD_REQUEST
         - E_RATE_LIMITED
@@ -414,7 +422,19 @@ components:
             type: string
             format: binary
             description: |
-              One image per page, named `slide-1.png`, `slide-2.png`, ...
+              A ZIP, for every target that reports `multiple: true` at
+              `GET /formats`. What is inside depends on the target:
+
+                - `png` / `jpg` - one image per page, named `slide-1.png`,
+                  `slide-2.png`, ...
+                - `layers` - one PNG per layer of a PSD, at the path its group
+                  gives it (`Buttons/Hover.png`), plus `manifest.json`
+                  describing every layer, including any that produced no image
+                  and why.
+
+              The response is an archive even when it holds a single file, so
+              that the content type never depends on how many pages or layers
+              the upload happened to have.
         application/vnd.oasis.opendocument.text:
           schema:
             type: string
@@ -495,7 +515,7 @@ components:
           example:
             error:
               code: E_UNKNOWN_TARGET
-              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables).'
+              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers).'
 
     TooLarge:
       description: |
@@ -529,7 +549,7 @@ components:
           example:
             error:
               code: E_UNSUPPORTED
-              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .odt, .ods, .odp, .xlsx, .pptx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg.'
+              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .odt, .ods, .odp, .xlsx, .pptx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd.'
 
     UnsupportedTarget:
       description: |
@@ -561,12 +581,14 @@ components:
         corrupt one, and telling a user their file is damaged when it merely
         needs a password is both wrong and unhelpful.
 
-        **No tables.** Only a `tables` request can produce this: the target is
-        the only one that reads the document's contents rather than converting
-        the document as a whole, so it is the only one that can open a file
-        successfully and find nothing to work with. Reporting it as a
-        conversion failure would say the file may be damaged when the truth is
-        that it is a perfectly good document with no tables in it.
+        **No tables, and no layers.** Only an `extract` target can produce
+        either: those are the targets that read the document's contents rather
+        than converting the document as a whole, so they are the only ones that
+        can open a file successfully and find nothing to work with. Reporting
+        one as a conversion failure would say the file may be damaged when the
+        truth is that it is a perfectly good document with no tables in it, or
+        one whose layers are all adjustment and text layers and therefore have
+        no pixels to write.
       content:
         application/json:
           schema:
@@ -584,6 +606,12 @@ components:
                 error:
                   code: E_NO_TABLES
                   message: This document does not contain any tables.
+            noLayers:
+              summary: A `layers` request on a PSD with nothing drawable in it.
+              value:
+                error:
+                  code: E_NO_LAYERS
+                  message: This PSD file does not contain any layers with images that can be extracted.
 
     RateLimited:
       description: |

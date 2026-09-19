@@ -20,8 +20,16 @@ import { join } from 'node:path';
 
 import { PDFTOPPM_BIN, REQUIRED_FONT_ALIASES, SOFFICE_BIN } from '../config.ts';
 import { PreflightError } from '../errors.ts';
-import { resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
-import { calcProbe, impressProbe, tablesProbe, writerProbe } from '../lib/probe-documents.ts';
+import { archivesFiles, resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
+import { MANIFEST_FILENAME } from '../lib/psd-layers.ts';
+import {
+  calcProbe,
+  impressProbe,
+  PSD_PROBE_DRAWABLE_LAYERS,
+  psdProbe,
+  tablesProbe,
+  writerProbe,
+} from '../lib/probe-documents.ts';
 import { readZipEntry } from '../lib/unzip.ts';
 import { convert } from './conversion.service.ts';
 import { createWorkspace, inputFileNameFor, removeWorkspace } from './workspace.service.ts';
@@ -235,6 +243,11 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   // is the only place it can be caught before a user's document is the thing
   // that finds it.
   { extension: '.docx', target: 'tables', document: tablesProbe },
+  // The layers extractor is a second engine that reaches nothing outside this
+  // process, so it gets a case for the same reason `tables` does: a fault in
+  // it is a fault in our own reader or our own PNG writer, and the boot check
+  // is the only place either can be caught before a user's document is.
+  { extension: '.psd', target: 'layers', document: psdProbe },
 ];
 
 export interface WarmUpReport {
@@ -277,12 +290,13 @@ export async function warmUp(): Promise<WarmUpReport> {
           `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} image(s) for a two-slide document.`,
         );
       }
-      // An extract target answers with exactly one workbook - several tables
-      // become several sheets, not several files. More than one file would
-      // mean the response shape had changed without formats.ts saying so, and
-      // a client that unwraps a ZIP on the strength of `multiple: false` would
-      // hand the user a workbook it could not read.
-      if (conversion.target.mode === 'extract') {
+      // The extract targets come in two shapes, and which one is expected is
+      // the matrix's answer rather than the mode's: `tables` puts however many
+      // tables it finds into ONE workbook, while `layers` answers with one file
+      // per layer plus a manifest. Checking the wrong shape here would pass a
+      // pipeline that had quietly started unwrapping differently from what
+      // `GET /formats` promises.
+      if (conversion.target.mode === 'extract' && !archivesFiles(conversion.target)) {
         if (result.files.length !== 1) {
           throw new PreflightError(
             `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} files for a single-workbook target.`,
@@ -297,6 +311,49 @@ export async function warmUp(): Promise<WarmUpReport> {
           throw new PreflightError(
             `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a package with no readable xl/workbook.xml.`,
           );
+        }
+      }
+
+      // The multi-file extract: one image per drawable layer, and a manifest
+      // naming them. The probe's layers are chosen so that the expected count
+      // depends on every counting rule at once, so this asserts the number that
+      // actually matters rather than merely that something was written - which
+      // no other check in the system would catch, because the archive still
+      // unzips and every file in it is still a perfectly good PNG.
+      if (archivesFiles(conversion.target) && conversion.target.mode === 'extract') {
+        const images = result.files.filter((file) => file.name.endsWith('.png'));
+        const manifest = result.files.find((file) => file.name === MANIFEST_FILENAME);
+        if (images.length !== PSD_PROBE_DRAWABLE_LAYERS) {
+          throw new PreflightError(
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${images.length} image(s), expected ${PSD_PROBE_DRAWABLE_LAYERS}.`,
+          );
+        }
+        if (!manifest) {
+          throw new PreflightError(
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced no ${MANIFEST_FILENAME}.`,
+          );
+        }
+        // The manifest has to parse and agree with what was written, because
+        // the two are built from one walk and a client joins them by filename.
+        const parsed = JSON.parse(manifest.data.toString('utf8')) as {
+          exported?: number;
+          canvas?: { width?: number };
+        };
+        if (parsed.exported !== images.length || parsed.canvas?.width !== 16) {
+          throw new PreflightError(
+            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a manifest that disagrees with the archive.`,
+          );
+        }
+        // Every image really is a PNG. The signature is the only part of that
+        // a byte count cannot fake, and a layer written as something else would
+        // otherwise be served as image/png and rejected by whatever opens it.
+        const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        for (const image of images) {
+          if (!image.data.subarray(0, 8).equals(signature)) {
+            throw new PreflightError(
+              `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a file that is not a PNG: ${image.name}.`,
+            );
+          }
         }
       }
 
