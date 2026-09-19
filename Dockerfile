@@ -50,6 +50,11 @@ FROM node:22-bookworm-slim AS runtime
 # system site-packages (not `--user`) so it resolves regardless of $HOME -
 # `pdf-engine.service.ts` explains why that distinction matters.
 #
+# python-docx is listed explicitly even though pdf2docx already depends on it -
+# pdf_engine.py imports it directly for the Type3-font fallback (see
+# `_convert_to_docx_as_pages`), so it is this script's own dependency now, not
+# merely something that happens to be present because pdf2docx needs it too.
+#
 # qpdf is a FOURTH, unrelated engine, needed because pdf-lib (which does every
 # other page operation - merge, split, rotate, watermark) is explicit in its
 # own README that it does not implement PDF encryption at all. `/pdf/protect`
@@ -94,6 +99,7 @@ RUN apt-get update \
       pdfplumber \
       python-pptx \
       openpyxl \
+      python-docx \
  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \

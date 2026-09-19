@@ -164,7 +164,7 @@ function assertRasterizerPresent(): string {
 function assertPdfEnginePresent(): void {
   const result = spawnSync(
     PYTHON_BIN,
-    ['-c', 'import pdf2docx, pptx, pdfplumber, openpyxl, fitz'],
+    ['-c', 'import pdf2docx, pptx, pdfplumber, openpyxl, fitz, docx'],
     { encoding: 'utf8', timeout: 30_000 },
   );
 
@@ -189,7 +189,7 @@ function assertPdfEnginePresent(): void {
       [
         'The PDF engine\'s Python dependencies are not all installed.',
         '',
-        `  pip install pdf2docx pdfplumber python-pptx openpyxl`,
+        `  pip install pdf2docx pdfplumber python-pptx openpyxl python-docx`,
         '  Docker:  use the provided Dockerfile',
         '',
         `stderr: ${(result.stderr ?? '').trim()}`,

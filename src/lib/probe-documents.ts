@@ -363,6 +363,81 @@ export function pdfProbe(): Buffer {
 }
 
 /**
+ * A one-page PDF whose only font is a Type3 font - a real regression
+ * fixture, not a synthetic one: it reproduces the exact structure that made
+ * `pdf_engine.py`'s `docx` reconstruction duplicate and overlap every line
+ * of a real Azerbaijani-language report exported by a "print to PDF"
+ * driver. Type3 fonts define each glyph as its own tiny content-stream
+ * program rather than a standard outline - PyMuPDF's own text extraction
+ * handles them correctly (checked directly against that file), but
+ * pdf2docx's higher-level layout reconstruction does not, and no
+ * `pdf2docx` setting changes that. `pdf_engine.py` detects this up front
+ * and routes around the reconstruction entirely - see
+ * `_pdf_uses_type3_fonts` in scripts/pdf_engine.py - and this probe is what
+ * proves that detection still fires.
+ *
+ * The glyph itself does not need to look like anything: `d1` plus a filled
+ * rectangle is the minimum a PDF reader needs to accept the font, and
+ * nothing here reads the rendered glyph's shape, only whether the font is
+ * reported as Type3 and whether the page's own text ("A") survives.
+ */
+export function pdfWithType3FontProbe(): Buffer {
+  const content = 'BT /F1 24 Tf 20 100 Td (A) Tj ET';
+  const glyphProcedure = '750 0 0 0 750 750 d1 0 0 750 750 re f';
+
+  const objects = new Map<number, string>();
+  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objects.set(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  objects.set(
+    3,
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] ' +
+      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+  );
+  objects.set(4, `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
+  objects.set(
+    5,
+    '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 750 750] ' +
+      '/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs 6 0 R ' +
+      '/Encoding << /Type /Encoding /Differences [65 /A] >> ' +
+      '/FirstChar 65 /LastChar 65 /Widths [750] >>',
+  );
+  objects.set(6, '<< /A 7 0 R >>');
+  objects.set(
+    7,
+    `<< /Length ${Buffer.byteLength(glyphProcedure, 'latin1')} >>\nstream\n${glyphProcedure}\nendstream`,
+  );
+
+  const highestId = 7;
+  const chunks: string[] = ['%PDF-1.4\n'];
+  const offsets = new Map<number, number>();
+  let cursor = Buffer.byteLength(chunks[0]!, 'latin1');
+
+  for (let id = 1; id <= highestId; id += 1) {
+    const body = objects.get(id);
+    if (body === undefined) continue;
+    offsets.set(id, cursor);
+    const text = `${id} 0 obj\n${body}\nendobj\n`;
+    chunks.push(text);
+    cursor += Buffer.byteLength(text, 'latin1');
+  }
+
+  const xrefOffset = cursor;
+  const xrefLines = ['xref', `0 ${highestId + 1}`, '0000000000 65535 f '];
+  for (let id = 1; id <= highestId; id += 1) {
+    const offset = offsets.get(id);
+    xrefLines.push(
+      offset === undefined ? '0000000000 00000 f ' : `${String(offset).padStart(10, '0')} 00000 n `,
+    );
+  }
+  chunks.push(
+    `${xrefLines.join('\n')}\n` +
+      `trailer\n<< /Size ${highestId + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+  );
+
+  return Buffer.from(chunks.join(''), 'latin1');
+}
+
+/**
  * A one-page PDF with a genuine ruled 2x2 table, for the `sheet` target.
  *
  * `pdfProbe` cannot double as this fixture: `sheet` extracts tables by their

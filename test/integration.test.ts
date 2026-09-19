@@ -36,6 +36,7 @@ const {
   buildMinimalOdp,
   buildSolidPng,
   pdfProbe,
+  pdfWithType3FontProbe,
   pdfTableProbe,
   psdProbe,
   tablesProbe,
@@ -653,6 +654,27 @@ describe('POST /convert/<target> - PDF sources', () => {
     for (const text of ['Converter warm-up', 'Second page']) {
       assert.ok(xml.includes(text), `"${text}" did not survive the reconstruction`);
     }
+  });
+
+  it('falls back to a full-page image for a Type3-font PDF, instead of a corrupted reconstruction', async () => {
+    // Regression test for a real failure: pdf2docx duplicated and overlapped
+    // every line of a Type3-font PDF (confirmed against the actual file that
+    // exposed this), and no pdf2docx setting changed that - so
+    // pdf_engine.py detects the trigger and answers with a full-page image
+    // instead. This is the one DOCX case where a page IMAGE, not
+    // reconstructed text, is the correct and expected output.
+    const response = await upload(server.baseUrl, 'doc.pdf', pdfWithType3FontProbe(), { target: 'docx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'not a ZIP-based package');
+    assert.deepEqual(
+      zipEntryNames(response.body).filter((name) => /^word\/media\//.test(name)),
+      ['word/media/image1.png'],
+      'expected exactly one full-page image, not a reconstructed text layout',
+    );
   });
 
   it('builds one slide per page, each a full-page image', async () => {

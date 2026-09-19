@@ -178,6 +178,24 @@ From a PDF, `docx` uses [pdf2docx](https://github.com/dothinking/pdf2docx)
 (built on PyMuPDF) to rebuild real paragraphs, tables and images as OOXML —
 this is layout reconstruction, not a picture of the page.
 
+**Except for a PDF built entirely on Type3 fonts, where `docx` falls back to
+a full-page image per page instead.** Type3 fonts define each glyph as its
+own tiny content-stream program rather than a standard outline — common
+output from "print to PDF" drivers and older exporters for a script the
+driver's base fonts do not cover (found here on an Azerbaijani-language
+report; Cyrillic, Vietnamese and various math typesetting hit the same
+driver behaviour for the same underlying reason). PyMuPDF's own text
+extraction handles these correctly — checked directly against the file that
+exposed this — but pdf2docx's layout reconstruction does not: on that file it
+duplicated and overlapped every line, and no `pdf2docx` setting (table
+detection on or off, stream or lattice) changed that. `pdf_engine.py` checks
+for a Type3 font up front (`page.get_fonts()`) and, when it finds one,
+renders each page whole into its own docx section sized to that page,
+instead of attempting a reconstruction already known to corrupt itself on
+this input. The trade is the usual one for a raster fallback — the text is
+no longer selectable — made only for the specific input where the
+alternative is confirmed to be wrong, not merely different.
+
 `pptx` has no editable-shapes equivalent to fall back on — there is no
 PDF-to-Impress import to reconstruct from — so it does what real "PDF to
 PowerPoint" tools do for anything that is not already a native deck: render
@@ -216,7 +234,7 @@ sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress 
   fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig \
   python3 python3-pip qpdf
 sudo fc-cache -f
-pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl
+pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl python-docx
 ```
 
 All four LibreOffice modules are required, not just the writer. They are

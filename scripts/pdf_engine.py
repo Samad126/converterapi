@@ -27,6 +27,36 @@ import sys
 NO_TABLES_EXIT_CODE = 2
 
 
+def _pdf_uses_type3_fonts(input_path: str) -> bool:
+    """
+    True if any page embeds a Type3 font.
+
+    Type3 fonts define each glyph as its own tiny content-stream program
+    rather than a standard outline - common in PDFs produced by "print to
+    PDF" drivers and older exporters for scripts a base font does not cover
+    (this codebase found it on an Azerbaijani-language report; the same
+    class of PDF is produced for Cyrillic, Vietnamese and various math
+    typesetting for the same underlying reason). PyMuPDF's own text
+    extraction reports these glyphs correctly - one span, one bbox, checked
+    directly against this exact file - but pdf2docx's higher-level layout
+    reconstruction does not: it was observed here duplicating and
+    overlapping every line of a Type3-font page while leaving every non-
+    Type3 page in the same document untouched, and no `pdf2docx` setting
+    (table detection on or off, stream or lattice) changed that. Detecting
+    the trigger up front and routing around `convert_to_docx` entirely is
+    far more honest than shipping a `docx` that silently doubles its own
+    text, and matches the docx/pptx boundary already checked from
+    conversion.service.ts.
+    """
+    import fitz  # PyMuPDF
+
+    document = fitz.open(input_path)
+    try:
+        return any(font[2] == 'Type3' for page in document for font in page.get_fonts())
+    finally:
+        document.close()
+
+
 def convert_to_docx(input_path: str, output_path: str) -> None:
     """
     Reconstruct the PDF as an editable, reflowable Word document.
@@ -36,7 +66,15 @@ def convert_to_docx(input_path: str, output_path: str) -> None:
     document - this is a genuine layout reconstruction, not a raster fallback,
     which is why it earns its own target (`word`) instead of piggybacking on
     the `docx` id that direct LibreOffice conversions use.
+
+    Falls back to `_convert_to_docx_as_pages` for a PDF with Type3 fonts -
+    see `_pdf_uses_type3_fonts` for why that specific trigger is checked
+    rather than attempting the reconstruction and hoping.
     """
+    if _pdf_uses_type3_fonts(input_path):
+        _convert_to_docx_as_pages(input_path, output_path)
+        return
+
     from pdf2docx import Converter
 
     converter = Converter(input_path)
@@ -44,6 +82,69 @@ def convert_to_docx(input_path: str, output_path: str) -> None:
         converter.convert(output_path)
     finally:
         converter.close()
+
+
+def _convert_to_docx_as_pages(input_path: str, output_path: str) -> None:
+    """
+    One page per page, each rendered whole as a full-bleed image - the docx
+    twin of `convert_to_pptx`'s fallback, and for the same reason: this trades
+    editability for a guarantee the layout is EXACTLY the source PDF's,
+    pixel for pixel, which is the only thing worth guaranteeing once real
+    text reconstruction is known to corrupt itself on this input.
+
+    Each page gets its own docx section sized to that page's own points, so a
+    document mixing portrait and landscape pages (or differently sized pages)
+    still gets a correctly-shaped page for each rather than being forced into
+    one fixed size - the same reasoning `imagesToPdf` in pdf-pages.service.ts
+    applies to a set of scanned images.
+    """
+    import io
+
+    import fitz  # PyMuPDF
+    from docx import Document
+    from docx.enum.section import WD_SECTION
+    from docx.shared import Emu
+
+    # Matches RASTER_DPI in config.ts, so a PDF's pages and the fallback here
+    # come out at the same fidelity as every other raster path in this service.
+    dpi = 150
+    zoom = dpi / 72.0
+    matrix = fitz.Matrix(zoom, zoom)
+    # PDF points are 1/72"; EMUs are 914400 per inch - the ratio a page's own
+    # point-based size converts by, independent of the raster DPI above.
+    emu_per_point = 914400 / 72.0
+
+    document = fitz.open(input_path)
+    try:
+        if document.page_count == 0:
+            raise ValueError('PDF has no pages')
+
+        output = Document()
+        for index, page in enumerate(document):
+            width_emu = Emu(int(round(page.rect.width * emu_per_point)))
+            height_emu = Emu(int(round(page.rect.height * emu_per_point)))
+
+            section = output.sections[0] if index == 0 else output.add_section(WD_SECTION.NEW_PAGE)
+            section.page_width = width_emu
+            section.page_height = height_emu
+            section.left_margin = Emu(0)
+            section.right_margin = Emu(0)
+            section.top_margin = Emu(0)
+            section.bottom_margin = Emu(0)
+            section.header_distance = Emu(0)
+            section.footer_distance = Emu(0)
+
+            pixmap = page.get_pixmap(matrix=matrix)
+            paragraph = output.add_paragraph()
+            paragraph.paragraph_format.space_before = Emu(0)
+            paragraph.paragraph_format.space_after = Emu(0)
+            paragraph.add_run().add_picture(
+                io.BytesIO(pixmap.tobytes('png')), width=width_emu, height=height_emu
+            )
+
+        output.save(output_path)
+    finally:
+        document.close()
 
 
 def convert_to_pptx(input_path: str, output_path: str) -> None:
