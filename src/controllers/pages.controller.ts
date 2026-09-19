@@ -25,7 +25,9 @@ import { isPermutationOfAllPages, parsePageSelection } from '../lib/page-ranges.
 import { BoundedQueue, RateLimiter } from '../lib/queue.ts';
 import { zipStored } from '../lib/zip.ts';
 import {
+  addPageNumbers,
   addWatermark,
+  cropPages,
   imagesToPdf,
   mergePdfs,
   pdfPageCount,
@@ -33,9 +35,11 @@ import {
   rotatePages,
   selectPages,
   splitPdf,
+  type CropMargins,
+  type PageNumberPosition,
   type ScanImage,
 } from '../services/pdf-pages.service.ts';
-import { protectWithQpdf, unlockWithQpdf } from '../services/qpdf.service.ts';
+import { protectWithQpdf, repairWithQpdf, unlockWithQpdf } from '../services/qpdf.service.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest } from '../middleware/request-context.ts';
 
@@ -57,6 +61,9 @@ export interface PagesController {
   watermark: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   protect: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   unlock: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  crop: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  pageNumbers: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  repair: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 }
 
 interface PagesResult {
@@ -371,6 +378,73 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const crop: PagesController['crop'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'crop', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const pageCount = await pdfPageCount(buffer);
+      const margins = parseCropMargins(req.body);
+      const pagesField = req.body?.pages;
+      const indices =
+        typeof pagesField === 'string' && pagesField.trim() !== ''
+          ? parsePageSelection(pagesField, pageCount)
+          : undefined;
+
+      const result = await cropPages(buffer, margins, indices);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const pageNumbers: PagesController['pageNumbers'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'page-numbers', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const position = parsePageNumberPosition(req.body?.position);
+      const startAt = parseStartAt(req.body?.startAt);
+
+      const result = await addPageNumbers(buffer, { position, startAt });
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const repair: PagesController['repair'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'repair', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const workspace = requireWorkspace(req);
+      const outputPath = join(workspace, 'output.pdf');
+      const outcome = await repairWithQpdf({
+        inputPath: file.path,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+      });
+      const result = await readQpdfOutput(outcome, outputPath, { warningsAreSuccess: true });
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
   return {
     admit,
     prepareWorkspace,
@@ -384,6 +458,9 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     watermark,
     protect,
     unlock,
+    crop,
+    pageNumbers,
+    repair,
   };
 }
 
@@ -430,22 +507,68 @@ function parseRotationDegrees(raw: unknown): number {
   return value;
 }
 
+/** A non-negative number from a form field, or `fallback` if it was omitted. */
+function parseNonNegativeNumber(raw: unknown, fieldName: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  if (typeof raw !== 'string' || !/^\d+(\.\d+)?$/.test(raw.trim())) {
+    throw Errors.invalidField(`The "${fieldName}" field must be a non-negative number.`);
+  }
+  return Number.parseFloat(raw);
+}
+
+/** `left`/`right`/`top`/`bottom` for `/pdf/crop`, each in points, defaulting to 0. */
+function parseCropMargins(body: Record<string, unknown> | undefined): CropMargins {
+  return {
+    left: parseNonNegativeNumber(body?.left, 'left', 0),
+    right: parseNonNegativeNumber(body?.right, 'right', 0),
+    top: parseNonNegativeNumber(body?.top, 'top', 0),
+    bottom: parseNonNegativeNumber(body?.bottom, 'bottom', 0),
+  };
+}
+
+const PAGE_NUMBER_POSITIONS: readonly PageNumberPosition[] = ['bottom-center', 'bottom-left', 'bottom-right'];
+
+/** `position` for `/pdf/page-numbers`, defaulting to `bottom-center`. */
+function parsePageNumberPosition(raw: unknown): PageNumberPosition {
+  if (raw === undefined || raw === null || raw === '') return 'bottom-center';
+  if (typeof raw !== 'string' || !PAGE_NUMBER_POSITIONS.includes(raw as PageNumberPosition)) {
+    throw Errors.invalidField(`The "position" field must be one of: ${PAGE_NUMBER_POSITIONS.join(', ')}.`);
+  }
+  return raw as PageNumberPosition;
+}
+
+/** `startAt` for `/pdf/page-numbers`: a positive whole number, defaulting to 1. */
+function parseStartAt(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') return 1;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw.trim()) || Number.parseInt(raw, 10) < 1) {
+    throw Errors.invalidField('The "startAt" field must be a positive whole number.');
+  }
+  return Number.parseInt(raw, 10);
+}
+
 /**
  * Turn a qpdf run into either the bytes it produced or the right AppError.
  *
  * qpdf writes nothing and exits non-zero on failure, so success is "exit 0
- * and a file appeared" - the same "exit code alone carries no information"
- * caution `soffice.service.ts` documents for LibreOffice, checked the same
- * way: look at what actually landed on disk.
+ * (or exit 3, for `/pdf/repair` - see below) and a file appeared" - the same
+ * "exit code alone carries no information" caution `soffice.service.ts`
+ * documents for LibreOffice, checked the same way: look at what actually
+ * landed on disk.
  */
 async function readQpdfOutput(
   outcome: import('../services/soffice.service.ts').ProcessOutcome,
   outputPath: string,
-  options: { wrongPasswordAware?: boolean } = {},
+  options: { wrongPasswordAware?: boolean; warningsAreSuccess?: boolean } = {},
 ): Promise<Buffer> {
   if (outcome.kind === 'timeout') throw Errors.timeout();
   if (outcome.kind === 'aborted') throw new ClientGoneError();
-  if (outcome.kind === 'exited' && outcome.exitCode !== 0) {
+  // qpdf's own exit codes: 0 clean, 3 "warnings only" (the file was still
+  // written), 2 a real error. `/pdf/repair` exists specifically for files
+  // that trigger warnings - a damaged PDF that qpdf could only PARTIALLY
+  // recover is exactly the case this endpoint is for, so exit 3 there is the
+  // expected outcome, not a failure.
+  const acceptable = options.warningsAreSuccess ? [0, 3] : [0];
+  if (outcome.kind === 'exited' && !acceptable.includes(outcome.exitCode ?? -1)) {
     if (options.wrongPasswordAware && /invalid password/i.test(outcome.stderr)) {
       throw Errors.wrongPassword();
     }

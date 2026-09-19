@@ -21,6 +21,7 @@ contract** with a client that is already shipped and cannot be changed.
   - [POST /convert/{target}](#post-converttarget)
   - [POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}](#post-pdfmergesplitremove-pagesextract-pagesorganizescan-to-pdf)
   - [POST /pdf/{rotate,watermark,protect,unlock}](#post-pdfrotatewatermarkprotectunlock)
+  - [POST /pdf/{crop,page-numbers,repair}](#post-pdfcroppage-numbersrepair)
   - [GET /formats](#get-formats)
   - [GET /health](#get-health)
   - [Error reference](#error-reference)
@@ -459,6 +460,49 @@ of the endpoint is that the input is encrypted, and a wrong password against
 it is its own error, `422 E_WRONG_PASSWORD` — distinct from `E_ENCRYPTED`
 because it means something different: not "refused because it's locked" but
 "tried, and that password doesn't open it."
+
+### POST /pdf/{crop,page-numbers,repair}
+
+Three more, rounding out the page-level family.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/crop` | One PDF, field `file`, text fields `left`/`right`/`top`/`bottom` (points, default `0`), optional `pages` | The PDF with the named pages (or all) cropped |
+| `POST /pdf/page-numbers` | One PDF, field `file`, text fields `position` (default `bottom-center`), `startAt` (default `1`) | The PDF with a number drawn on every page |
+| `POST /pdf/repair` | One PDF, field `file` — no other fields | The same PDF, rewritten to fix whatever qpdf's reader could recover |
+
+```bash
+curl -F "file=@scan.pdf" -F "left=10" -F "right=10" -F "top=20" \
+     https://converterapi.example.com/pdf/crop -o scan-cropped.pdf
+
+curl -F "file=@report.pdf" -F "startAt=1" -F "position=bottom-right" \
+     https://converterapi.example.com/pdf/page-numbers -o report-numbered.pdf
+
+curl -F "file=@broken.pdf" \
+     https://converterapi.example.com/pdf/repair -o fixed.pdf
+```
+
+**`crop` and `page-numbers` are `pdf-lib`**, the same as rotate and watermark.
+`crop` shrinks the crop box rather than touching page content — the trimmed
+area still exists in the file, only outside what a viewer or printer shows —
+and refuses margins that would leave nothing with `400 E_INVALID_FIELD` —
+the numbers themselves are the problem, not the document, which is what that
+code means everywhere else it appears. `page-numbers` counts up by one
+starting at `startAt`, for every
+page in document order; there is no "number some pages" mode, because a page
+number that disagrees with its own position in the document would be worse
+than none at all.
+
+**`repair` is `qpdf`**, the same engine as `protect`/`unlock`. Plain
+`qpdf in out` already does the repair: qpdf's own reader recovers what it can
+while parsing a damaged cross-reference table, a truncated update or a broken
+linearization hint stream, and writing the file back out is what makes that
+recovery permanent — the same idea as "open and re-save" fixing a shaky Office
+document. qpdf reports this outcome as **exit code 3** ("warnings, but the
+file was still written"), which this endpoint treats as success — that is
+exactly the case `/pdf/repair` exists for, not a failure. It refuses an
+encrypted input the same as every other page endpoint; there is nowhere to
+put a password on this one.
 
 ### GET /formats
 

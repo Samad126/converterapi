@@ -192,6 +192,83 @@ export async function addWatermark(
   return Buffer.from(await document.save());
 }
 
+export interface CropMargins {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Trim `margins` (in points) off each edge of the named 0-based pages (or
+ * every page), by shrinking the crop box rather than touching the page
+ * content - the trimmed area still exists in the file, it is simply outside
+ * what a viewer shows or a printer prints, which is what "crop" means for a
+ * PDF as opposed to a raster image.
+ *
+ * Validated by the caller against each page's own size: a margin larger than
+ * the page is not a smaller page, it is an inside-out one.
+ */
+export async function cropPages(
+  bytes: Buffer,
+  margins: CropMargins,
+  indices?: readonly number[],
+): Promise<Buffer> {
+  const document = await loadPdf(bytes);
+  const targets = indices ?? document.getPageIndices();
+
+  for (const index of targets) {
+    const page = document.getPage(index);
+    const box = page.getMediaBox();
+    const width = box.width - margins.left - margins.right;
+    const height = box.height - margins.top - margins.bottom;
+    if (width <= 0 || height <= 0) {
+      throw Errors.invalidField(
+        `Cropping page ${index + 1} by these margins would leave nothing: it is ${box.width}x${box.height}pt.`,
+      );
+    }
+    page.setCropBox(box.x + margins.left, box.y + margins.bottom, width, height);
+  }
+
+  return Buffer.from(await document.save());
+}
+
+export type PageNumberPosition = 'bottom-center' | 'bottom-right' | 'bottom-left';
+
+/**
+ * Draw `<startAt + i>` on each page in order, starting from the first of the
+ * named 0-based pages (or the very first page) - there is no "skip these
+ * pages but keep counting" mode, because a page number that disagrees with
+ * its own position in the document is the one thing this feature must never
+ * produce.
+ */
+export async function addPageNumbers(
+  bytes: Buffer,
+  options: { position: PageNumberPosition; startAt: number },
+): Promise<Buffer> {
+  const document = await loadPdf(bytes);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const margin = 24;
+
+  document.getPages().forEach((page, i) => {
+    const label = String(options.startAt + i);
+    const { width } = page.getSize();
+    const fontSize = 10;
+    const textWidth = font.widthOfTextAtSize(label, fontSize);
+
+    const x =
+      options.position === 'bottom-left'
+        ? margin
+        : options.position === 'bottom-right'
+          ? width - margin - textWidth
+          : width / 2 - textWidth / 2;
+
+    page.drawText(label, { x, y: margin / 2, size: fontSize, font, color: rgb(0.3, 0.3, 0.3) });
+  });
+
+  return Buffer.from(await document.save());
+}
+
 export type ScanImageFormat = 'png' | 'jpg';
 
 export interface ScanImage {

@@ -12,6 +12,9 @@
  *   POST /pdf/watermark      one PDF        -> a PDF with `text` stamped across `pages` (or all)
  *   POST /pdf/protect        one PDF        -> the same PDF encrypted with `password`
  *   POST /pdf/unlock         one PDF        -> the same PDF decrypted with `password`
+ *   POST /pdf/crop           one PDF        -> a PDF with `pages` (or all) cropped by margins
+ *   POST /pdf/page-numbers   one PDF        -> a PDF with a number drawn on every page
+ *   POST /pdf/repair         one PDF        -> the same PDF, rewritten to fix what qpdf can recover
  */
 import { Router } from 'express';
 
@@ -104,6 +107,30 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createSinglePdfUploadMiddleware(),
     controller.unlock,
+  );
+
+  router.post(
+    '/pdf/crop',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.crop,
+  );
+
+  router.post(
+    '/pdf/page-numbers',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.pageNumbers,
+  );
+
+  router.post(
+    '/pdf/repair',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.repair,
   );
 
   return router;

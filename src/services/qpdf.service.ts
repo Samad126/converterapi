@@ -68,3 +68,27 @@ export function unlockWithQpdf(run: QpdfRunOptions & { password: string }): Prom
     signal,
   });
 }
+
+/**
+ * Read `inputPath` and rewrite it, fixing whatever qpdf's own reader can
+ * recover from: a corrupt or missing cross-reference table, a truncated
+ * update, a broken linearization hint stream and the like.
+ *
+ * Plain `qpdf in out` already does this - qpdf's reader recovers what it can
+ * while parsing, and simply writing the file back out is what makes that
+ * recovery permanent, the same way "open and re-save" repairs a shaky Office
+ * document. `--replace-input` is deliberately NOT used: this endpoint's
+ * contract is "give me a fixed copy", not "fix the file I gave you", and the
+ * two-path form is what lets a repair attempt fail without touching the
+ * input the request cleans up afterwards either way.
+ */
+export function repairWithQpdf(run: QpdfRunOptions): Promise<ProcessOutcome> {
+  const { inputPath, outputPath, workspace, deadline, signal } = run;
+  return runProcess({
+    bin: QPDF_BIN,
+    args: [inputPath, outputPath],
+    workspace,
+    deadline,
+    signal,
+  });
+}

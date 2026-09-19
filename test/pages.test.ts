@@ -481,3 +481,172 @@ describe('POST /pdf/protect and /pdf/unlock', () => {
     assert.equal(body.error.code, 'E_INVALID_FIELD');
   });
 });
+
+describe('POST /pdf/crop', () => {
+  it('shrinks the page by the given margins on every side', async () => {
+    // buildMinimalPdf's pages are 300x150.
+    const pdf = buildMinimalPdf(['A']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/crop',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { left: '10', right: '20', top: '5', bottom: '15' },
+    );
+
+    assert.equal(response.status, 200);
+    const document = await PDFDocument.load(response.body);
+    const page = document.getPage(0);
+    const box = page.getCropBox();
+    assert.equal(box.x, 10);
+    assert.equal(box.y, 15);
+    assert.equal(box.width, 300 - 10 - 20);
+    assert.equal(box.height, 150 - 5 - 15);
+  });
+
+  it('crops only the named pages', async () => {
+    const pdf = buildMinimalPdf(['A', 'B']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/crop',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { left: '10', pages: '1' },
+    );
+
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getPage(0).getCropBox().x, 10);
+    assert.equal(document.getPage(1).getCropBox().x, 0);
+  });
+
+  it('defaults every margin to 0 - a no-op crop', async () => {
+    const pdf = buildMinimalPdf(['A']);
+    const response = await postPages(server.baseUrl, '/pdf/crop', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: pdf },
+    ]);
+    assert.equal(response.status, 200);
+    const document = await PDFDocument.load(response.body);
+    const box = document.getPage(0).getCropBox();
+    assert.equal(box.width, 300);
+    assert.equal(box.height, 150);
+  });
+
+  it('refuses margins that would leave nothing', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/crop',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { left: '200', right: '200' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('refuses a negative margin', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/crop',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { left: '-5' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});
+
+describe('POST /pdf/page-numbers', () => {
+  it('numbers every page starting at 1 by default', async () => {
+    const pdf = buildMinimalPdf(['A', 'B', 'C']);
+    const response = await postPages(server.baseUrl, '/pdf/page-numbers', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: pdf },
+    ]);
+
+    assert.equal(response.status, 200);
+    // The stamp is drawn near the bottom, well apart from the original text
+    // near the middle - pdftotext reports them as separate lines, so check
+    // both survive rather than asserting one exact concatenated string.
+    assert.match(await pdfPageText(response.body, 1), /A[\s\S]*1|1[\s\S]*A/);
+    assert.match(await pdfPageText(response.body, 2), /B[\s\S]*2|2[\s\S]*B/);
+    assert.match(await pdfPageText(response.body, 3), /C[\s\S]*3|3[\s\S]*C/);
+  });
+
+  it('honours a custom starting number', async () => {
+    const pdf = buildMinimalPdf(['A', 'B']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/page-numbers',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { startAt: '5' },
+    );
+    assert.match(await pdfPageText(response.body, 1), /5/);
+    assert.match(await pdfPageText(response.body, 2), /6/);
+  });
+
+  it('refuses an unknown position', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/page-numbers',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { position: 'top-center' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('refuses a non-positive startAt', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/page-numbers',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { startAt: '0' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});
+
+describe('POST /pdf/repair', () => {
+  it('rewrites a perfectly good PDF unchanged in substance', async () => {
+    const pdf = buildMinimalPdf(['Hello']);
+    const response = await postPages(server.baseUrl, '/pdf/repair', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: pdf },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    assert.equal(await pdfPageText(response.body, 1), 'Hello');
+  });
+
+  it('recovers a PDF with a damaged cross-reference table', async () => {
+    // A qpdf/tests-style corruption: valid objects and trailer, but the
+    // xref table's byte offsets are wrong, forcing qpdf to reconstruct it -
+    // exactly the class of damage this endpoint exists for.
+    const good = buildMinimalPdf(['Recovered']);
+    const text = good.toString('latin1');
+    const damaged = Buffer.from(
+      text.replace(/^(xref\n\d+ \d+\n)([\s\S]*?)(\ntrailer)/, (_m, head, body, tail) => {
+        const corruptedBody = body.replace(/^\d{10}/m, '9999999999');
+        return `${head}${corruptedBody}${tail}`;
+      }),
+      'latin1',
+    );
+
+    const response = await postPages(server.baseUrl, '/pdf/repair', [
+      { filename: 'broken.pdf', fieldName: 'file', bytes: damaged },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(await pdfPageText(response.body, 1), 'Recovered');
+  });
+
+  it('refuses an encrypted PDF', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/repair', [
+      { filename: 'secret.pdf', fieldName: 'file', bytes: buildEncryptedPdfContainer() },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 422);
+    assert.equal(body.error.code, 'E_ENCRYPTED');
+  });
+});
