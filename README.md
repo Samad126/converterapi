@@ -427,7 +427,7 @@ All configuration is environment variables read in
 |---|---|---|
 | `PORT` | `3001` | |
 | `HOST` | `0.0.0.0` | |
-| `TEMP_ROOT` | `$TMPDIR/docx-to-pdf` | Must be writable; should be a tmpfs |
+| `TEMP_ROOT` | `$TMPDIR/file-converter` | Must be writable; should be a tmpfs |
 | `SOFFICE_BIN` | `soffice` | If not on `PATH` |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |

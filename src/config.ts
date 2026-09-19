@@ -48,7 +48,7 @@ export const MAX_CONCURRENT_CONVERSIONS = intFromEnv('MAX_CONCURRENT_CONVERSIONS
 export const MAX_QUEUED_CONVERSIONS = intFromEnv('MAX_QUEUED_CONVERSIONS', 8, 0);
 
 /** Root for per-request temp dirs (input + LO profile + output). */
-export const TEMP_ROOT = process.env.TEMP_ROOT ?? join(tmpdir(), 'docx-to-pdf');
+export const TEMP_ROOT = process.env.TEMP_ROOT ?? join(tmpdir(), 'file-converter');
 
 /**
  * A workspace older than this is assumed to belong to a crashed process.

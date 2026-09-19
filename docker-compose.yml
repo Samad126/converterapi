@@ -18,7 +18,7 @@
 services:
   converter:
     build: .
-    image: docx-to-pdf-converter
+    image: file-converter
     restart: unless-stopped
 
     # --- How your proxy reaches it ------------------------------------------
@@ -67,7 +67,7 @@ services:
       - seccomp=./deploy/seccomp.json
 
     environment:
-      TEMP_ROOT: /tmp/docx-to-pdf
+      TEMP_ROOT: /tmp/file-converter
       MAX_CONCURRENT_CONVERSIONS: '2'
       MAX_QUEUED_CONVERSIONS: '8'
       CONVERT_TIMEOUT_MS: '90000'

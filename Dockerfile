@@ -51,7 +51,7 @@ RUN apt-get update \
 ENV NODE_ENV=production \
     PORT=3001 \
     HOST=0.0.0.0 \
-    TEMP_ROOT=/tmp/docx-to-pdf \
+    TEMP_ROOT=/tmp/file-converter \
     HOME=/tmp
 
 WORKDIR /app
