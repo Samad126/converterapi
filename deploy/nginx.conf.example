@@ -67,7 +67,8 @@ server {
 
         # Hand the upload straight through instead of spooling it to disk
         # first. Optional, but it halves the disk traffic for a 25 MB body.
-        request_buffering off;
+        # Note the name: `proxy_request_buffering`, not `request_buffering`.
+        proxy_request_buffering off;
 
         # The response is a PDF the client saves whole; there is nothing to
         # gain from buffering it.
