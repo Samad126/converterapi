@@ -75,7 +75,7 @@ RUN apt-get update \
 ENV NODE_ENV=production \
     PORT=3001 \
     HOST=0.0.0.0 \
-    TEMP_ROOT=/tmp/file-converter \
+    TEMP_ROOT=/tmp/converterapi \
     HOME=/tmp
 
 WORKDIR /app

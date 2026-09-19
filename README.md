@@ -128,11 +128,11 @@ part of the path and is **required**.
 
 ```bash
 curl -F "file=@report.docx;type=application/octet-stream" \
-     https://converter.example.com/convert/pdf \
+     https://converterapi.example.com/convert/pdf \
      -o report.pdf
 
-curl -F "file=@sheet.csv" https://converter.example.com/convert/xlsx -o sheet.xlsx
-curl -F "file=@deck.pptx" https://converter.example.com/convert/png -o slides.zip
+curl -F "file=@sheet.csv" https://converterapi.example.com/convert/xlsx -o sheet.xlsx
+curl -F "file=@deck.pptx" https://converterapi.example.com/convert/png -o slides.zip
 ```
 
 There is deliberately no bare `/convert` that assumes a format. One address that
@@ -215,7 +215,7 @@ The [conversion matrix](#conversion-matrix) as JSON — every accepted extension
 and every target each one can become.
 
 ```bash
-curl -sS https://converter.example.com/formats | jq '.sources[] | select(.extension==".docx")'
+curl -sS https://converterapi.example.com/formats | jq '.sources[] | select(.extension==".docx")'
 ```
 
 It exists so a client does not have to hard-code the table. The shipped client
@@ -645,7 +645,7 @@ All configuration is environment variables read in
 |---|---|---|
 | `PORT` | `3001` | |
 | `HOST` | `0.0.0.0` | |
-| `TEMP_ROOT` | `$TMPDIR/file-converter` | Must be writable; should be a tmpfs |
+| `TEMP_ROOT` | `$TMPDIR/converterapi` | Must be writable; should be a tmpfs |
 | `SOFFICE_BIN` | `soffice` | If not on `PATH` |
 | `PDFTOPPM_BIN` | `pdftoppm` | If not on `PATH`; needed by the PNG/JPG targets |
 | `RASTER_DPI` | `150` | Resolution of a rasterised page |
@@ -772,7 +772,7 @@ curl -sS http://localhost:3010/health      # {"status":"ok"}
 ### Continuous deployment
 
 Pushing to `master` deploys. [`github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-SSHes into the server, pulls, rebuilds the `converter` service, and then polls
+SSHes into the server, pulls, rebuilds the `converterapi` service, and then polls
 `/health` until it answers — because `docker compose up -d` reports success for
 a container that is about to crashloop, and the health check is what tells the
 two apart.
@@ -812,7 +812,7 @@ ports 80 and 443, which on a server already running nginx means Caddy fails to
 start and takes the deployment with it.
 
 ```bash
-DOMAIN=converter.example.com docker compose --profile proxy up -d --build
+DOMAIN=converterapi.example.com docker compose --profile proxy up -d --build
 ```
 
 Set `DOMAIN` to the hostname the APK uses and Caddy provisions Let's Encrypt
@@ -848,7 +848,7 @@ publishing does not work, so this keeps both properties:
 
 ```yaml
 services:
-  converter:
+  converterapi:
     # no `ports:` at all
     networks:
       backend:
@@ -883,8 +883,8 @@ make it a choice.
 ### Verifying a deployment
 
 ```bash
-curl -sS https://converter.example.com/health
-curl -sS -F "file=@report.docx" https://converter.example.com/convert/pdf -o out.pdf
+curl -sS https://converterapi.example.com/health
+curl -sS -F "file=@report.docx" https://converterapi.example.com/convert/pdf -o out.pdf
 head -c 5 out.pdf        # %PDF-
 ```
 
@@ -892,7 +892,7 @@ And confirm the fonts actually resolved on the running host — this is the chec
 that silently passes while producing wrong pagination:
 
 ```bash
-docker compose exec converter sh -c '
+docker compose exec converterapi sh -c '
   for f in Calibri Cambria Arial "Times New Roman"; do
     printf "%s -> %s\n" "$f" "$(fc-match -f "%{family}" "$f")"
   done'

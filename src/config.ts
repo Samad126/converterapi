@@ -66,7 +66,7 @@ export const MAX_QUEUED_CONVERSIONS = intFromEnv('MAX_QUEUED_CONVERSIONS', 8, 0)
 export const MAX_DOWNLOAD_NAME_LENGTH = intFromEnv('MAX_DOWNLOAD_NAME_LENGTH', 100, 1);
 
 /** Root for per-request temp dirs (input + LO profile + output). */
-export const TEMP_ROOT = process.env.TEMP_ROOT ?? join(tmpdir(), 'file-converter');
+export const TEMP_ROOT = process.env.TEMP_ROOT ?? join(tmpdir(), 'converterapi');
 
 /**
  * A workspace older than this is assumed to belong to a crashed process.

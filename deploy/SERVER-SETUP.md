@@ -15,11 +15,17 @@ Substitute the real values throughout:
 
 ## 1. DNS
 
-`converter.alakbaroff.com` does not resolve yet. Add a record in Cloudflare:
+The **backend** hostname is `converterapi.alakbaroff.com`, and it does not
+resolve yet. Add a record in Cloudflare:
 
 | Type | Name | Content | Proxy |
 | --- | --- | --- | --- |
-| `A` | `converter` | the VPC server's public IP | see below |
+| `A` | `converterapi` | the VPC server's public IP | see below |
+
+`converter.alakbaroff.com` — the **frontend** host — is a different hostname
+with its own server block and its own checkout. It needs its own `A` record
+pointing at the same server, but nothing in this document configures it, and
+the two must not share an nginx `server_name`.
 
 **The proxy setting is not cosmetic — it decides which nginx line is right.**
 
@@ -28,7 +34,7 @@ Substitute the real values throughout:
 - **Proxied** (orange cloud, like `nextudy.alakbaroff.com`): Cloudflare
   terminates TLS at its edge first. Two consequences:
   1. Uncomment the `proxy_set_header X-Forwarded-For $http_cf_connecting_ip;`
-     line in [`converter.alakbaroff.com.conf`](converter.alakbaroff.com.conf).
+     line in [`converterapi.alakbaroff.com.conf`](converterapi.alakbaroff.com.conf).
      Without it, `TRUST_PROXY=1` makes Express trust the one hop and read the
      **Cloudflare edge IP** as the client — so the rate limiter buckets
      everyone at that edge together instead of per phone.
@@ -40,7 +46,7 @@ Substitute the real values throughout:
 Confirm before going further — the deploy cannot work without it:
 
 ```bash
-dig +short converter.alakbaroff.com
+dig +short converterapi.alakbaroff.com
 ```
 
 ---
@@ -62,15 +68,18 @@ docker ps >/dev/null && echo "docker reachable"
 
 ## 3. Clone the repo
 
-The checkout location is hard-coded in the workflow and in this doc. If you
-change it, change it in `.github/workflows/deploy.yml` too:
+The backend checkout lives in a `backend/` subdirectory of the site directory,
+so the frontend can sit alongside it in the parent rather than in a directory
+named after the backend's hostname. The location is hard-coded in the workflow
+and in this doc. If you change it, change it in
+`.github/workflows/deploy.yml` too:
 
 ```bash
-sudo mkdir -p /pool/www/converter.alakbaroff.com
-sudo chown "$USER":"$USER" /pool/www/converter.alakbaroff.com
+sudo mkdir -p /pool/www/converter.alakbaroff.com/backend
+sudo chown "$USER":"$USER" /pool/www/converter.alakbaroff.com/backend
 
-git clone <your-repo-url> /pool/www/converter.alakbaroff.com
-cd /pool/www/converter.alakbaroff.com
+git clone <your-repo-url> /pool/www/converter.alakbaroff.com/backend
+cd /pool/www/converter.alakbaroff.com/backend
 git checkout master
 ```
 
@@ -79,7 +88,7 @@ a deploy key or a read-only token. Check it now rather than discovering it
 inside a failed CI run:
 
 ```bash
-git -C /pool/www/converter.alakbaroff.com pull origin master
+git -C /pool/www/converter.alakbaroff.com/backend pull origin master
 ```
 
 ---
@@ -91,9 +100,9 @@ a port already bound, a seccomp profile the daemon rejects — you want to see i
 here, with the output in front of you, not in a red X on GitHub.
 
 ```bash
-cd /pool/www/converter.alakbaroff.com
-docker compose up -d --build converter
-docker compose logs -f converter
+cd /pool/www/converter.alakbaroff.com/backend
+docker compose up -d --build converterapi
+docker compose logs -f converterapi
 ```
 
 Watch for two JSON lines, in order. These are the boot gates:
@@ -114,7 +123,7 @@ curl -sS http://127.0.0.1:3010/health         # {"status":"ok"}
 
 # The check that silently passes while producing wrong PDFs. Every line must
 # resolve to a metric-compatible substitute, not to a fallback.
-docker compose exec converter sh -c '
+docker compose exec converterapi sh -c '
   for f in Calibri Cambria Arial "Times New Roman"; do
     printf "%s -> %s\n" "$f" "$(fc-match -f "%{family}" "$f")"
   done'
@@ -132,8 +141,8 @@ Sites on this host live in `/etc/nginx/conf.d`, so this is a single-file drop �
 no `sites-available` / `sites-enabled` symlink pair:
 
 ```bash
-sudo cp /pool/www/converter.alakbaroff.com/deploy/converter.alakbaroff.com.conf \
-  /etc/nginx/conf.d/converter.alakbaroff.com.conf
+sudo cp /pool/www/converter.alakbaroff.com/backend/deploy/converterapi.alakbaroff.com.conf \
+  /etc/nginx/conf.d/converterapi.alakbaroff.com.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -150,9 +159,9 @@ Then confirm TLS actually serves the hostname — `*.alakbaroff.com` must cover
 it, and this is where you find out:
 
 ```bash
-echo | openssl s_client -connect localhost:443 -servername converter.alakbaroff.com 2>/dev/null \
+echo | openssl s_client -connect localhost:443 -servername converterapi.alakbaroff.com 2>/dev/null \
   | openssl x509 -noout -subject -dates
-curl -sS https://converter.alakbaroff.com/health
+curl -sS https://converterapi.alakbaroff.com/health
 ```
 
 ---
@@ -175,9 +184,9 @@ even though the values are identical. The workflow will fail on a missing
 From the CLI, which prompts for the value without echoing it:
 
 ```bash
-gh secret set SSH_HOST     --repo Samad126/file-converter
-gh secret set SSH_USER     --repo Samad126/file-converter
-gh secret set SSH_PASSWORD --repo Samad126/file-converter
+gh secret set SSH_HOST     --repo Samad126/converterapi
+gh secret set SSH_USER     --repo Samad126/converterapi
+gh secret set SSH_PASSWORD --repo Samad126/converterapi
 ```
 
 The port `44544` and the deploy path are inline in the workflow rather than
@@ -191,24 +200,24 @@ more than the indirection.
 Push to `master`, then confirm the whole loop:
 
 ```bash
-curl -sS https://converter.alakbaroff.com/health
-curl -sS -F "file=@report.docx" https://converter.alakbaroff.com/convert/pdf -o out.pdf
+curl -sS https://converterapi.alakbaroff.com/health
+curl -sS -F "file=@report.docx" https://converterapi.alakbaroff.com/convert/pdf -o out.pdf
 head -c 5 out.pdf        # %PDF-
 
 # One conversion per document family, since each is a separate LibreOffice
 # module and a container missing one fails only that family.
 printf 'name,qty\nwidget,3\n' > sheet.csv
-curl -sS -F "file=@sheet.csv" https://converter.alakbaroff.com/convert/xlsx -o out.xlsx
+curl -sS -F "file=@sheet.csv" https://converterapi.alakbaroff.com/convert/xlsx -o out.xlsx
 head -c 2 out.xlsx       # PK  (xlsx is a zip package)
 
-curl -sS https://converter.alakbaroff.com/formats | head -c 120
+curl -sS https://converterapi.alakbaroff.com/formats | head -c 120
 ```
 
 The image targets need two binaries working together, so they are worth one
 check of their own — a missing `poppler-utils` breaks nothing else:
 
 ```bash
-curl -sS -F "file=@deck.pptx" https://converter.alakbaroff.com/convert/png -o slides.zip
+curl -sS -F "file=@deck.pptx" https://converterapi.alakbaroff.com/convert/png -o slides.zip
 unzip -l slides.zip      # slide-1.png  slide-2.png  ...
 ```
 

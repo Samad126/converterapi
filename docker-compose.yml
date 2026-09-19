@@ -16,9 +16,9 @@
 # TLS terminates at the proxy, because the Android client speaks https://.
 
 services:
-  converter:
+  converterapi:
     build: .
-    image: file-converter
+    image: converterapi
     restart: unless-stopped
 
     # --- How your proxy reaches it ------------------------------------------
@@ -73,7 +73,7 @@ services:
       - seccomp=./deploy/seccomp.json
 
     environment:
-      TEMP_ROOT: /tmp/file-converter
+      TEMP_ROOT: /tmp/converterapi
       MAX_CONCURRENT_CONVERSIONS: '2'
       MAX_QUEUED_CONVERSIONS: '8'
       CONVERT_TIMEOUT_MS: '90000'
@@ -127,7 +127,7 @@ services:
       # automatically.
       DOMAIN: ${DOMAIN:-localhost}
     depends_on:
-      - converter
+      - converterapi
 
 networks:
   # A NORMAL bridge, deliberately NOT `internal: true`.

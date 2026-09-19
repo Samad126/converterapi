@@ -1,6 +1,6 @@
 # Example nginx site for the converter.
 #
-# Copy to /etc/nginx/conf.d/converter.conf, adjust server_name and the
+# Copy to /etc/nginx/conf.d/converterapi.conf, adjust server_name and the
 # certificate paths, then `nginx -t && systemctl reload nginx`. Keep the .conf
 # extension - the directory is included as `conf.d/*.conf`.
 #
@@ -13,7 +13,7 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name converter.example.com;
+    server_name converterapi.example.com;
 
     # Certbot's webroot, or delete this and the TLS block below if you
     # terminate TLS somewhere else.
@@ -32,10 +32,10 @@ server {
     # nginx 1.25.1+ and fails `nginx -t` on 1.24 with `unknown directive`.
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name converter.example.com;
+    server_name converterapi.example.com;
 
-    ssl_certificate     /etc/letsencrypt/live/converter.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/converter.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/converterapi.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/converterapi.example.com/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
 
     # ---------------------------------------------------------------------
@@ -92,6 +92,6 @@ server {
 
     # Access log. Note the application logs no filenames and no document
     # contents, and neither should this - the request line is enough.
-    access_log /var/log/nginx/converter.access.log;
-    error_log  /var/log/nginx/converter.error.log;
+    access_log /var/log/nginx/converterapi.access.log;
+    error_log  /var/log/nginx/converterapi.error.log;
 }

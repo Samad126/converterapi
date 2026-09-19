@@ -14,7 +14,7 @@
 		max_size 25MB
 	}
 
-	reverse_proxy converter:3001 {
+	reverse_proxy converterapi:3001 {
 		# The application's own deadline is 90s and the client gives up at 120s.
 		# Neither is any use if the proxy cuts the connection first, so give the
 		# app room to answer with its own error rather than a bare 502.
