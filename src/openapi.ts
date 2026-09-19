@@ -2,10 +2,13 @@
  * The OpenAPI description of the client-facing contract.
  *
  * The document itself lives in `openapi.yaml` at the repository root rather
- * than being generated from code. With two endpoints, generating it would mean
- * another dependency and a restructured router for very little gain, and the
- * thing worth pinning down here is the exact wire contract - which reads
- * better as a document than as annotations.
+ * than being generated from code. Generating it would mean another dependency
+ * and a router rebuilt around decorators, for very little gain: the thing worth
+ * pinning down here is the exact wire contract, and that reads better as a
+ * document than as annotations scattered across the handlers.
+ *
+ * The one thing generation would have given us - that the document cannot
+ * drift from the code - is bought instead by `test/openapi.test.ts`.
  *
  * The obvious risk with a hand-written spec is that it drifts. That is what
  * `test/openapi.test.ts` is for: it compares the statuses, codes and the exact
@@ -84,7 +87,7 @@ export function swaggerUiHtml(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Word to PDF converter - API</title>
+<title>Universal file converter - API</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 <style>body { margin: 0; }</style>
 </head>

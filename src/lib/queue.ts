@@ -11,8 +11,12 @@
  * So: a fixed number of slots, a short waiting room, and an honest 503 E_BUSY
  * for everything beyond that. A prompt "try again in a moment" is a far better
  * answer than a request that hangs for two minutes and then dies.
+ *
+ * One slot covers a whole request, not one soffice process. A PNG request runs
+ * two subprocesses (soffice, then the rasteriser) and holds its slot across
+ * both, because the expensive resource is the machine, not the process count.
  */
-import { Errors } from './errors.ts';
+import { Errors } from '../errors.ts';
 
 export interface QueueStats {
   running: number;

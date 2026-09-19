@@ -194,9 +194,26 @@ Push to `master`, then confirm the whole loop:
 curl -sS https://converter.alakbaroff.com/health
 curl -sS -F "file=@report.docx" https://converter.alakbaroff.com/convert -o out.pdf
 head -c 5 out.pdf        # %PDF-
+
+# One conversion per document family, since each is a separate LibreOffice
+# module and a container missing one fails only that family.
+printf 'name,qty\nwidget,3\n' > sheet.csv
+curl -sS -F "file=@sheet.csv" https://converter.alakbaroff.com/convert/xlsx -o out.xlsx
+head -c 2 out.xlsx       # PK  (xlsx is a zip package)
+
+curl -sS https://converter.alakbaroff.com/formats | head -c 120
 ```
 
-Note the deploy step's health poll and this `curl` are not redundant. The
-pipeline one asks *is the container alive on its loopback port*; this one asks
-*is the whole path — DNS, TLS, Cloudflare, nginx, proxy pass — actually
-serving*. nginx can be down while the container is perfectly healthy.
+The image targets need two binaries working together, so they are worth one
+check of their own — a missing `poppler-utils` breaks nothing else:
+
+```bash
+curl -sS -F "file=@deck.pptx" https://converter.alakbaroff.com/convert/png -o slides.zip
+unzip -l slides.zip      # slide-1.png  slide-2.png  ...
+```
+
+Note the deploy step's health poll and these `curl`s are not redundant. The
+pipeline one asks *is the container alive on its loopback port*; these ask *is
+the whole path — DNS, TLS, Cloudflare, nginx, proxy pass — actually serving*,
+and whether every module the image needs is really in it. nginx can be down
+while the container is perfectly healthy.

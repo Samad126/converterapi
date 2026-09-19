@@ -1,7 +1,7 @@
 /**
  * Unit tests for the parts that are worth pinning down without a subprocess:
- * the concurrency bound, the rate limiter, password detection, and the exact
- * user-facing strings.
+ * the conversion matrix, the concurrency bound, the rate limiter, password
+ * detection, the ZIP writer, and the exact user-facing strings.
  */
 import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,13 +12,32 @@ import { join } from 'node:path';
 // Must be set before config.ts is imported - see the note in helpers.ts.
 process.env.TEMP_ROOT = await fsp.mkdtemp(join(tmpdir(), 'converter-unit-'));
 
-const { BoundedQueue, RateLimiter } = await import('../src/queue.ts');
+const { BoundedQueue, RateLimiter } = await import('../src/lib/queue.ts');
 const { Errors, AppError, ClientGoneError } = await import('../src/errors.ts');
-const { buildMinimalDocx, isPasswordProtected, createWorkspace, removeWorkspace, sweepStaleWorkspaces, inputFileNameFor } =
-  await import('../src/convert.ts');
-const { MAX_UPLOAD_BYTES, TEMP_ROOT, ALLOWED_EXTENSIONS, isAllowedExtension } = await import(
-  '../src/config.ts'
+const {
+  ALLOWED_EXTENSIONS,
+  SOURCES,
+  TARGETS,
+  TARGET_IDS,
+  isAllowedExtension,
+  isTargetId,
+  pdfFilterFor,
+  resolveConversion,
+  targetsFor,
+  validateMatrix,
+} = await import('../src/formats.ts');
+const { isPasswordProtected } = await import('../src/lib/encrypted.ts');
+const {
+  createWorkspace,
+  removeWorkspace,
+  sweepStaleWorkspaces,
+  inputFileNameFor,
+} = await import('../src/services/workspace.service.ts');
+const { zipStored, safeEntryName } = await import('../src/lib/zip.ts');
+const { buildMinimalDocx, buildMinimalOdp, buildSolidPng } = await import(
+  '../src/lib/probe-documents.ts'
 );
+const { MAX_UPLOAD_BYTES, TEMP_ROOT } = await import('../src/config.ts');
 const {
   buildEncryptedDocxContainer,
   buildEncryptedLegacyDoc,
@@ -27,6 +46,162 @@ const {
 
 after(async () => {
   await fsp.rm(TEMP_ROOT, { recursive: true, force: true });
+});
+
+describe('conversion matrix', () => {
+  it('is internally consistent', () => {
+    // Throws if a source advertises a target it has no filter for, if a target
+    // id is misspelled, or if a source lists its own format. Called explicitly
+    // so a regression names itself here rather than at the import.
+    assert.doesNotThrow(() => validateMatrix());
+  });
+
+  it('accepts every extension the documentation lists', () => {
+    assert.equal(ALLOWED_EXTENSIONS.length, 16);
+    for (const extension of ALLOWED_EXTENSIONS) {
+      assert.equal(isAllowedExtension(extension), true, extension);
+    }
+    // Prototype keys must not fool the allowlist check.
+    assert.equal(isAllowedExtension('constructor'), false);
+    assert.equal(isAllowedExtension('.DOCX'), false, 'callers must lower-case first');
+    assert.equal(isAllowedExtension('.pdf'), false, 'PDF is a target, not a source');
+    assert.equal(isAllowedExtension(''), false);
+  });
+
+  it('resolves every advertised source/target pair to a real filter', () => {
+    for (const extension of ALLOWED_EXTENSIONS) {
+      const targets = targetsFor(extension);
+      assert.ok(targets.length > 0, `${extension} can become nothing`);
+      for (const target of targets) {
+        const resolved = resolveConversion(extension, target);
+        assert.ok(resolved, `${extension} -> ${target} does not resolve`);
+
+        if (TARGETS[target].mode === 'raster') {
+          // A raster target has no filter of its own: it is rendered to PDF
+          // first and the pages are split afterwards, so the only filter it
+          // depends on is the family's PDF export.
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          assert.ok(pdfFilterFor(SOURCES[extension].family), `${extension} has no PDF export`);
+          continue;
+        }
+
+        assert.notEqual(resolved.convertTo, '', `${extension} -> ${target} has no filter`);
+        // The filter argument always starts with the output extension, which is
+        // how soffice knows what to write.
+        assert.ok(
+          resolved.convertTo.startsWith(`${TARGETS[target].extension.slice(1)}:`),
+          `${extension} -> ${target}: unexpected filter "${resolved.convertTo}"`,
+        );
+      }
+    }
+  });
+
+  it('refuses pairs the matrix does not list', () => {
+    // Real targets, wrong family.
+    assert.equal(resolveConversion('.docx', 'png'), null, 'docx is not a slide deck');
+    assert.equal(resolveConversion('.docx', 'xlsx'), null, 'docx is not a spreadsheet');
+    assert.equal(resolveConversion('.png', 'docx'), null, 'an image is not a document');
+    // A source is never its own target.
+    assert.equal(resolveConversion('.docx', 'docx'), null);
+    assert.equal(resolveConversion('.csv', 'csv'), null);
+  });
+
+  it('keeps the Word-to-PDF promises the shipped client depends on', () => {
+    // The Android client posts to /convert with a .docx and expects a PDF, so
+    // these three and their target are a contract, not a feature.
+    for (const extension of ['.docx', '.docm', '.doc'] as const) {
+      assert.ok(targetsFor(extension).includes('pdf'), `${extension} lost its PDF target`);
+      const resolved = resolveConversion(extension, 'pdf');
+      assert.equal(resolved?.convertTo, 'pdf:writer_pdf_Export');
+      assert.equal(resolved?.target.mediaType, 'application/pdf');
+    }
+  });
+
+  it('exposes every target under a distinct id and extension', () => {
+    const extensions = new Set<string>();
+    for (const id of TARGET_IDS) {
+      assert.equal(isTargetId(id), true);
+      const target = TARGETS[id];
+      assert.equal(target.id, id);
+      assert.ok(target.extension.startsWith('.'), `${id} has a bare extension`);
+      assert.ok(target.mediaType.length > 0, `${id} has no media type`);
+      assert.equal(extensions.has(target.extension), false, `${target.extension} is used twice`);
+      extensions.add(target.extension);
+    }
+    assert.equal(isTargetId('banana'), false);
+    assert.equal(isTargetId('constructor'), false);
+  });
+
+  it('routes only presentations to the raster pipeline', () => {
+    // A raster target is rendered to PDF and split into images, which only
+    // means anything for a document with pages to show.
+    for (const id of TARGET_IDS) {
+      if (TARGETS[id].mode !== 'raster') continue;
+      for (const extension of ALLOWED_EXTENSIONS) {
+        if (!targetsFor(extension).includes(id)) continue;
+        assert.equal(
+          SOURCES[extension].family,
+          'impress',
+          `${extension} -> ${id} is not a presentation`,
+        );
+      }
+    }
+  });
+});
+
+describe('zip writer', () => {
+  it('round-trips entry names through the central directory', () => {
+    const archive = zipStored([
+      { name: 'slide-1.png', data: Buffer.from('one') },
+      { name: 'slide-2.png', data: Buffer.from('two') },
+    ]);
+    // Signature of the first local file header, and the end-of-central-directory
+    // magic somewhere at the end.
+    assert.equal(archive.readUInt32LE(0), 0x04034b50);
+    assert.ok(archive.subarray(-22).readUInt32LE(0) === 0x06054b50);
+    assert.ok(archive.includes(Buffer.from('slide-1.png')));
+    assert.ok(archive.includes(Buffer.from('slide-2.png')));
+  });
+
+  it('refuses to write a name that could escape on unpack', () => {
+    // Zip-slip defence: the archive is ours, but a name is a name.
+    assert.equal(safeEntryName('../../etc/passwd'), 'etc/passwd');
+    assert.equal(safeEntryName('/absolute/path.txt'), 'absolute/path.txt');
+    assert.equal(safeEntryName('..'), 'file');
+    assert.equal(safeEntryName(''), 'file');
+    assert.equal(safeEntryName('a/./b.txt'), 'a/b.txt');
+  });
+});
+
+describe('probe documents', () => {
+  it('builds a docx that is a real OOXML package', () => {
+    const docx = buildMinimalDocx(['hello']);
+    assert.equal(docx.readUInt32LE(0), 0x04034b50, 'not a zip');
+    assert.ok(docx.includes(Buffer.from('[Content_Types].xml')));
+    assert.ok(docx.includes(Buffer.from('word/document.xml')));
+  });
+
+  it('builds an ODP whose mimetype entry comes first and is stored', () => {
+    const odp = buildMinimalOdp(['one', 'two']);
+    assert.equal(odp.readUInt32LE(0), 0x04034b50, 'not a zip');
+    // ODF requires the mimetype entry first, and stored rather than deflated -
+    // it is how a consumer recognises the format from the first bytes.
+    const nameLength = odp.readUInt16LE(26);
+    const name = odp.subarray(30, 30 + nameLength).toString('utf8');
+    assert.equal(name, 'mimetype');
+    assert.equal(odp.readUInt16LE(8), 0, 'mimetype entry must not be compressed');
+    assert.ok(odp.includes(Buffer.from('application/vnd.oasis.opendocument.presentation')));
+  });
+
+  it('builds a PNG with a valid signature and IHDR', () => {
+    const png = buildSolidPng(4, 3, [10, 20, 30]);
+    assert.deepEqual(
+      [...png.subarray(0, 8)],
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    );
+    assert.equal(png.readUInt32BE(16), 4, 'width');
+    assert.equal(png.readUInt32BE(20), 3, 'height');
+  });
 });
 
 describe('BoundedQueue', () => {
@@ -153,10 +328,16 @@ describe('error envelope', () => {
       [Errors.timeout(), 504, 'E_TIMEOUT', 'This document took too long to convert.'],
       [Errors.encrypted(), 422, 'E_ENCRYPTED', 'This document is password protected.'],
       [
-        Errors.unsupported(),
+        Errors.unsupportedTarget('.docx', ['pdf', 'odt']),
         415,
-        'E_UNSUPPORTED',
-        'Only Word documents (.docx, .docm, .doc) can be converted.',
+        'E_UNSUPPORTED_TARGET',
+        'A .docx file can be converted to: PDF, ODT.',
+      ],
+      [
+        Errors.unknownTarget(['pdf', 'csv']),
+        404,
+        'E_UNKNOWN_TARGET',
+        'That is not a format this converter can produce. Available: PDF, CSV.',
       ],
       [Errors.tooLarge(), 413, 'E_TOO_LARGE', 'This document is too large to convert.'],
       [Errors.busy(), 503, 'E_BUSY', 'The converter is busy. Try again in a moment.'],
@@ -169,13 +350,37 @@ describe('error envelope', () => {
   });
 
   it('writes messages for people, not for logs', () => {
-    for (const error of Object.values(Errors)) {
-      const produced = (error as () => AppError)().toEnvelope().error.message;
+    // Every error, with the arguments a real request would give it - the point
+    // is the RENDERED sentence, so a factory that leaks a raw argument into the
+    // text would be caught here.
+    const samples: AppError[] = [
+      Errors.convertFailed(),
+      Errors.timeout(),
+      Errors.encrypted(),
+      Errors.unsupported(),
+      Errors.unsupportedTarget('.docx', ['pdf', 'odt', 'txt']),
+      Errors.unknownTarget(['pdf', 'odt']),
+      Errors.tooLarge(),
+      Errors.busy(),
+      Errors.badRequest('no file part named "file"'),
+      Errors.rateLimited(),
+      Errors.internal(),
+    ];
+
+    for (const error of samples) {
+      const produced = error.toEnvelope().error.message;
       assert.match(produced, /[.!?]$/, `not a sentence: ${produced}`);
       assert.doesNotMatch(produced, /\/|stack|Error:|undefined|null/i, `leaks internals: ${produced}`);
       // No codes in the text: the code is for logs only.
       assert.doesNotMatch(produced, /E_[A-Z_]+/, `mentions a code: ${produced}`);
     }
+  });
+
+  it('names what a document COULD become, not just that it failed', () => {
+    // The useful answer to "can I have this as PNG" is what you can have instead.
+    const message = Errors.unsupportedTarget('.docx', targetsFor('.docx')).toEnvelope()
+      .error.message;
+    assert.match(message, /PDF, ODT, TXT, HTML, RTF, EPUB/);
   });
 });
 
@@ -209,6 +414,13 @@ describe('password-protected detection', () => {
 
   it('leaves a normal .docx alone', async () => {
     const path = await write('a.docx', buildMinimalDocx(['hello']));
+    assert.equal(await isPasswordProtected(path), false);
+  });
+
+  it('leaves an ODP alone', async () => {
+    // An ODF package is a zip, so it can never be a CFB container - the
+    // detector must not misread the prefix of a zip as one.
+    const path = await write('a.odp', buildMinimalOdp(['one']));
     assert.equal(await isPasswordProtected(path), false);
   });
 
@@ -251,18 +463,9 @@ describe('config', () => {
     assert.equal(MAX_UPLOAD_BYTES, 25 * 1024 * 1024);
   });
 
-  it('accepts exactly the three Word extensions', () => {
-    assert.deepEqual([...ALLOWED_EXTENSIONS].sort(), ['.doc', '.docm', '.docx']);
-    assert.equal(isAllowedExtension('.docx'), true);
-    assert.equal(isAllowedExtension('.DOCX'), false, 'callers must lower-case first');
-    assert.equal(isAllowedExtension('.pdf'), false);
-    assert.equal(isAllowedExtension(''), false);
-    // Prototype keys must not fool the allowlist check.
-    assert.equal(isAllowedExtension('constructor'), false);
-  });
-
   it('names the on-disk upload from the validated extension only', () => {
     assert.equal(inputFileNameFor('.docx'), 'input.docx');
-    assert.equal(inputFileNameFor('.doc'), 'input.doc');
+    assert.equal(inputFileNameFor('.odp'), 'input.odp');
+    assert.equal(inputFileNameFor('.csv'), 'input.csv');
   });
 });

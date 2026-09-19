@@ -22,6 +22,24 @@ FROM node:22-bookworm-slim AS runtime
 
 # LibreOffice headless is the conversion engine.
 #
+# ALL FOUR APPLICATION MODULES ARE REQUIRED, not just the writer. They are
+# separate packages, and a container with only libreoffice-writer converts every
+# Word document perfectly while failing every spreadsheet and every presentation
+# - silently, because the writer module does not know or care that Calc is
+# missing. That was the shape of this image before the service became a
+# universal converter.
+#
+#   writer   .docx .docm .doc .odt .rtf .txt .html .epub
+#   calc     .xlsx .ods .csv
+#   impress  .pptx .odp, and the PNG/JPG targets
+#   draw     the image sources (.png .jpg .jpeg -> PDF)
+#
+# poppler-utils is the rasteriser. It is NOT an optimisation: LibreOffice's
+# command-line image export writes only the FIRST slide of a presentation, and
+# ignores the PageRange filter option that is supposed to change that. Rendering
+# an intermediate PDF is the only way to get one image per slide, which is what
+# the PNG/JPG targets promise.
+#
 # The font packages are NOT optional and NOT cosmetic. Calibri and Cambria do
 # not exist on Linux; without metric-compatible substitutes LibreOffice picks a
 # font with different glyph widths, so every line breaks in a different place
@@ -34,11 +52,17 @@ FROM node:22-bookworm-slim AS runtime
 # compatible set above is a drop-in replacement for the metrics that pagination
 # actually depends on. See README "Fonts".
 #
-# The service refuses to boot without these (see preflight() in src/convert.ts),
-# so a mistake here fails loudly at startup rather than silently in production.
+# The service refuses to boot without any of this. Preflight checks soffice,
+# `pdftoppm` and the fonts, and then converts one real document per family
+# before it listens - so a missing module fails loudly at startup rather than on
+# some user's first spreadsheet, days later.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer \
+      libreoffice-calc \
+      libreoffice-impress \
+      libreoffice-draw \
+      poppler-utils \
       fonts-crosextra-carlito \
       fonts-crosextra-caladea \
       fonts-liberation \

@@ -1,28 +1,33 @@
-# Word → PDF converter
+# Universal file converter
 
-A minimal Node.js service that converts Word documents to PDF using LibreOffice
-headless. It is the backend for an Android app that uploads a document and
-receives a PDF.
+A Node.js service that converts documents, spreadsheets, presentations and
+images between formats using LibreOffice headless. It began as the backend for
+an Android app that uploads a Word document and receives a PDF, and that
+contract still holds exactly.
 
-Two endpoints, no database, no state. The interesting parts are the things that
-are easy to get subtly wrong: **font metrics** (which decide pagination),
-**per-process LibreOffice profiles** (which decide whether concurrent
-conversions work at all), and the **error contract** with a client that is
-already shipped and cannot be changed.
+No database, no state. The interesting parts are the things that are easy to get
+subtly wrong: **font metrics** (which decide pagination), **per-process
+LibreOffice profiles** (which decide whether concurrent conversions work at
+all), **which export filter belongs to which document family**, and the **error
+contract** with a client that is already shipped and cannot be changed.
 
 ---
 
 ## Contents
 
 - [Quick start](#quick-start)
+- [Conversion matrix](#conversion-matrix)
 - [API](#api)
   - [POST /convert](#post-convert)
+  - [POST /convert/{target}](#post-converttarget)
+  - [GET /formats](#get-formats)
   - [GET /health](#get-health)
   - [Error reference](#error-reference)
   - [Wire-compatibility constraints](#wire-compatibility-constraints)
 - [API documentation (OpenAPI)](#api-documentation-openapi)
 - [Fonts, and why they are not optional](#fonts-and-why-they-are-not-optional)
 - [How conversion works](#how-conversion-works)
+- [Image targets, and why they need poppler](#image-targets-and-why-they-need-poppler)
 - [Concurrency model](#concurrency-model)
 - [Cleanup and temp files](#cleanup-and-temp-files)
 - [Operational limits](#operational-limits)
@@ -34,6 +39,49 @@ already shipped and cannot be changed.
 
 ---
 
+## Conversion matrix
+
+What the service accepts, and what each input can become. This table is
+implemented in [`src/formats.ts`](src/formats.ts) and served at
+[`GET /formats`](#get-formats); the two are kept in step by
+[`test/unit.test.ts`](test/unit.test.ts).
+
+| From | To |
+|---|---|
+| `.docx` `.docm` `.doc` | PDF, ODT, TXT, HTML, RTF, EPUB |
+| `.xlsx` | PDF, ODS, CSV, HTML |
+| `.pptx` | PDF, ODP, PNG/JPG (one image per slide) |
+| `.odt` | PDF, DOCX |
+| `.ods` | PDF, XLSX |
+| `.odp` | PDF, PPTX, PNG/JPG (one image per slide) |
+| `.csv` | XLSX, ODS, PDF |
+| `.txt` | PDF, DOCX, ODT |
+| `.html` `.htm` | PDF, DOCX, ODT |
+| `.rtf` | DOCX, PDF, ODT |
+| `.png` `.jpg` `.jpeg` | PDF |
+
+Every filter name in that table was verified by running the real conversion
+against LibreOffice 24.2. That is not ceremony: **a wrong filter name is not an
+error**. LibreOffice silently falls back to the default export filter for the
+target, producing a file of the right type with the wrong content.
+
+The reverse-direction rows (`.odt` → `.docx`, `.ods` → `.xlsx`, `.odp` →
+`.pptx`) are deliberately short — they are what the table promises, and a target
+we advertise is a target we have to keep working. Extending one is a single line
+in `src/formats.ts`, and `validateMatrix()` runs at import time to make sure the
+tables cannot contradict each other.
+
+The image targets are offered from **both** `.pptx` and `.odp`. They are the
+same kind of document and the pipeline behind them is identical, so the
+asymmetry would be an artefact of the table rather than of anything the
+conversion engine cares about.
+
+A request for a target that exists but is not reachable from your source is a
+`415` whose message lists what that source *can* become. A target that does not
+exist at all is a `404`.
+
+---
+
 ## Quick start
 
 ```bash
@@ -42,15 +90,20 @@ npm run build
 npm start          # http://localhost:3001
 ```
 
-The service **refuses to boot** if LibreOffice is missing or the
-metric-compatible fonts are not installed — see [Fonts](#fonts-and-why-they-are-not-optional).
-On a bare Debian/Ubuntu box:
+The service **refuses to boot** if LibreOffice is missing, if the rasteriser is
+missing, or if the metric-compatible fonts are not installed — see
+[Fonts](#fonts-and-why-they-are-not-optional). On a bare Debian/Ubuntu box:
 
 ```bash
-sudo apt-get install -y libreoffice-writer \
+sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
+  poppler-utils \
   fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig
 sudo fc-cache -f
 ```
+
+All four LibreOffice modules are required, not just the writer. They are
+separate packages, and a machine with only `libreoffice-writer` converts every
+Word document perfectly while failing every spreadsheet and every presentation.
 
 Or just use Docker, which installs all of it:
 
@@ -71,6 +124,9 @@ running" in one line.
 
 ### POST /convert
 
+Converts to PDF. This is the path the shipped Android client posts to, and its
+contract is fixed.
+
 `multipart/form-data` with exactly one file part named `file`.
 
 ```bash
@@ -81,8 +137,8 @@ curl -F "file=@report.docx;type=application/octet-stream" \
 
 The import filter is chosen from the **filename extension**, not the declared
 MIME type — the client deliberately sends `application/octet-stream`, and a
-hostile client could declare anything at all. Accepted: `.docx`, `.docm`, `.doc`
-(case-insensitive).
+hostile client could declare anything at all. Any extension in the
+[conversion matrix](#conversion-matrix) is accepted (case-insensitive).
 
 **Success** — `200`, `Content-Type: application/pdf`, body is the PDF bytes.
 
@@ -96,21 +152,58 @@ hostile client could declare anything at all. Accepted: `.docx`, `.docm`, `.doc`
 person: a complete sentence, no stack traces, no paths, no codes. `code` is for
 logs and metrics only — the client never shows it.
 
+### POST /convert/{target}
+
+Converts to the named format: `/convert/xlsx`, `/convert/epub`, `/convert/png`.
+`POST /convert` is exactly `POST /convert/pdf`.
+
+```bash
+curl -F "file=@sheet.csv" https://converter.example.com/convert/xlsx -o sheet.xlsx
+curl -F "file=@deck.pptx" https://converter.example.com/convert/png -o slides.zip
+```
+
+**Success** — `200` with the target's own media type, and a
+`Content-Disposition` filename.
+
+The **image targets are the exception**: `png` and `jpg` answer with
+`application/zip` containing `slide-1.png`, `slide-2.png`, … — one image per
+page. That is true even for a one-page document, deliberately: if the content
+type varied with the page count, every client would have to sniff what it
+received to know whether to unzip it.
+
+### GET /formats
+
+The [conversion matrix](#conversion-matrix) as JSON — every accepted extension,
+and every target each one can become.
+
+```bash
+curl -sS https://converter.example.com/formats | jq '.sources[] | select(.extension==".docx")'
+```
+
+It exists so a client does not have to hard-code the table. The shipped client
+is an **APK**, so without this, teaching it a new output format would mean
+shipping a new APK — and a client that hard-codes the matrix will silently
+disagree with the server the first time the server grows.
+
 ### GET /health
 
 Returns `200 {"status":"ok"}`. The service only starts listening after
-LibreOffice has been confirmed on `PATH`, so reaching this endpoint at all is
-the confirmation.
+LibreOffice, the rasteriser and the fonts have been confirmed **and one real
+conversion has succeeded for every document family** — so reaching this
+endpoint at all means the whole matrix is ready, not merely that the process is
+up.
 
 ### Error reference
 
 | Status | Code | Message (shown verbatim to the user) |
 |---|---|---|
-| `200` | — | *(the PDF)* |
+| `200` | — | *(the converted file)* |
 | `500` | `E_CONVERT_FAILED` | This document could not be converted. It may be damaged or in a format the converter does not support. |
 | `504` | `E_TIMEOUT` | This document took too long to convert. |
 | `422` | `E_ENCRYPTED` | This document is password protected. |
-| `415` | `E_UNSUPPORTED` | Only Word documents (.docx, .docm, .doc) can be converted. |
+| `415` | `E_UNSUPPORTED` | This file type cannot be converted. Supported types: .docx, .docm, .doc, … |
+| `415` | `E_UNSUPPORTED_TARGET` | A .docx file can be converted to: PDF, ODT, TXT, HTML, RTF, EPUB. |
+| `404` | `E_UNKNOWN_TARGET` | That is not a format this converter can produce. Available: PDF, ODT, DOCX, … |
 | `413` | `E_TOO_LARGE` | This document is too large to convert. |
 | `503` | `E_BUSY` | The converter is busy. Try again in a moment. |
 | `400` | `E_BAD_REQUEST` | The document could not be received. Please try again. |
@@ -118,7 +211,11 @@ the confirmation.
 | `500` | `E_INTERNAL` | Something went wrong on the server. |
 | `404` | `E_BAD_REQUEST` | The converter is not available at this address. Please update the app and try again. |
 
-The last three are additions, not part of the original contract: a request with
+The three `E_...` messages that end in a list are long on purpose. They are the
+only place a client can discover the matrix from an error, and a person told
+"that conversion is not supported" needs to know what is.
+
+Most of these are additions, not part of the original contract: a request with
 no file part, a per-IP rate limit, and an unrecognised path. They are additive
 and cannot break a shipped client, which falls back to `HTTP <status>` for
 anything it does not recognise.
@@ -190,6 +287,13 @@ exists to prevent that, and it is not a formality. It checks:
 - every example message in the document is byte-for-byte a message
   `src/errors.ts` produces — this is the assertion that protects the user-facing
   copy;
+- the document's `TargetId` enum is exactly the set of targets
+  [`src/formats.ts`](src/formats.ts) implements — a documented target the router
+  does not know is a `404` on a format the docs promise, and a target the router
+  knows but the docs omit is invisible to every client;
+- the long enumeration messages (supported types, a source's possible targets)
+  match the matrix, so adding a format to the table fails this test until the
+  user-facing copy is updated with it;
 - `x-max-upload-bytes` equals `MAX_UPLOAD_BYTES`;
 - every response the endpoints *actually return* is one the document says is
   possible, checked by exercising them against real conversions.
@@ -269,13 +373,23 @@ fc-match Cambria     # want: Caladea
 
 ## How conversion works
 
-LibreOffice is invoked as a subprocess:
+LibreOffice is invoked as a subprocess, once per request:
 
 ```
 soffice --headless --norestore --invisible --nolockcheck --nodefault --nofirststartwizard \
   -env:UserInstallation=file:///<tmpdir>/lo-profile \
   --convert-to pdf:writer_pdf_Export --outdir <tmpdir> <input>
 ```
+
+The `--convert-to` argument is `<extension>:<filter>`, and both halves come from
+the matrix in [`src/formats.ts`](src/formats.ts). Filters are named after the
+**document family**, not the file type, which is why the same request looks
+different depending on the source: PDF is `writer_pdf_Export` from Writer,
+`calc_pdf_Export` from Calc, `impress_pdf_Export` from Impress and
+`draw_pdf_Export` from Draw. Some targets also need filter options — CSV export
+takes nine positional options for separator, encoding and quoting, and plain
+text takes an explicit `UTF8`, without which non-ASCII becomes question marks
+while the conversion still reports success.
 
 No npm library is involved. No library paginates `.docx` correctly — that is a
 layout engine, not a file-format problem — and routing through HTML (Puppeteer
@@ -309,7 +423,11 @@ like this. Each request gets its own profile directory inside its own temp dir.
 - **The exit code is not trusted.** `--convert-to` **exits 0 even when it
   fails** — a corrupt document prints `Error: source file could not be loaded`
   and still returns status 0. The only trustworthy signal is whether a non-empty
-  file that actually starts with `%PDF-` appeared in the output directory.
+  file of the expected type appeared in the output directory, so that is what is
+  checked — by extension, and by magic bytes for PDF, PNG and JPEG.
+- **One deadline covers the whole pipeline**, not each process. A PNG request
+  runs two subprocesses, and what is being rationed is the client's patience,
+  not any one process's runtime.
 
 ### Password-protected documents
 
@@ -322,10 +440,57 @@ ECMA-376 encryption wraps the package in an OLE/CFB container holding an
 `EncryptedPackage` stream, so an encrypted `.docx` stops being a ZIP. Legacy
 `.doc` files are CFB either way and set `fEncrypted` (or `fObfuscated`) in the
 FIB. Both are checked by a small CFB reader in
-[`src/convert.ts`](src/convert.ts). It is best-effort by design: anything it
-cannot parse confidently falls through to LibreOffice, because a false negative
-costs a less specific error message while a false positive would reject a
-document that could have been converted.
+[`src/lib/encrypted.ts`](src/lib/encrypted.ts). It is best-effort by design:
+anything it cannot parse confidently falls through to LibreOffice, because a
+false negative costs a less specific error message while a false positive would
+reject a document that could have been converted.
+
+It covers the OOXML and Word binary formats. An encrypted ODF file or PDF is
+left to LibreOffice, which reports those the same way it reports a damaged file
+— acceptable, because the formats this check exists for are the ones the client
+actually sends.
+
+---
+
+## Image targets, and why they need poppler
+
+`png` and `jpg` are the only targets produced by two processes, and the reason
+is a LibreOffice limitation that is worth writing down because it looks like a
+bug in *this* service.
+
+The obvious implementation is one command:
+
+```bash
+soffice --convert-to png:impress_png_Export --outdir out deck.pptx
+```
+
+**It exports the first slide and stops.** Not one image per slide — one image,
+period. The `PageRange` filter option that is supposed to control this is
+accepted and ignored, and it is genuinely ignored rather than misspelled:
+passing `PixelWidth` through the same JSON option mechanism changes the output
+resolution, which proves the options are being parsed at all. This is a
+long-standing limitation of the command-line image export, not something a
+better filter name fixes.
+
+So the pipeline renders the deck to PDF first and rasterises that:
+
+```bash
+soffice --convert-to pdf:impress_pdf_Export --outdir out deck.pptx
+pdftoppm -png -r 150 out/deck.pdf out/slide     # slide-1.png, slide-2.png, …
+```
+
+`pdftoppm` (Debian package `poppler-utils`) numbers the pages itself, and the
+service re-sorts them numerically before naming them, so `slide-2` cannot end up
+after `slide-10` if poppler's zero-padding ever changes.
+
+Two consequences worth knowing:
+
+- **poppler is a hard dependency**, checked at boot like everything else. A
+  container without it would otherwise start happily and fail the first image
+  request with an error that reads like a problem with the user's file.
+- **The archive is built in memory**, so `MAX_RASTER_PAGES` (default 100) bounds
+  how many pages will be rasterised at once. Past it the request is refused with
+  `E_TOO_LARGE` rather than OOM-killing the container mid-response.
 
 ---
 
@@ -337,7 +502,7 @@ conversions run at once". Past that bound, extra work does not go faster — it
 makes every request slower and eventually pushes all of them past the client's
 120s abort, which turns a busy server into a server that looks broken.
 
-So [`src/queue.ts`](src/queue.ts) implements a bounded queue:
+So [`src/lib/queue.ts`](src/lib/queue.ts) implements a bounded queue:
 
 - **2 conversions run concurrently by default** (`MAX_CONCURRENT_CONVERSIONS`).
 - **8 may wait** (`MAX_QUEUED_CONVERSIONS`).
@@ -398,6 +563,9 @@ a workspace touched between the check and the delete is left alone.
 | Concurrent conversions | 2 | `MAX_CONCURRENT_CONVERSIONS` |
 | Queued conversions | 8 | `MAX_QUEUED_CONVERSIONS` |
 | Requests per IP | 30 / min | `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS` |
+| Pages per image export | 100 | `MAX_RASTER_PAGES` (the archive is built in memory) |
+| Image resolution | 150 DPI | `RASTER_DPI` |
+| JPEG quality | 90 | `RASTER_JPEG_QUALITY` |
 | Stale sweep | every 5 min | `SWEEP_INTERVAL_MS` |
 | Stale age | 15 min | `STALE_WORKSPACE_MS` |
 | Container memory | 1 GB | `docker-compose.yml` |
@@ -412,9 +580,11 @@ ordinary documents and considerably more for image-heavy ones; 2 concurrent
 under a 1 GB cap is a deliberately conservative starting point. Raise both
 together, not one.
 
-**Logging.** One JSON line per request: request id, outcome, status, code, byte
-size and duration. **Document contents and filenames are never logged.** The
-`X-Request-Id` response header ties a client report to a server log line.
+**Logging.** One JSON line per request: request id, outcome, source extension,
+target, status, code, byte size and duration. **Document contents and filenames
+are never logged** — the extension and target say what the person asked for
+without saying what they asked it about. The `X-Request-Id` response header ties
+a client report to a server log line.
 
 ---
 
@@ -429,6 +599,10 @@ All configuration is environment variables read in
 | `HOST` | `0.0.0.0` | |
 | `TEMP_ROOT` | `$TMPDIR/file-converter` | Must be writable; should be a tmpfs |
 | `SOFFICE_BIN` | `soffice` | If not on `PATH` |
+| `PDFTOPPM_BIN` | `pdftoppm` | If not on `PATH`; needed by the PNG/JPG targets |
+| `RASTER_DPI` | `150` | Resolution of a rasterised page |
+| `RASTER_JPEG_QUALITY` | `90` | For the `jpg` target |
+| `MAX_RASTER_PAGES` | `100` | Refused with `E_TOO_LARGE` beyond this |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |
 | `CONVERT_TIMEOUT_MS` | `90000` | Must stay below the client's 120s |
@@ -520,6 +694,19 @@ private files and there is no operational reason to retain them.
   Adequate for load shedding; not a defence against a determined attacker.
 - A hostile document can still consume a full conversion slot for up to 90s.
   The concurrency cap bounds the damage but does not prevent it.
+- **Accepting more formats means more parsers.** Every family in the matrix is a
+  different LibreOffice import filter, and the import filters are where
+  memory-safety bugs live. A converter that accepts sixteen extensions has a
+  wider attack surface than one that accepts three, and that is the cost of the
+  feature rather than something the design can offset. The mitigations above are
+  what make it affordable.
+- **HTML import can reference external resources.** A `.html` upload with
+  `<img src="...">` makes LibreOffice resolve that reference while importing — a
+  URL or a `file://` path. In this deployment the container has no network egress
+  (see [Network egress](#network-egress)) and the only files it can read are the
+  application's own code and the request's own workspace, so there is little to
+  reach. It is noted because it is a real behaviour, not a theoretical one, and
+  because a deployment that *does* grant egress changes the picture.
 
 ---
 
@@ -681,16 +868,25 @@ The test suite is `node:test` — no test framework dependency.
 
 | File | Covers |
 |---|---|
-| [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, oversized input, wrong extension, malformed file, encrypted file, empty file, cleanup, and cancellation. |
-| [`test/unit.test.ts`](test/unit.test.ts) | Queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
+| [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
+| [`test/unit.test.ts`](test/unit.test.ts) | Matrix self-consistency, prototype-safe lookups, the ZIP writer and its zip-slip guard, the probe-document builders, queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
 | [`test/timeout.test.ts`](test/timeout.test.ts) | The 90s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
-| [`test/preflight.test.ts`](test/preflight.test.ts) | The boot refusal, by starting the real entry point with a broken environment — a missing `soffice`, and an unresolvable `fc-match`. |
+| [`test/preflight.test.ts`](test/preflight.test.ts) | The boot refusal, by starting the real entry point with a broken environment — a missing `soffice`, a missing `pdftoppm`, and an unresolvable `fc-match`. |
 | [`test/openapi.test.ts`](test/openapi.test.ts) | That [`openapi.yaml`](openapi.yaml) still describes this service: codes, exact messages, upload limit, and the responses the endpoints really return. |
 | [`test/fixtures.ts`](test/fixtures.ts) | Binary fixtures built in code — including hand-built OLE/CFB containers, since there is no way to produce a password-protected document without a copy of Word or a checked-in blob. |
 
-The suite needs a working `soffice` but **not** the fonts: the tests exercise
-the HTTP contract, which holds either way, so they run through `createApp()`
-rather than `startServer()` and skip preflight.
+The suite needs a working `soffice` and `pdftoppm` but **not** the fonts: the
+tests exercise the HTTP contract, which holds either way, so they run through
+`createApp()` rather than `startServer()` and skip preflight.
+
+Documents used as test input are built in code rather than checked in — a
+`.docx` from four OOXML parts, an `.odp` from four ODF parts, a PNG from raw
+scanlines and a `deflateSync`. One fixture is generated rather than
+built: the `.pptx` the PPTX-source tests need, produced once per run by
+converting the ODP fixture with `soffice`. Hand-writing a PPTX means writing a
+theme, a slide master and a layout and wiring them together, at which point the
+fixture becomes the thing under test. The raster pipeline itself is tested
+against the hand-built `.odp`, so it has no dependency on that generation step.
 
 ---
 
@@ -723,3 +919,20 @@ fast, but it is strip-only: `constructor(private readonly x: number)` is a synta
 error. It also does not rewrite import specifiers, so imports use `.ts`
 extensions and `tsc` rewrites them to `.js` for the build
 (`rewriteRelativeImportExtensions`).
+
+**LibreOffice's command-line image export writes one slide and stops.** Covered
+in full under [Image targets](#image-targets-and-why-they-need-poppler). It cost
+a while to establish that this was a genuine limitation rather than a wrong
+filter name — the giveaway is that other filter options for the *same* filter
+are honoured, so the options are parsed and `PageRange` is specifically
+disregarded.
+
+**"Idempotent cleanup" had to mean more than "harmless to call twice".** The
+workspace is deleted from three places, because which one runs depends on how
+the request ended. The first version nulled the workspace path before awaiting
+the delete, so a second caller saw nothing to do, returned instantly, and let
+the response go out while the directory was still being removed — the exact
+opposite of the documented promise that the disk is reclaimed before the client
+has its answer. It now remembers the in-flight promise and hands the same one to
+every caller. An integration test that compares the temp directory either side
+of a request is what caught it.

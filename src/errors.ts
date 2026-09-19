@@ -12,15 +12,18 @@
  *
  * The one thing that must never happen is a failure delivered as 200 with this
  * envelope in the body: the client checks the status code first and treats any
- * 200 as a PDF, so a 200-with-error-body fails much further downstream where it
- * is far harder to diagnose.
+ * 200 as a file, so a 200-with-error-body fails much further downstream where
+ * it is far harder to diagnose.
  */
+import { describeSources, describeTargets, type TargetId } from './formats.ts';
 
 export type ErrorCode =
   | 'E_CONVERT_FAILED'
   | 'E_TIMEOUT'
   | 'E_ENCRYPTED'
   | 'E_UNSUPPORTED'
+  | 'E_UNSUPPORTED_TARGET'
+  | 'E_UNKNOWN_TARGET'
   | 'E_TOO_LARGE'
   | 'E_BUSY'
   | 'E_BAD_REQUEST'
@@ -95,13 +98,45 @@ export const Errors = {
   encrypted: () =>
     new AppError('E_ENCRYPTED', 422, 'This document is password protected.'),
 
-  /** Extension is not .docx/.docm/.doc. */
+  /**
+   * The upload's extension is not one we accept.
+   *
+   * Names the accepted set: the person holding the phone has a file they think
+   * is a document, and "unsupported" alone tells them nothing about what would
+   * work.
+   */
   unsupported: () =>
-    new AppError('E_UNSUPPORTED', 415, 'Only Word documents (.docx, .docm, .doc) can be converted.'),
+    new AppError(
+      'E_UNSUPPORTED',
+      415,
+      `This file type cannot be converted. Supported types: ${describeSources()}.`,
+    ),
 
-  /** Over MAX_UPLOAD_BYTES. */
-  tooLarge: () =>
-    new AppError('E_TOO_LARGE', 413, 'This document is too large to convert.'),
+  /**
+   * A real target, but not one this source can become - asking for PNG from a
+   * .docx, say.
+   *
+   * The message lists what the document CAN become instead, because the useful
+   * answer to "can I have this as X" is "no, but here is what you can have".
+   */
+  unsupportedTarget: (sourceExtension: string, available: readonly TargetId[]) =>
+    new AppError(
+      'E_UNSUPPORTED_TARGET',
+      415,
+      `A ${sourceExtension} file can be converted to: ${describeTargets(available)}.`,
+    ),
+
+  /** A target id that does not exist at all: /convert/banana. */
+  unknownTarget: (available: readonly TargetId[]) =>
+    new AppError(
+      'E_UNKNOWN_TARGET',
+      404,
+      `That is not a format this converter can produce. Available: ${describeTargets(available)}.`,
+    ),
+
+  /** Over MAX_UPLOAD_BYTES, or more pages than we will rasterise at once. */
+  tooLarge: (cause?: unknown) =>
+    new AppError('E_TOO_LARGE', 413, 'This document is too large to convert.', { cause }),
 
   /** No free conversion slot. */
   busy: () =>

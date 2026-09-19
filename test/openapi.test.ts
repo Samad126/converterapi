@@ -17,8 +17,9 @@ import assert from 'node:assert/strict';
 import { startTestServer, upload, type TestServer } from './helpers.ts';
 import { loadOpenApiDocument } from '../src/openapi.ts';
 import { Errors, AppError } from '../src/errors.ts';
+import { TARGET_IDS, targetsFor } from '../src/formats.ts';
 import { MAX_UPLOAD_BYTES } from '../src/config.ts';
-import { buildMinimalDocx } from '../src/convert.ts';
+import { buildMinimalDocx } from '../src/lib/probe-documents.ts';
 import { buildEncryptedDocxContainer, buildMalformedDocx } from './fixtures.ts';
 
 interface SpecDocument {
@@ -26,7 +27,7 @@ interface SpecDocument {
   info: { title: string; version: string };
   paths: Record<string, Record<string, unknown>>;
   components: {
-    schemas: { ErrorCode: { enum: string[] } };
+    schemas: { ErrorCode: { enum: string[] }; TargetId: { enum: string[] } };
     responses: Record<string, unknown>;
   };
 }
@@ -47,12 +48,39 @@ after(async () => {
   await server.close();
 });
 
+/**
+ * Follow a `$ref` to the component it points at.
+ *
+ * The document factors the shared pieces out into `components`, so a response
+ * is often a reference rather than an inline object. A test that reads
+ * `responses['200'].content` directly would silently see `undefined` and then
+ * fail for the wrong reason.
+ */
+function resolve(node: unknown): Record<string, unknown> {
+  if (node && typeof node === 'object' && '$ref' in node) {
+    const pointer = String((node as { $ref: unknown }).$ref);
+    return pointer
+      .replace(/^#\//, '')
+      .split('/')
+      .reduce<unknown>(
+        (current, key) => (current as Record<string, unknown> | undefined)?.[key],
+        spec,
+      ) as Record<string, unknown>;
+  }
+  return node as Record<string, unknown>;
+}
+
 /** Every (code, message) pair the document says can reach the user. */
 function documentedErrors(): Array<{ where: string; code: string; message: string }> {
   const found: Array<{ where: string; code: string; message: string }> = [];
   for (const [name, response] of Object.entries(spec.components.responses)) {
     const envelope = response as {
-      content?: { 'application/json'?: { example?: unknown; examples?: Record<string, { value: unknown }> } };
+      content?: {
+        'application/json'?: {
+          example?: unknown;
+          examples?: Record<string, { value: unknown }>;
+        };
+      };
     };
     const media = envelope.content?.['application/json'];
     if (!media) continue;
@@ -71,20 +99,37 @@ function documentedErrors(): Array<{ where: string; code: string; message: strin
   return found;
 }
 
-/** Every (code, message) pair the service can actually produce. */
+/**
+ * Every (code, message) pair the service can actually produce.
+ *
+ * Built from an explicit table rather than by calling every factory with the
+ * same argument: several of them take different inputs, and passing a string to
+ * one that expects a list of targets would throw here rather than test
+ * anything. The arguments are the real ones a request would supply, so the
+ * rendered sentence is the sentence a user would see.
+ */
 function actualErrors(): Array<{ code: string; message: string }> {
-  const produced: Array<{ code: string; message: string }> = [];
-  for (const factory of Object.values(Errors)) {
-    const error = (factory as (detail?: unknown) => AppError)('test detail');
-    const envelope = error.toEnvelope();
-    produced.push({ code: envelope.error.code, message: envelope.error.message });
-  }
+  const produced = [
+    Errors.convertFailed(),
+    Errors.timeout(),
+    Errors.encrypted(),
+    Errors.unsupported(),
+    Errors.unsupportedTarget('.docx', targetsFor('.docx')),
+    Errors.unknownTarget(TARGET_IDS),
+    Errors.tooLarge(),
+    Errors.busy(),
+    Errors.badRequest('test detail'),
+    Errors.rateLimited(),
+    Errors.internal(),
+  ].map((error: AppError) => error.toEnvelope().error);
+
   // The 404 uses the same code as E_BAD_REQUEST with a different sentence, so
   // it is not reachable from the Errors factory table.
   produced.push({
     code: 'E_BAD_REQUEST',
     message: 'The converter is not available at this address. Please update the app and try again.',
   });
+
   return produced;
 }
 
@@ -93,10 +138,13 @@ describe('openapi document', () => {
     assert.match(spec.openapi, /^3\.1\./);
     assert.ok(spec.info.title);
     assert.ok(spec.info.version);
-    assert.ok(spec.paths['/convert'], 'documents /convert');
-    assert.ok(spec.paths['/health'], 'documents /health');
-    assert.ok(spec.paths['/convert']!.post, 'documents POST /convert');
-    assert.ok(spec.paths['/health']!.get, 'documents GET /health');
+    for (const path of ['/convert', '/convert/{target}', '/formats', '/health']) {
+      assert.ok(spec.paths[path], `does not document ${path}`);
+    }
+    assert.ok(spec.paths['/convert']!.post, 'does not document POST /convert');
+    assert.ok(spec.paths['/convert/{target}']!.post, 'does not document POST /convert/{target}');
+    assert.ok(spec.paths['/formats']!.get, 'does not document GET /formats');
+    assert.ok(spec.paths['/health']!.get, 'does not document GET /health');
   });
 
   it('agrees with the configured upload limit', () => {
@@ -107,6 +155,13 @@ describe('openapi document', () => {
       'the documented limit and MAX_UPLOAD_BYTES have diverged',
     );
     assert.equal(MAX_UPLOAD_BYTES, 25 * 1024 * 1024);
+  });
+
+  it('documents exactly the target ids the matrix implements', () => {
+    // A target the document lists but the router does not know is a 404 on a
+    // format the docs promise, and one the router knows but the docs omit is
+    // invisible to every client.
+    assert.deepEqual([...spec.components.schemas.TargetId.enum].sort(), [...TARGET_IDS].sort());
   });
 
   it('documents every error code the service can produce', () => {
@@ -132,7 +187,8 @@ describe('openapi document', () => {
   it('quotes the user-facing messages exactly', () => {
     // This is the assertion that matters most: `error.message` is shown
     // verbatim in a dialog, so a spec that paraphrases it is lying about what
-    // the user will see.
+    // the user will see. It also pins the long ones - the lists of supported
+    // types and of a document's possible targets - to the matrix itself.
     const actual = actualErrors();
     for (const documented of documentedErrors()) {
       const match = actual.find(
@@ -151,6 +207,18 @@ describe('openapi document', () => {
     for (const status of ['200', '400', '413', '415', '422', '429', '500', '503', '504']) {
       assert.ok(responses.responses[status], `POST /convert does not document ${status}`);
     }
+    const targeted = spec.paths['/convert/{target}']!.post as {
+      responses: Record<string, unknown>;
+    };
+    for (const status of ['200', '400', '404', '413', '415', '422', '429', '500', '503', '504']) {
+      assert.ok(targeted.responses[status], `POST /convert/{target} does not document ${status}`);
+    }
+  });
+
+  it('documented image targets as archives, matching what the service sends', () => {
+    const response = (spec.components.responses as Record<string, unknown>)
+      .ConvertedToTarget as { content: Record<string, unknown> };
+    assert.ok(response.content['application/zip'], 'the ZIP response is not documented');
   });
 });
 
@@ -191,41 +259,68 @@ describe('documented responses match reality', () => {
    * says is possible. This is the half that catches a spec which is internally
    * consistent but describes a service that does not exist.
    */
-  const cases: Array<{ label: string; status: number; code?: string; run: () => Promise<unknown> }> = [
+  const cases: Array<{
+    label: string;
+    status: number;
+    code?: string;
+    /** The path the document describes this failure under. */
+    documentedAt: '/convert' | '/convert/{target}';
+    run: () => Promise<unknown>;
+  }> = [
     {
       label: 'success',
       status: 200,
+      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX),
     },
     {
       label: 'unsupported extension',
       status: 415,
       code: 'E_UNSUPPORTED',
-      run: () => upload(server.baseUrl, 'photo.png', SAMPLE_DOCX),
+      documentedAt: '/convert',
+      run: () => upload(server.baseUrl, 'animation.gif', SAMPLE_DOCX),
     },
     {
       label: 'oversized',
       status: 413,
       code: 'E_TOO_LARGE',
+      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'big.docx', Buffer.alloc(MAX_UPLOAD_BYTES + 1024, 0x41)),
     },
     {
       label: 'malformed',
       status: 500,
       code: 'E_CONVERT_FAILED',
+      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'broken.docx', buildMalformedDocx()),
     },
     {
       label: 'encrypted',
       status: 422,
       code: 'E_ENCRYPTED',
+      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'secret.docx', buildEncryptedDocxContainer()),
     },
     {
       label: 'no file part',
       status: 400,
       code: 'E_BAD_REQUEST',
+      documentedAt: '/convert',
       run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { fieldName: 'document' }),
+    },
+    {
+      label: 'unknown target',
+      status: 404,
+      code: 'E_UNKNOWN_TARGET',
+      documentedAt: '/convert/{target}',
+      run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'banana' }),
+    },
+    {
+      label: 'target the source cannot become',
+      status: 415,
+      code: 'E_UNSUPPORTED_TARGET',
+      documentedAt: '/convert/{target}',
+      run: () => upload(server.baseUrl, 'ok.docx', SAMPLE_DOCX, { target: 'png' }),
     },
   ];
 
@@ -240,11 +335,12 @@ describe('documented responses match reality', () => {
       assert.equal(response.status, testCase.status);
 
       if (testCase.status === 200) {
-        // The document promises application/pdf for success. Nothing else.
-        const document = spec.paths['/convert']!.post as {
-          responses: Record<string, { content?: Record<string, unknown> }>;
-        };
-        assert.ok(document.responses['200']!.content!['application/pdf']);
+        // The document promises application/pdf for success on the bare path.
+        // Nothing else.
+        const operation = resolve(spec.paths['/convert']!.post);
+        const responses = operation.responses as Record<string, unknown>;
+        const ok = resolve(responses['200']) as { content?: Record<string, unknown> };
+        assert.ok(ok.content?.['application/pdf'], 'the 200 does not document application/pdf');
         assert.equal(response.contentType, 'application/pdf');
         return;
       }

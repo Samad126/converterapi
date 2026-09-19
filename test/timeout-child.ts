@@ -14,9 +14,9 @@ import { join } from 'node:path';
 process.env.CONVERT_TIMEOUT_MS = '1500';
 process.env.TEMP_ROOT = await fsp.mkdtemp(join(tmpdir(), 'converter-timeout-'));
 
-const { createApp } = await import('../src/server.ts');
-const { buildMinimalDocx } = await import('../src/convert.ts');
-const { BoundedQueue, RateLimiter } = await import('../src/queue.ts');
+const { createApp } = await import('../src/app.ts');
+const { buildMinimalDocx } = await import('../src/lib/probe-documents.ts');
+const { BoundedQueue, RateLimiter } = await import('../src/lib/queue.ts');
 
 // ~2.5s of real work against a 1.5s deadline.
 const LARGE_DOCX = buildMinimalDocx(

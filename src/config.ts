@@ -1,6 +1,11 @@
 /**
  * Every cross-system constant and tunable lives here.
  *
+ * This file holds what depends on the ENVIRONMENT. The conversion matrix - what
+ * we accept, what it can become, and with which LibreOffice filter - lives in
+ * `formats.ts`, because that is a description of the product rather than a knob
+ * somebody turns on a particular host.
+ *
  * The upload ceiling in particular is a CONTRACT with the Android client: the
  * client has its own MAX_UPLOAD_BYTES and refuses to send more than that, so if
  * the two ever disagree the disagreement shows up as a confusing client-side
@@ -35,6 +40,10 @@ export const MAX_UPLOAD_BYTES = 25 * MB;
  * comfortably shorter than that, otherwise we get killed mid-conversion and the
  * client shows "HTTP <status>" (or a network error) instead of the sentence we
  * wanted to show.
+ *
+ * The deadline covers the WHOLE pipeline, including the PDF-then-rasterise
+ * second step a PNG/JPG request needs, because it is the client's patience it
+ * has to stay inside - not soffice's.
  */
 export const CONVERT_TIMEOUT_MS = intFromEnv('CONVERT_TIMEOUT_MS', 90_000, 1_000);
 
@@ -63,6 +72,38 @@ export const PORT = intFromEnv('PORT', 3001, 1);
 export const HOST = process.env.HOST ?? '0.0.0.0';
 export const SOFFICE_BIN = process.env.SOFFICE_BIN ?? 'soffice';
 
+/**
+ * Rasteriser for the PNG/JPG targets (Debian package: poppler-utils).
+ *
+ * A separate binary because LibreOffice cannot do this job: its command-line
+ * image export writes only the first page of a presentation, whatever the
+ * filter options say. Rendering the PDF is the only way to get one image per
+ * slide. See services/conversion.service.ts.
+ */
+export const PDFTOPPM_BIN = process.env.PDFTOPPM_BIN ?? 'pdftoppm';
+
+/**
+ * Resolution of a rasterised page, in DPI.
+ *
+ * 150 is the point where projected slide text is sharp without the output
+ * getting silly: a 16:9 slide lands around 2000x1125, so a 30-slide deck is
+ * tens of megabytes rather than hundreds.
+ */
+export const RASTER_DPI = intFromEnv('RASTER_DPI', 150, 36);
+
+/** JPEG quality for the JPG target. pdftoppm's own default is 75. */
+export const RASTER_JPEG_QUALITY = intFromEnv('RASTER_JPEG_QUALITY', 90, 1);
+
+/**
+ * How many pages we will rasterise into one archive.
+ *
+ * The whole archive is built in memory before it is sent, so this is a memory
+ * bound rather than a taste judgement: 100 slides at 150 DPI is roughly 30MB of
+ * images, times MAX_CONCURRENT_CONVERSIONS. Past the limit the request is
+ * refused with E_TOO_LARGE rather than OOM-killing the container mid-response.
+ */
+export const MAX_RASTER_PAGES = intFromEnv('MAX_RASTER_PAGES', 100, 1);
+
 /** Per-IP request budget. Unauthenticated endpoint on the public internet. */
 export const RATE_LIMIT_WINDOW_MS = intFromEnv('RATE_LIMIT_WINDOW_MS', 60_000, 1_000);
 export const RATE_LIMIT_MAX = intFromEnv('RATE_LIMIT_MAX', 30, 1);
@@ -87,42 +128,17 @@ function trustProxyFromEnv(): string | number | boolean {
 
 export const TRUST_PROXY = trustProxyFromEnv();
 
-/** Run the boot-time warm-up conversion? Proves the pipeline end to end. */
+/** Run the boot-time warm-up conversions? Proves each pipeline end to end. */
 export const SKIP_WARMUP = process.env.SKIP_WARMUP === '1';
 
 /**
  * Serve the OpenAPI document and the Swagger UI.
  *
  * On by default: it is a static description of the public contract, contains
- * nothing sensitive, and the client-facing endpoints it documents are already
- * public. Set `ENABLE_DOCS=0` to turn it off.
+ * nothing sensitive, and the endpoints it documents are already public. Set
+ * `ENABLE_DOCS=0` to turn it off.
  */
 export const ENABLE_DOCS = process.env.ENABLE_DOCS !== '0';
-
-/**
- * Extensions we accept, and the LibreOffice import filter each one implies.
- *
- * The import filter is chosen from the FILENAME EXTENSION of the uploaded part
- * - never from its declared MIME type, which the client deliberately sends as
- * application/octet-stream and which a hostile client could set to anything.
- *
- * soffice infers the filter from the extension of the file it is handed, which
- * is why we write the upload to disk as `<server-name>.<validated extension>`.
- * The filter names are recorded here so the mapping is auditable in one place.
- */
-export const IMPORT_FILTERS = {
-  '.docx': 'MS Word 2007 XML',
-  '.docm': 'MS Word 2007 XML',
-  '.doc': 'MS Word 97',
-} as const;
-
-export type AllowedExtension = keyof typeof IMPORT_FILTERS;
-
-export const ALLOWED_EXTENSIONS = Object.keys(IMPORT_FILTERS) as AllowedExtension[];
-
-export function isAllowedExtension(ext: string): ext is AllowedExtension {
-  return Object.prototype.hasOwnProperty.call(IMPORT_FILTERS, ext);
-}
 
 /**
  * Fonts LibreOffice must be able to resolve to a metric-compatible substitute.
@@ -132,6 +148,9 @@ export function isAllowedExtension(ext: string): ext is AllowedExtension {
  * LibreOffice substitutes a font with different glyph widths and every line
  * breaks in a different place - the document converts, the PDF looks right, and
  * the pagination silently disagrees with Word.
+ *
+ * This matters for every family, not just Writer: the same substitution changes
+ * where text wraps in a chart label or an exported spreadsheet.
  *
  * `fc-match` resolves the alias chain, so a correct answer here proves BOTH
  * that the font is installed AND that the fontconfig alias exists - which is

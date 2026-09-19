@@ -2,7 +2,7 @@
   "name": "file-converter",
   "version": "1.0.0",
   "private": true,
-  "description": "Minimal Node.js service that converts Word documents to PDF using LibreOffice headless.",
+  "description": "Universal file converter service: documents, spreadsheets, presentations and images, via LibreOffice headless.",
   "type": "module",
   "engines": {
     "node": ">=22"

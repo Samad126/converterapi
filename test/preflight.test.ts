@@ -60,6 +60,14 @@ describe('startup check', () => {
     await fsp.writeFile(fakeSoffice, '#!/bin/sh\necho "LibreOffice 0.0.0 (fake)"\nexit 0\n', {
       mode: 0o755,
     });
+    // Each boot check has to be reachable on its own. Every test below stubs
+    // the checks that come BEFORE the one it is about, so a failure names the
+    // thing under test rather than whichever check happens to run first.
+    await fsp.writeFile(
+      join(fakeBinDir, 'pdftoppm'),
+      '#!/bin/sh\necho "pdftoppm version 0.0.0 (fake)"\nexit 0\n',
+      { mode: 0o755 },
+    );
   });
 
   after(async () => {
@@ -80,9 +88,29 @@ describe('startup check', () => {
     assert.doesNotMatch(result.stdout, /listening/);
   });
 
-  it('refuses to boot when the fonts cannot be verified', async () => {
+  it('refuses to boot when the rasteriser is missing, and says how to fix it', async () => {
+    // The PNG/JPG targets need poppler, which LibreOffice does not provide.
+    // Without this check a container built with only LibreOffice starts happily
+    // and fails the first image request instead.
     const result = await boot({
       SOFFICE_BIN: join(fakeBinDir, 'soffice'),
+      PDFTOPPM_BIN: '/nonexistent/pdftoppm',
+    });
+
+    assert.equal(result.code, 1, 'should exit non-zero');
+    assert.match(result.stderr, /Cannot run "\/nonexistent\/pdftoppm" \(ENOENT\)/);
+    assert.match(result.stderr, /apt-get install -y poppler-utils/);
+    assert.doesNotMatch(result.stdout, /listening/);
+  });
+
+  it('refuses to boot when the fonts cannot be verified', async () => {
+    // An empty PATH makes `fc-match` unresolvable, which is how the font check
+    // is exercised without depending on the host's fonts. soffice and pdftoppm
+    // are stubbed so that the two checks before it pass and this one is what
+    // fails.
+    const result = await boot({
+      SOFFICE_BIN: join(fakeBinDir, 'soffice'),
+      PDFTOPPM_BIN: join(fakeBinDir, 'pdftoppm'),
       PATH: emptyPathDir,
     });
 
