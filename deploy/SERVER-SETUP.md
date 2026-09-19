@@ -149,14 +149,26 @@ curl -sS https://converter.alakbaroff.com/health
 
 ## 6. GitHub secrets
 
-Repository → Settings → Secrets and variables → Actions. These three, shared
-with your other project's workflow:
+Repository → Settings → Secrets and variables → Actions.
+
+**These must be added to this repository specifically.** Actions secrets are
+scoped per repository — the ones on your other project do **not** carry over,
+even though the values are identical. The workflow will fail on a missing
+`SSH_HOST` until they exist here.
 
 | Secret | Value |
 | --- | --- |
 | `SSH_HOST` | `SERVER_HOST` |
 | `SSH_USER` | `DEPLOY_USER` |
 | `SSH_PASSWORD` | that user's password |
+
+From the CLI, which prompts for the value without echoing it:
+
+```bash
+gh secret set SSH_HOST     --repo Samad126/file-converter
+gh secret set SSH_USER     --repo Samad126/file-converter
+gh secret set SSH_PASSWORD --repo Samad126/file-converter
+```
 
 The port `44544` and the deploy path are inline in the workflow rather than
 secrets — they are not secret, and having them visible in the diff is worth
