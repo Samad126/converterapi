@@ -83,6 +83,16 @@ services:
       # request shares one rate limit bucket and the limiter does nothing.
       TRUST_PROXY: '1'
 
+      # The one browser origin allowed to call this API. Set because the
+      # frontend is served from a different hostname, which makes every call
+      # cross-origin. The Android client sends no Origin and is unaffected.
+      #
+      # A bare origin: no path, no trailing slash. config.ts refuses to boot on
+      # anything else, because a value the browser cannot match fails closed
+      # with an error that looks like the server being down. Override it for a
+      # different frontend host. See src/middleware/cors.ts.
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://converter.alakbaroff.com}
+
     healthcheck:
       test:
         - CMD

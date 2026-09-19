@@ -28,13 +28,18 @@ export interface TestServer {
   close: () => Promise<void>;
 }
 
-export async function startTestServer(options: { enableDocs?: boolean } = {}): Promise<TestServer> {
+export async function startTestServer(
+  options: { enableDocs?: boolean; corsOrigin?: string } = {},
+): Promise<TestServer> {
   // Generous limits by default so the shared-instance tests do not trip over
   // each other; the tests that care about limits build their own server.
   const app = createApp({
     queue: new BoundedQueue(4, 64),
     rateLimiter: new RateLimiter(1000, 60_000),
     enableDocs: options.enableDocs,
+    // Off unless a test asks for it, so the rest of the suite sees the same
+    // configuration the Android client does - no CORS headers at all.
+    corsOrigin: options.corsOrigin ?? '',
   });
   const server: Server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));

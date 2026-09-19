@@ -660,6 +660,7 @@ All configuration is environment variables read in
 | `RATE_LIMIT_MAX` | `30` | Per IP, per window |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | |
 | `TRUST_PROXY` | `loopback` | `1` = one proxy hop; see below |
+| `CORS_ORIGIN` | unset | The one browser origin allowed; see below |
 | `SKIP_WARMUP` | unset | `1` skips the boot-time warm-up conversion |
 | `ENABLE_DOCS` | on | `0` disables `/docs`, `/openapi.json`, `/openapi.yaml` |
 
@@ -667,6 +668,23 @@ All configuration is environment variables read in
 service believes the proxy's forwarding header. Behind a single reverse proxy
 set it to `1` (one hop). Numeric values are passed to Express as numbers —
 the string `"1"` would otherwise be read as the IP address `1`.
+
+`CORS_ORIGIN` is set only when the frontend is served from a different hostname
+than the API, which makes every call from the browser cross-origin. It must be
+a bare origin — `https://converter.alakbaroff.com`, with no path and no
+trailing slash — because a browser compares the string to the request's
+`Origin` exactly, so anything else matches nothing and fails closed with a CORS
+error that looks like the server being down. It throws at boot rather than
+letting you discover that in a browser console. See
+[`src/middleware/cors.ts`](src/middleware/cors.ts).
+
+Two things that policy is **not**. It is not access control: CORS is a rule
+browsers enforce on themselves, so the Android client — which sends no `Origin`
+at all — is unaffected either way, and anything able to open a socket can
+simply omit the header. What protects the endpoint is the rate limit. And it is
+not complete from the application alone: nginx refuses an oversized upload with
+its own 413 before Node sees a byte, so that one response carries its header in
+the nginx site file instead.
 
 ---
 

@@ -137,6 +137,49 @@ function trustProxyFromEnv(): string | number | boolean {
 
 export const TRUST_PROXY = trustProxyFromEnv();
 
+/**
+ * The one browser origin allowed to call this API, or `''` for none.
+ *
+ * The frontend is served from a different hostname than the API, so the
+ * browser treats every call as cross-origin and will not hand the response to
+ * JavaScript unless the API says so. That is all CORS is: a rule browsers
+ * enforce on themselves. It is not access control - a native client sends no
+ * `Origin` at all and ignores these headers entirely, and anything that can
+ * open a socket can leave the header off.
+ *
+ * Empty by default, which is the honest answer for most deployments of this
+ * service: the Android client is unaffected either way, and a same-origin
+ * frontend needs no header. Only a split frontend/API deployment sets it.
+ *
+ * MUST be a bare origin - scheme, host, optional port. A browser compares the
+ * string to the request's `Origin` EXACTLY, so a trailing slash or a stray
+ * path matches nothing and fails closed with a CORS error indistinguishable
+ * from the server being down. That is a bad afternoon to debug, so it throws
+ * at boot instead, naming the value it thinks you meant.
+ */
+function corsOriginFromEnv(): string {
+  const raw = (process.env.CORS_ORIGIN ?? '').trim();
+  if (raw === '') return '';
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(
+      `CORS_ORIGIN must be an origin like https://example.com, got ${JSON.stringify(raw)}`,
+    );
+  }
+  if (parsed.origin !== raw) {
+    throw new Error(
+      `CORS_ORIGIN must be a bare origin with no path, query or trailing slash, got ` +
+        `${JSON.stringify(raw)} - did you mean ${JSON.stringify(parsed.origin)}?`,
+    );
+  }
+  return raw;
+}
+
+export const CORS_ORIGIN = corsOriginFromEnv();
+
 /** Run the boot-time warm-up conversions? Proves each pipeline end to end. */
 export const SKIP_WARMUP = process.env.SKIP_WARMUP === '1';
 
