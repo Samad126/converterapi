@@ -233,6 +233,31 @@ export const MAX_PSD_DECODE_BYTES = intFromEnv('MAX_PSD_DECODE_BYTES', 192 * MB,
  */
 export const MAX_LAYER_OUTPUT_BYTES = intFromEnv('MAX_LAYER_OUTPUT_BYTES', 48 * MB, 1024);
 
+/**
+ * The page-manipulation endpoints (`/pdf/merge`, `/pdf/split`, `/pdf/
+ * remove-pages`, `/pdf/extract-pages`, `/pdf/organize`, `/pdf/scan-to-pdf`)
+ * accept more than one file, so `MAX_UPLOAD_BYTES` alone does not bound a
+ * request the way it does for `/convert/{target}`: ten files at the per-file
+ * limit is ten times the work.
+ */
+
+/** How many files one merge or scan-to-PDF request may include. */
+export const MAX_PAGE_OPERATION_FILES = intFromEnv('MAX_PAGE_OPERATION_FILES', 20, 1);
+
+/**
+ * Combined size of every file in one merge or scan-to-PDF request, in bytes.
+ *
+ * Checked after upload rather than by multer's own per-file `fileSize` limit,
+ * which bounds each file individually (at `MAX_UPLOAD_BYTES`) but says
+ * nothing about their sum - twenty files at the per-file cap would otherwise
+ * be a 500MB request working its way through pdf-lib entirely in memory.
+ */
+export const MAX_PAGE_OPERATION_TOTAL_BYTES = intFromEnv(
+  'MAX_PAGE_OPERATION_TOTAL_BYTES',
+  100 * MB,
+  1,
+);
+
 /** Per-IP request budget. Unauthenticated endpoint on the public internet. */
 export const RATE_LIMIT_WINDOW_MS = intFromEnv('RATE_LIMIT_WINDOW_MS', 60_000, 1_000);
 export const RATE_LIMIT_MAX = intFromEnv('RATE_LIMIT_MAX', 30, 1);

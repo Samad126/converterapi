@@ -19,6 +19,7 @@ contract** with a client that is already shipped and cannot be changed.
 - [Conversion matrix](#conversion-matrix)
 - [API](#api)
   - [POST /convert/{target}](#post-converttarget)
+  - [POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}](#post-pdfmergesplitremove-pagesextract-pagesorganizescan-to-pdf)
   - [GET /formats](#get-formats)
   - [GET /health](#get-health)
   - [Error reference](#error-reference)
@@ -334,6 +335,78 @@ Getting this wrong is silent in both directions, which is why
 [`test/unit.test.ts`](test/unit.test.ts) pins the round trip for a real
 Azerbaijani filename and asserts that the names which must not change do not.
 
+### POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}
+
+Six page-level PDF operations, kept apart from `/convert/{target}` because
+none of them fit its shape: a merge takes several files and no target; split
+takes one file plus a page-count field; remove/extract/organize each take one
+file plus a page-selection field. None of that is a `/convert/{target}`
+request no matter how it is squeezed.
+
+They share the admission gate (rate limit and queue capacity), the workspace
+lifecycle and the response shape with `/convert/{target}` — everything except
+the input shape and the operation itself.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/merge` | 2+ PDFs, field `files` | One merged PDF, pages in upload order |
+| `POST /pdf/split` | One PDF, field `file`, text field `every` (default `1`) | A ZIP of `part-1.pdf`, `part-2.pdf`, … |
+| `POST /pdf/remove-pages` | One PDF, field `file`, text field `pages` | The PDF minus the named pages |
+| `POST /pdf/extract-pages` | One PDF, field `file`, text field `pages` | A PDF of only the named pages, in the order given |
+| `POST /pdf/organize` | One PDF, field `file`, text field `order` | The PDF reordered to `order` |
+| `POST /pdf/scan-to-pdf` | 1+ images, field `files` | One PDF, one page per image, sized to it |
+
+```bash
+curl -F "files=@jan.pdf" -F "files=@feb.pdf" -F "files=@mar.pdf" \
+     https://converterapi.example.com/pdf/merge -o q1.pdf
+
+curl -F "file=@report.pdf" -F "every=5" \
+     https://converterapi.example.com/pdf/split -o chunks.zip
+
+curl -F "file=@contract.pdf" -F "pages=2,7" \
+     https://converterapi.example.com/pdf/remove-pages -o contract-clean.pdf
+
+curl -F "file=@scan.pdf" -F "order=3,1,2" \
+     https://converterapi.example.com/pdf/organize -o scan-reordered.pdf
+
+curl -F "files=@page1.jpg" -F "files=@page2.jpg" \
+     https://converterapi.example.com/pdf/scan-to-pdf -o scanned.pdf
+```
+
+**None of this touches LibreOffice or `pdf_engine.py`.** It runs on
+[`pdf-lib`](https://github.com/Hopding/pdf-lib) in-process — no subprocess, no
+profile directory, no deadline — because the work is moving pages between PDF
+structures, not converting a document from one format to another. The closest
+relative in this codebase is the `tables`/`layers` extractors, for the same
+reason: the work is this service's own, not a program it shells out to.
+
+**The page-selection syntax** (`pages`, `order`) is 1-based page numbers and
+inclusive ranges, comma separated: `2,5-7,10`. Order and duplicates are
+preserved exactly as written — `3,1,2` reorders, `1,1` duplicates page 1 — and
+a page outside the document, or malformed syntax, is a `400 E_BAD_PAGE_RANGE`
+naming the specific problem (`"Page 9 does not exist in this 5-page
+document."`), not a generic bad-request sentence.
+
+**`extract-pages` and `organize` do the same underlying work** — build a new
+PDF from an ordered list of source pages — but enforce different rules on the
+list before running it: `extract-pages` accepts any subset (that is the point
+of "extract"), while `organize` requires `order` to name **every** page
+exactly once, so a typo that would silently drop a page is refused instead of
+producing a shorter document nobody asked for. Dropping a page on purpose is
+`/pdf/remove-pages`'s job, not `organize`'s.
+
+**`merge` and `scan-to-pdf` need at least two files and one file respectively**
+— `400 E_TOO_FEW_FILES` otherwise — and both cap the *combined* size of every
+file in the request (`MAX_PAGE_OPERATION_TOTAL_BYTES`, default 100MB) as well
+as the file count (`MAX_PAGE_OPERATION_FILES`, default 20): `MAX_UPLOAD_BYTES`
+alone bounds one file, and these endpoints can be handed several.
+
+Every PDF these endpoints accept is checked for a password first, exactly as
+`/convert/{target}` checks a PDF — see [Password-protected
+documents](#password-protected-documents) — because pdf-lib on an encrypted
+PDF would otherwise fail with the same unhelpful "damaged" message LibreOffice
+gives.
+
 ### GET /formats
 
 The [conversion matrix](#conversion-matrix) as JSON — every accepted extension,
@@ -372,6 +445,8 @@ matrix is ready, not merely that the process is up.
 | `413` | `E_TOO_LARGE` | This document is too large to convert. |
 | `503` | `E_BUSY` | The converter is busy. Try again in a moment. |
 | `400` | `E_BAD_REQUEST` | The document could not be received. Please try again. |
+| `400` | `E_BAD_PAGE_RANGE` | *(the specific problem, e.g. "Page 9 does not exist in this 5-page document.")* |
+| `400` | `E_TOO_FEW_FILES` | *(e.g. "Merging needs at least two PDF files.")* |
 | `429` | `E_RATE_LIMITED` | Too many requests. Try again in a moment. |
 | `500` | `E_INTERNAL` | Something went wrong on the server. |
 | `404` | `E_BAD_REQUEST` | The converter is not available at this address. Please update the app and try again. *(also what a client on the removed bare `/convert` now receives)* |
@@ -992,6 +1067,8 @@ a workspace touched between the check and the delete is left alone.
 | Limit | Value | Where |
 |---|---|---|
 | Max upload | 25 MB | `MAX_UPLOAD_BYTES` (must equal the client's) + proxy `request_body max_size` |
+| Files per page operation | 20 | `MAX_PAGE_OPERATION_FILES` (`/pdf/merge`, `/pdf/scan-to-pdf`) |
+| Combined size per page operation | 100 MB | `MAX_PAGE_OPERATION_TOTAL_BYTES` (several files, not one) |
 | Conversion deadline | 90s | `CONVERT_TIMEOUT_MS` (client aborts at 120s) |
 | SIGKILL grace | 5s | `SIGKILL_GRACE_MS` |
 | Concurrent conversions | 2 | `MAX_CONCURRENT_CONVERSIONS` |
@@ -1049,6 +1126,8 @@ All configuration is environment variables read in
 | `MAX_PSD_LAYERS` | `500` | For the `layers` target; refused with `E_TOO_LARGE` |
 | `MAX_PSD_DECODE_BYTES` | `201326592` | For the `layers` target; the pixel data a PSD may declare |
 | `MAX_LAYER_OUTPUT_BYTES` | `50331648` | For the `layers` target; refused with `E_TOO_LARGE` |
+| `MAX_PAGE_OPERATION_FILES` | `20` | For `/pdf/merge`, `/pdf/scan-to-pdf`; refused with `E_TOO_LARGE` |
+| `MAX_PAGE_OPERATION_TOTAL_BYTES` | `104857600` | Combined size of every file in one page-operation request |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |
 | `CONVERT_TIMEOUT_MS` | `90000` | Must stay below the client's 120s |

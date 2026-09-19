@@ -84,6 +84,8 @@ servers:
 tags:
   - name: convert
     description: Document conversion.
+  - name: pages
+    description: Page-level PDF operations - merge, split, remove, extract, reorder, scan.
   - name: discovery
     description: What this service can do.
   - name: ops
@@ -142,6 +144,182 @@ paths:
           $ref: '#/components/responses/Busy'
         '504':
           $ref: '#/components/responses/Timeout'
+
+  /pdf/merge:
+    post:
+      tags: [pages]
+      operationId: mergePdfs
+      summary: Merge two or more PDFs into one
+      description: |
+        Concatenates every page of every uploaded PDF into one PDF, in the
+        order the files were uploaded. Each file contributes all of its own
+        pages, in its own order - there is no separate page-selection step
+        here, only file order.
+      requestBody:
+        $ref: '#/components/requestBodies/MergeUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/TooFewFiles'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/split:
+    post:
+      tags: [pages]
+      operationId: splitPdf
+      summary: Split a PDF into several PDFs
+      description: |
+        Cuts one PDF into consecutive chunks of `every` pages each, answered
+        as a ZIP of `part-1.pdf`, `part-2.pdf`, ... - always an archive, even
+        when the result is a single part, so the response shape never depends
+        on how the split happened to come out.
+      requestBody:
+        $ref: '#/components/requestBodies/SplitUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToTarget'
+        '400':
+          $ref: '#/components/responses/BadPageRange'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/remove-pages:
+    post:
+      tags: [pages]
+      operationId: removePdfPages
+      summary: Remove pages from a PDF
+      description: |
+        Answers with the PDF minus the named pages, everything else kept in
+        its original order. Removing every page is refused with `400` rather
+        than answering with an empty PDF nobody could open.
+      requestBody:
+        $ref: '#/components/requestBodies/RemovePagesUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/BadPageRange'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/extract-pages:
+    post:
+      tags: [pages]
+      operationId: extractPdfPages
+      summary: Extract a subset of a PDF's pages
+      description: |
+        Answers with a PDF holding only the named pages, in the exact order
+        they were named - `pages=3,1` extracts pages 1 and 3 and puts page 3
+        first, so this can reorder as well as select.
+      requestBody:
+        $ref: '#/components/requestBodies/ExtractPagesUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/BadPageRange'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/organize:
+    post:
+      tags: [pages]
+      operationId: organizePdf
+      summary: Reorder a PDF's pages
+      description: |
+        Answers with the PDF's pages rearranged into `order`, which must name
+        every page exactly once - unlike `/pdf/extract-pages`, this refuses a
+        selection that would drop or duplicate a page, because reordering and
+        removing are different operations here.
+      requestBody:
+        $ref: '#/components/requestBodies/OrganizeUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/BadPageRange'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/scan-to-pdf:
+    post:
+      tags: [pages]
+      operationId: scanToPdf
+      summary: Build a PDF from a set of images
+      description: |
+        Answers with one PDF holding one page per uploaded image, in upload
+        order. Each page is sized to its own image's pixel dimensions, so a
+        portrait photo and a landscape photo in the same request each get a
+        correctly-shaped page rather than being forced into one fixed size.
+      requestBody:
+        $ref: '#/components/requestBodies/ScanUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/TooFewFiles'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
 
   /formats:
     get:
@@ -309,6 +487,133 @@ components:
             file:
               contentType: application/octet-stream
 
+    MergeUpload:
+      required: true
+      description: |
+        Two or more PDFs, all under the field name `files`, in the order they
+        should be concatenated.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [files]
+            properties:
+              files:
+                type: array
+                minItems: 2
+                items:
+                  type: string
+                  format: binary
+                description: The PDFs to merge, in order. Each must be a `.pdf`.
+
+    SplitUpload:
+      required: true
+      description: One PDF, plus how many pages each output file should hold.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to split.
+              every:
+                type: string
+                description: |
+                  Pages per output file, as a positive whole number. Defaults
+                  to `1` (one file per page). The last file holds whatever is
+                  left over: a 7-page document split every 3 pages produces
+                  3, 3, then 1 page.
+                example: '1'
+
+    RemovePagesUpload:
+      required: true
+      description: One PDF, plus which pages to remove.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, pages]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to remove pages from.
+              pages:
+                type: string
+                description: |
+                  1-based page numbers and inclusive ranges to remove, comma
+                  separated: `2,5-7,10`. Removing every page is refused.
+                example: '2,5-7'
+
+    ExtractPagesUpload:
+      required: true
+      description: One PDF, plus which pages to keep, in the order to keep them.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, pages]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to extract pages from.
+              pages:
+                type: string
+                description: |
+                  1-based page numbers and inclusive ranges to keep, comma
+                  separated, in the exact order they should appear in the
+                  output: `3,1,2` keeps pages 1-3, reordered.
+                example: '1,3-4'
+
+    OrganizeUpload:
+      required: true
+      description: One PDF, plus its new page order.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, order]
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to reorder.
+              order:
+                type: string
+                description: |
+                  The new page order, as 1-based page numbers and inclusive
+                  ranges naming EVERY page of the document exactly once:
+                  `3,1,2` on a 3-page document reorders it, but `1,2` or
+                  `1,1,2` are refused, because organizing does not drop or
+                  duplicate a page - use `/pdf/remove-pages` to drop one.
+                example: '3,1,2'
+
+    ScanUpload:
+      required: true
+      description: |
+        One or more images, all under the field name `files`, in the order
+        they should become pages.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [files]
+            properties:
+              files:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+                  format: binary
+                description: |
+                  The images to scan, in order. Each must be `.png`, `.jpg`
+                  or `.jpeg`. Each page is sized to its own image's pixel
+                  dimensions, so mixing portrait and landscape photos is fine.
+
   schemas:
     TargetId:
       type: string
@@ -332,6 +637,8 @@ components:
         - E_TOO_LARGE
         - E_NO_TABLES
         - E_NO_LAYERS
+        - E_BAD_PAGE_RANGE
+        - E_TOO_FEW_FILES
         - E_BUSY
         - E_BAD_REQUEST
         - E_RATE_LIMITED
@@ -613,6 +920,48 @@ components:
                 error:
                   code: E_NO_LAYERS
                   message: This PSD file does not contain any layers with images that can be extracted.
+
+    BadPageRange:
+      description: |
+        The `pages`/`order` field named something that is not a coherent
+        instruction against the document it came with: missing, malformed
+        (not `2,5-7,10`), naming a page outside the document, or - for
+        `/pdf/organize` only - not a true permutation of every page.
+
+        The message is the specific problem rather than a fixed sentence: a
+        page number is something the person who typed it can fix, where a
+        generic "bad request" is not.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            outOfRange:
+              summary: A page outside the document.
+              value:
+                error:
+                  code: E_BAD_PAGE_RANGE
+                  message: Page 9 does not exist in this 5-page document.
+            notAPermutation:
+              summary: '`/pdf/organize`: a page was dropped or repeated.'
+              value:
+                error:
+                  code: E_BAD_PAGE_RANGE
+                  message: The order must name every page exactly once (1-5), with no repeats and none missing.
+
+    TooFewFiles:
+      description: |
+        `/pdf/merge` needs at least two files, and `/pdf/scan-to-pdf` needs at
+        least one - both a genuine "there is nothing to do" rather than a
+        malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_TOO_FEW_FILES
+              message: Merging needs at least two PDF files.
 
     RateLimited:
       description: |

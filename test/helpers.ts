@@ -89,6 +89,37 @@ export async function upload(
   };
 }
 
+/**
+ * POST to one of the page endpoints (`/pdf/merge` and friends), which take
+ * more than one file, a differently-named field, or extra text fields that
+ * `upload()` above has no way to express.
+ */
+export async function postPages(
+  baseUrl: string,
+  path: string,
+  files: Array<{ filename: string; bytes: Buffer; fieldName?: string; mimeType?: string }>,
+  fields: Record<string, string> = {},
+): Promise<RawResponse> {
+  const form = new FormData();
+  for (const file of files) {
+    form.append(
+      file.fieldName ?? 'files',
+      new Blob([file.bytes], { type: file.mimeType ?? 'application/octet-stream' }),
+      file.filename,
+    );
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, value);
+  }
+  const response = await fetch(`${baseUrl}${path}`, { method: 'POST', body: form });
+  return {
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+    contentDisposition: response.headers.get('content-disposition'),
+    body: Buffer.from(await response.arrayBuffer()),
+  };
+}
+
 export function expectJsonEnvelope(
   response: RawResponse,
   expectedStatus: number,
@@ -244,4 +275,57 @@ export function zipEntryNames(archive: Buffer): string[] {
   }
 
   return names;
+}
+
+/**
+ * The text of one page of a PDF, via `pdftotext` (poppler-utils - already a
+ * required system dependency, see the rasteriser).
+ *
+ * This is how the page endpoint tests verify ORDER rather than just page
+ * COUNT: pdf-lib, which builds the responses, has no text-extraction API of
+ * its own, and a page count alone cannot tell a correctly reordered document
+ * from one that merely has the right number of pages.
+ */
+/**
+ * A real JPEG, rendered once per test run from the hand-built PDF probe via
+ * `pdftoppm` - there is no pure-JS JPEG encoder in this codebase, and writing
+ * one just to have a JPEG fixture would test the fixture, not the service.
+ */
+let jpegFixtureCache: Promise<Buffer> | undefined;
+
+export function buildJpegFixture(): Promise<Buffer> {
+  if (!jpegFixtureCache) {
+    jpegFixtureCache = (async () => {
+      const { pdfProbe } = await import('../src/lib/probe-documents.ts');
+      const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-jpeg-'));
+      try {
+        const source = join(dir, 'probe.pdf');
+        await fsp.writeFile(source, pdfProbe());
+        await new Promise<void>((resolve, reject) => {
+          execFile(
+            'pdftoppm',
+            ['-jpeg', '-f', '1', '-l', '1', '-r', '36', source, join(dir, 'page')],
+            { timeout: 30_000 },
+            (error) => (error ? reject(error) : resolve()),
+          );
+        });
+        return await fsp.readFile(join(dir, 'page-1.jpg'));
+      } finally {
+        await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    })();
+  }
+  return jpegFixtureCache;
+}
+
+export function pdfPageText(pdf: Buffer, pageNumber: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      'pdftotext',
+      ['-f', String(pageNumber), '-l', String(pageNumber), '-', '-'],
+      { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout) => (error ? reject(error) : resolve(stdout.toString('utf8').trim())),
+    );
+    child.stdin?.end(pdf);
+  });
 }

@@ -27,7 +27,16 @@ export interface RequestContext {
   extension?: AllowedExtension;
   /** The target this request asked for, once it is known. */
   target?: TargetId;
+  /**
+   * A label for a request that is not a `/convert/{target}` conversion - the
+   * page endpoints (`merge`, `split`, `remove-pages`, ...) log this in place
+   * of `extension`/`target`, which do not describe a multi-file or
+   * parameterised request.
+   */
+  operation?: string;
   bytes?: number;
+  /** Tracked by `pages-upload.ts` as each part of a multi-file upload arrives. */
+  uploadedFileCount?: number;
   /** Aborted on client disconnect so a running soffice can be killed. */
   controller: AbortController;
   /**
@@ -73,6 +82,7 @@ export function logRequest(
     // but not what it was.
     source: ctx.extension,
     target: ctx.target,
+    operation: ctx.operation,
     status: extra.status,
     code: extra.code,
     bytes: ctx.bytes,

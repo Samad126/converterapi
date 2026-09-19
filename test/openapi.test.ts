@@ -119,6 +119,11 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.tooLarge(),
     Errors.noTables(),
     Errors.noLayers(),
+    Errors.badPageRange('Page 9 does not exist in this 5-page document.'),
+    Errors.badPageRange(
+      'The order must name every page exactly once (1-5), with no repeats and none missing.',
+    ),
+    Errors.tooFewFiles('Merging needs at least two PDF files.'),
     Errors.busy(),
     Errors.badRequest('test detail'),
     Errors.rateLimited(),

@@ -27,6 +27,8 @@ export type ErrorCode =
   | 'E_TOO_LARGE'
   | 'E_NO_TABLES'
   | 'E_NO_LAYERS'
+  | 'E_BAD_PAGE_RANGE'
+  | 'E_TOO_FEW_FILES'
   | 'E_BUSY'
   | 'E_BAD_REQUEST'
   | 'E_RATE_LIMITED'
@@ -107,11 +109,14 @@ export const Errors = {
    * is a document, and "unsupported" alone tells them nothing about what would
    * work.
    */
-  unsupported: () =>
+  unsupported: (message?: string) =>
     new AppError(
       'E_UNSUPPORTED',
       415,
-      `This file type cannot be converted. Supported types: ${describeSources()}.`,
+      // The page endpoints (`/pdf/merge` and friends) pass their own message:
+      // "Supported types: <the whole matrix>" would be actively misleading on
+      // an endpoint that only ever accepts PDFs, or only ever accepts images.
+      message ?? `This file type cannot be converted. Supported types: ${describeSources()}.`,
     ),
 
   /**
@@ -168,6 +173,26 @@ export const Errors = {
       422,
       'This PSD file does not contain any layers with images that can be extracted.',
     ),
+
+  /**
+   * A page-selection field (`pages`/`order`) named something that is not a
+   * coherent instruction against the document it came with: a page outside
+   * the document, malformed syntax, or (for `organize`) a selection that is
+   * not a true permutation of every page.
+   *
+   * The message is the specific problem rather than a fixed sentence, unlike
+   * `badRequest` - the person holding the phone typed a page number, and
+   * "page 9 does not exist in this 5-page document" is something they can
+   * fix, where a generic "bad request" is not.
+   */
+  badPageRange: (message: string) => new AppError('E_BAD_PAGE_RANGE', 400, message),
+
+  /**
+   * Merge needs at least two files, and scan-to-PDF needs at least one - both
+   * genuine "there is nothing to do" states rather than a malformed request,
+   * so each gets its own sentence rather than sharing `badRequest`'s.
+   */
+  tooFewFiles: (message: string) => new AppError('E_TOO_FEW_FILES', 400, message),
 
   /** No free conversion slot. */
   busy: () =>
