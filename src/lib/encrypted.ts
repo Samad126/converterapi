@@ -23,7 +23,10 @@
  * service reaches through soffice for anything that would otherwise give a
  * worse error.
  */
+import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
+
+import { QPDF_BIN } from '../config.ts';
 
 /** Best-effort encryption sniffing gives up past this; soffice decides instead. */
 const DETECTION_MAX_BYTES = 8 * 1024 * 1024;
@@ -44,7 +47,16 @@ export async function isPasswordProtected(inputPath: string): Promise<boolean> {
 
     if (head.subarray(0, 5).equals(PDF_MAGIC)) {
       const buffer = await fsp.readFile(inputPath);
-      return pdfLooksEncrypted(buffer);
+      if (!pdfLooksEncrypted(buffer)) return false;
+      // The trailer alone cannot distinguish a PDF that genuinely needs a
+      // password to open from one that is merely permission-restricted
+      // (print/copy/edit disabled by an OWNER password while the USER
+      // password is empty) - both carry an `/Encrypt` dictionary, but only
+      // the first is "password protected" in the sense a user asking to
+      // convert this file would recognise. qpdf can tell them apart
+      // authoritatively (see `pdfRequiresPassword`), so ask it before
+      // committing to what the trailer alone can only guess at.
+      return await pdfRequiresPassword(inputPath);
     }
 
     if (bytesRead < 8 || !head.equals(CFB_MAGIC)) {
@@ -60,6 +72,49 @@ export async function isPasswordProtected(inputPath: string): Promise<boolean> {
   } finally {
     await handle?.close().catch(() => {});
   }
+}
+
+/** How long `qpdf --requires-password` gets before this falls back to trusting the trailer sniff. */
+const QPDF_CHECK_TIMEOUT_MS = 5_000;
+
+/**
+ * Ask qpdf whether `inputPath` needs a password OTHER than an empty one to
+ * open - `--requires-password`'s exit code is exactly that question,
+ * unlike the trailer's mere presence of `/Encrypt`. Per `qpdf
+ * --help=--requires-password`: 0 = yes, a real password is required; 2 =
+ * not encrypted at all; 3 = encrypted, but the (empty, since none was
+ * supplied) password already works - which is this function's whole
+ * reason to exist, since that is a real PDF this service can open and
+ * convert without ever asking anyone for a password.
+ *
+ * A spawn failure or timeout falls back to `true` (trust the trailer sniff
+ * that got us here) rather than `false`: unlike the rest of this module's
+ * "false positive is worse than false negative" stance, an inability to
+ * even RUN qpdf - a required, preflight-checked dependency of this service
+ * - means something is wrong enough that guessing "openly readable" for a
+ * file that looked encrypted is the riskier guess, not the safer one.
+ */
+function pdfRequiresPassword(inputPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(QPDF_BIN, ['--requires-password', '--', inputPath], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(true);
+    }, QPDF_CHECK_TIMEOUT_MS);
+
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+
+    child.on('exit', (exitCode) => {
+      clearTimeout(timer);
+      resolve(exitCode === 0);
+    });
+  });
 }
 
 /**
