@@ -85,6 +85,18 @@ FROM node:22-bookworm-slim AS runtime
 # compatible set above is a drop-in replacement for the metrics that pagination
 # actually depends on. See README "Fonts".
 #
+# fonts-dejavu is for a different job than the three above: it is the
+# substitute font pdf_engine.py's `_rebuild_pdf_without_type3_fonts` draws
+# INTO a PDF, not one LibreOffice picks for itself, and pagination-matching
+# is irrelevant to it. What matters is Unicode coverage - checked directly
+# against every font already in this image, `fonts-crosextra-caladea`
+# (metric-compatible with Cambria, otherwise the obvious choice for a serif
+# Type3 report) turned out to be MISSING Azerbaijani's schwa (`ə`), silently
+# dropping every occurrence when used; DejaVu Serif has it. The full
+# `fonts-dejavu` package, not `-core`: `-core` ships only Regular and Bold,
+# no italic (needed for this same report's italic captions), and installing
+# the wrong one fails at first use, not at build time.
+#
 # The service refuses to boot without any of this. Preflight checks soffice,
 # `pdftoppm` and the fonts, and then converts one real document per family
 # before it listens - so a missing module fails loudly at startup rather than on
@@ -99,6 +111,7 @@ RUN apt-get update \
       fonts-crosextra-carlito \
       fonts-crosextra-caladea \
       fonts-liberation \
+      fonts-dejavu \
       fonts-opensymbol \
       fontconfig \
       ca-certificates \
