@@ -753,13 +753,38 @@ describe('POST /convert/<target> - PDF sources', () => {
     assert.equal(error.message, 'This document does not contain any tables.');
   });
 
+  it('reconstructs Markdown with pdf_engine.py, keeping both pages\' text', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'markdown' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'text/markdown; charset=utf-8');
+    const markdown = response.body.toString('utf8');
+    assert.match(markdown, /Converter warm-up/);
+    assert.match(markdown, /Second page/);
+  });
+
+  it('renders a ruled table as a GFM table in the Markdown output', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', pdfTableProbe(), { target: 'markdown' });
+    assert.equal(response.status, 200);
+    const markdown = response.body.toString('utf8');
+    // A GFM table: a header row, a `---` separator row, and the cell values -
+    // the same values `extracts a ruled table into a workbook` (above)
+    // checks survived the xlsx route, here checked against the text route.
+    assert.match(markdown, /\|.*---.*\|/);
+    for (const value of ['A1', 'B1', 'A2', 'B2']) {
+      assert.ok(markdown.includes(value), `"${value}" did not survive the Markdown table`);
+    }
+  });
+
   it('offers the same docx/pptx/xlsx ids a .doc upload would, not lookalikes', async () => {
     // There is no separate "from PDF" id to fall out of step with: a PDF
     // lists exactly `docx`/`pptx`/`xlsx` among the formats it can become,
     // the same ids GET /formats advertises for every other source.
     const response = await upload(server.baseUrl, 'doc.pdf', TWO_PAGE_PDF, { target: 'odt' });
     const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
-    assert.match(error.message, /A \.pdf file can be converted to: PDF\/A, PNG, JPG, DOCX, PPTX, XLSX\./);
+    assert.match(
+      error.message,
+      /A \.pdf file can be converted to: PDF\/A, PNG, JPG, DOCX, PPTX, XLSX, Markdown\./,
+    );
   });
 
   it('names the download after the upload, with the target extension', async () => {

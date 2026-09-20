@@ -53,7 +53,8 @@ export type TargetId =
   | 'jpg'
   | 'tables'
   | 'layers'
-  | 'pdfa';
+  | 'pdfa'
+  | 'markdown';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -439,6 +440,34 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: false,
     filters: { draw: 'draw_pdf_Export:{"SelectPdfVersion":{"type":"long","value":1}}' },
   },
+  markdown: {
+    id: 'markdown',
+    extension: '.md',
+    mediaType: 'text/markdown; charset=utf-8',
+    label: 'Markdown',
+    /**
+     * `mode: 'direct'` with an EMPTY `filters` table - there is no
+     * LibreOffice export filter for Markdown at all, so unlike `docx`/
+     * `pptx`/`xlsx` (each reachable two ways: a real filter for a native
+     * source, `pdf_engine.py` for a PDF) this target is reachable only
+     * through the engine. `validateMatrix`'s "a direct target must declare
+     * filters" rule is relaxed for exactly this case - see its own comment -
+     * because the real invariant is "reachable by SOME mechanism", and
+     * `engineFrom` below is that mechanism.
+     */
+    mode: 'direct',
+    multiple: false,
+    filters: {},
+    // `pdf_engine.py`'s markdown operation: PyMuPDF for text/heading/list
+    // structure recovered by font-size heuristic, pdfplumber for tables,
+    // interleaved in each page's own reading order. Lossy in a different
+    // direction than `tables`/`layers` (this keeps prose and structure,
+    // those keep only tables/images) and lossy in a different direction
+    // than `docx` (this is heuristic reconstruction from formatting, not
+    // pdf2docx's structural rebuild) - which is why it is its own target
+    // rather than folded into either.
+    engineFrom: ['.pdf'],
+  },
 };
 
 export interface SourceFormat {
@@ -638,10 +667,10 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'draw',
     mediaType: 'application/pdf',
     importFilter: 'draw_pdf_Import',
-    // `docx`/`pptx`/`xlsx` sit last because they are the only reconstructive
-    // members of the list - `pdfa` and the raster targets are LibreOffice's
-    // own faithful re-export of the same bytes.
-    targets: ['pdfa', 'png', 'jpg', 'docx', 'pptx', 'xlsx'],
+    // `docx`/`pptx`/`xlsx`/`markdown` sit last because they are the only
+    // reconstructive/extractive members of the list - `pdfa` and the raster
+    // targets are LibreOffice's own faithful re-export of the same bytes.
+    targets: ['pdfa', 'png', 'jpg', 'docx', 'pptx', 'xlsx', 'markdown'],
   },
 };
 
@@ -814,7 +843,12 @@ export function validateMatrix(): void {
       problems.push(`target "${id}" has a bare extension "${target.extension}"`);
     }
     const filterCount = Object.keys(target.filters).length;
-    if (target.mode === 'direct' && filterCount === 0) {
+    // A direct target with no filters at all is only legitimate when
+    // `engineFrom` is its ENTIRE reach (`markdown`, reachable only from a
+    // PDF via `pdf_engine.py`) - the real invariant is "reachable by some
+    // mechanism", and `engineFrom` is checked as its own mechanism further
+    // down, so this only has to catch a target with NEITHER.
+    if (target.mode === 'direct' && filterCount === 0 && !target.engineFrom?.length) {
       problems.push(`direct target "${id}" declares no filters`);
     }
     if (target.mode !== 'direct' && filterCount > 0) {

@@ -1,13 +1,14 @@
 /**
- * The `word`, `slides` and `sheet` targets: PDF in, DOCX/PPTX/XLSX out, with no
- * LibreOffice involved.
+ * The `docx`, `pptx`, `xlsx` and `markdown` targets, for a PDF SOURCE: PDF in,
+ * DOCX/PPTX/XLSX/Markdown out, with no LibreOffice involved.
  *
  * A PDF opens in LibreOffice as a Draw document, and Draw has no Writer/Calc/
  * Impress export filter - confirmed against the shipped LibreOffice by running
  * `soffice --convert-to docx/pptx/xlsx` on a real PDF and getting "no export
- * filter found" every time. `formats.ts` is explicit that these three targets
- * are not `soffice --convert-to` at all: they shell out to
- * `scripts/pdf_engine.py`, a second and unrelated conversion engine.
+ * filter found" every time. `formats.ts` is explicit that these targets are
+ * not `soffice --convert-to` at all (markdown has no LibreOffice export
+ * filter to speak of, on any source): they shell out to `scripts/
+ * pdf_engine.py`, a second and unrelated conversion engine.
  *
  * Reuses `runProcess` from soffice.service.ts rather than a second copy of it:
  * the failure modes are identical (a wedged process, a client that left, a
@@ -18,7 +19,7 @@
 import { PDF_ENGINE_SCRIPT, PYTHON_BIN } from '../config.ts';
 import { runProcess, type ProcessOutcome } from './soffice.service.ts';
 
-export type PdfEngineOperation = 'docx' | 'pptx' | 'xlsx' | 'ocr';
+export type PdfEngineOperation = 'docx' | 'pptx' | 'xlsx' | 'markdown' | 'ocr';
 
 /**
  * Exit code `pdf_engine.py`'s xlsx operation uses to say "this PDF has no

@@ -1657,7 +1657,8 @@ components:
       description: |
         Identifier of an output format, as used in the `/convert/{target}` path
         and returned by `GET /formats`.
-      enum: [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa]
+      enum:
+        [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa, markdown]
 
     ErrorCode:
       type: string
@@ -1952,7 +1953,7 @@ components:
           example:
             error:
               code: E_UNKNOWN_TARGET
-              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers), PDF/A.'
+              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers), PDF/A, Markdown.'
 
     TooLarge:
       description: |

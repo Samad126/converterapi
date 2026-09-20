@@ -65,7 +65,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.rtf` | DOCX, PDF, ODT |
 | `.png` `.jpg` `.jpeg` | PDF |
 | `.psd` | PNG (one image per layer) |
-| `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX (see below) |
+| `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
 
 Every filter name in that table was verified by running the real conversion
 against LibreOffice 24.2. That is not ceremony: **a wrong filter name is not an
@@ -156,23 +156,31 @@ pipeline renders one image per page exactly as it does for a presentation
 (skipping the render-to-PDF step, since the upload already is the PDF).
 
 `docx`, `pptx` and `xlsx` reach no LibreOffice filter from a PDF at all — and
-still answer to those same three ids, not a lookalike name of their own:
+still answer to those same three ids, not a lookalike name of their own;
+`markdown` has no LibreOffice filter on ANY source, not just a PDF, since
+Markdown export does not exist in LibreOffice at all:
 
 | Target | From a PDF | Answer |
 |---|---|---|
 | `docx` | `.pdf` | One `.docx`, reconstructed from the PDF's own text, tables and images |
 | `pptx` | `.pdf` | One `.pptx`, one slide per page, each page as a full-slide image |
 | `xlsx` | `.pdf` | One `.xlsx`, a worksheet per **ruled** table found in the PDF |
+| `markdown` | `.pdf` | One `.md`, headings/lists/tables recovered by heuristic |
 
 This is a **second, independent conversion engine** —
 [`scripts/pdf_engine.py`](scripts/pdf_engine.py), run as a subprocess exactly
 as `soffice`/`pdftoppm` are, with the same deadline and the same abort
 handling — reached through `engineFrom` in `src/formats.ts` rather than
-through `filters`. It is deliberately a second route to the SAME target id,
-not a target of its own the way `tables`/`layers` are: a `.doc` upload asking
-for `docx` gets a plain `soffice --convert-to`, and a PDF asking for `docx`
-gets `pdf_engine.py`, and the client never has to know or care which one ran
-— the URL names the FORMAT, and `resolveConversion` decides the engine.
+through `filters`. For `docx`/`pptx`/`xlsx` it is deliberately a second route
+to the SAME target id, not a target of its own the way `tables`/`layers`
+are: a `.doc` upload asking for `docx` gets a plain `soffice --convert-to`,
+and a PDF asking for `docx` gets `pdf_engine.py`, and the client never has to
+know or care which one ran — the URL names the FORMAT, and
+`resolveConversion` decides the engine. `markdown` has no other route to be
+a second one to — it is engine-only, for every source, which is why
+`formats.ts`'s `validateMatrix` had to learn a new legitimate shape: a
+`direct`-mode target with an EMPTY filter table, reachable purely through
+`engineFrom`.
 
 From a PDF, `docx` uses [pdf2docx](https://github.com/dothinking/pdf2docx)
 (built on PyMuPDF) to rebuild real paragraphs, tables and images as OOXML —
@@ -252,6 +260,24 @@ one place this route is a genuinely different, lossier operation from what
 `xlsx` means for every other source, and it still answers to the name, because
 a workbook is a workbook and there is no faithful, non-lossy PDF→spreadsheet
 export to hold it apart from.
+
+`markdown` uses PyMuPDF for text and pdfplumber for tables, the same two
+libraries `docx`/`xlsx` already use, combined differently: each page's text
+blocks and detected tables are sorted together by vertical position, so a
+table renders inline where it actually sits rather than trailing the page's
+prose. Headings, bullet/numbered lists and bold text are recovered by
+**heuristic, not structure** — a PDF has no heading elements the way a
+`.docx` package does, so a line's font size is judged against **this
+document's own median span size** (not a fixed point size, since a deck set
+entirely in 20pt text and a memo set in 10pt text each need headings judged
+against their own "normal") and rendered as `#`/`##`/`###` above three
+relative-size thresholds; a bold line at body size becomes `**text**`
+instead. This will occasionally misjudge a large pull-quote as a heading, or
+miss a heading set apart by color alone rather than size — accepted the same
+way `xlsx`'s lines-based table detection accepts a borderless table it
+cannot see. Unlike `xlsx`, an empty result is not an error: a blank or
+image-only PDF producing an empty (or near-empty) Markdown file is an honest
+answer, not a failure, the same as `.docx → txt` on a blank document.
 
 ---
 
