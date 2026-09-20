@@ -77,6 +77,7 @@ function documentedErrors(): Array<{ where: string; code: string; message: strin
     const envelope = response as {
       content?: {
         'application/json'?: {
+          schema?: { $ref?: string };
           example?: unknown;
           examples?: Record<string, { value: unknown }>;
         };
@@ -84,6 +85,12 @@ function documentedErrors(): Array<{ where: string; code: string; message: strin
     };
     const media = envelope.content?.['application/json'];
     if (!media) continue;
+    // Not every JSON response is an error envelope - `/pdf/form-fields` and
+    // `/pdf/compare` answer with their own JSON shape on success, and their
+    // examples have no `error` object to check at all. Only a response whose
+    // schema actually IS `ErrorEnvelope` is a claim about `error.code`/
+    // `error.message` this test can hold the service to.
+    if (media.schema?.$ref !== '#/components/schemas/ErrorEnvelope') continue;
 
     const candidates: unknown[] = [];
     if (media.example) candidates.push(media.example);
@@ -124,6 +131,7 @@ function actualErrors(): Array<{ code: string; message: string }> {
       'The order must name every page exactly once (1-5), with no repeats and none missing.',
     ),
     Errors.tooFewFiles('Merging needs at least two PDF files.'),
+    Errors.tooFewFiles('Comparing needs exactly two PDF files.'),
     Errors.wrongPassword(),
     Errors.invalidField('The "degrees" field must be a multiple of 90.'),
     Errors.invalidField('The "text" field is required.'),
@@ -133,6 +141,8 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.invalidField('The "position" field must be one of: bottom-center, bottom-left, bottom-right.'),
     Errors.invalidField('The "startAt" field must be a positive whole number.'),
     Errors.invalidField('The "ocr" field must be "true" or "false".'),
+    Errors.invalidField('The "force" field must be "true" or "false".'),
+    Errors.invalidField('There is no form field named "nope" in this PDF.'),
     Errors.busy(),
     Errors.badRequest('test detail'),
     Errors.rateLimited(),

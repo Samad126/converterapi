@@ -8,6 +8,7 @@
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 
 import { PDFDocument } from 'pdf-lib';
 
@@ -26,7 +27,24 @@ import fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { buildMinimalPdf, buildSolidPng } = await import('../src/lib/probe-documents.ts');
+const { buildMinimalPdf, buildSolidPng, pdfScannedProbe } = await import('../src/lib/probe-documents.ts');
+
+/**
+ * `ocrmypdf` shells out to `tesseract` for the actual character recognition.
+ * It is installed in this sandbox, `tesseract` is not - so any test that
+ * needs OCR to genuinely SUCCEED (as opposed to the force=false passthrough,
+ * which never touches an OCR engine at all) is skipped rather than failed
+ * when it is missing, the same way the rest of this suite treats a missing
+ * optional system dependency.
+ */
+let tesseractAvailable: boolean | undefined;
+async function hasTesseract(): Promise<boolean> {
+  if (tesseractAvailable !== undefined) return tesseractAvailable;
+  tesseractAvailable = await new Promise<boolean>((resolve) => {
+    execFile('tesseract', ['--version'], (error) => resolve(!error));
+  });
+  return tesseractAvailable;
+}
 
 let server: TestServer;
 
@@ -648,5 +666,263 @@ describe('POST /pdf/repair', () => {
     const body = JSON.parse(response.body.toString('utf8'));
     assert.equal(response.status, 422);
     assert.equal(body.error.code, 'E_ENCRYPTED');
+  });
+});
+
+describe('POST /pdf/ocr', () => {
+  it('passes a PDF that already has text through unchanged when force is not set', async () => {
+    const pdf = buildMinimalPdf(['Already searchable']);
+    const response = await postPages(server.baseUrl, '/pdf/ocr', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: pdf },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    // No OCR engine involved for this path at all - the text was already
+    // there, so this is a plain copy, verifiable without tesseract.
+    assert.equal(await pdfPageText(response.body, 1), 'Already searchable');
+  });
+
+  it('passes a PDF that already has text through unchanged when force is explicitly false', async () => {
+    // At least 10 characters: `_pdf_has_no_extractable_text` in
+    // pdf_engine.py treats anything shorter as "probably just a stray page
+    // number", the same threshold documented there.
+    const pdf = buildMinimalPdf(['This is a real text page']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/ocr',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { force: 'false' },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(await pdfPageText(response.body, 1), 'This is a real text page');
+  });
+
+  it('OCRs a scanned PDF with no extractable text when tesseract is available', async () => {
+    if (!(await hasTesseract())) return; // See hasTesseract() above.
+    const scanned = pdfScannedProbe();
+    const inputPageCount = await pageCount(scanned);
+
+    const response = await postPages(server.baseUrl, '/pdf/ocr', [
+      { filename: 'scan.pdf', fieldName: 'file', bytes: scanned },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    assert.equal(await pageCount(response.body), inputPageCount);
+  });
+
+  it('force=true re-OCRs even a PDF that already has text, when tesseract is available', async () => {
+    if (!(await hasTesseract())) return;
+    const pdf = buildMinimalPdf(['Force me']);
+    const inputPageCount = await pageCount(pdf);
+
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/ocr',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { force: 'true' },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(await pageCount(response.body), inputPageCount);
+  });
+
+  it('rejects a non-boolean force field', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/ocr',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { force: 'maybe' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('refuses an encrypted PDF', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/ocr', [
+      { filename: 'secret.pdf', fieldName: 'file', bytes: buildEncryptedPdfContainer() },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 422);
+    assert.equal(body.error.code, 'E_ENCRYPTED');
+  });
+});
+
+/** Build a small real PDF whose AcroForm has one text field and one checkbox. */
+async function buildFormPdf(): Promise<Buffer> {
+  const document = await PDFDocument.create();
+  const page = document.addPage([300, 150]);
+  const form = document.getForm();
+
+  const textField = form.createTextField('name');
+  textField.setText('');
+  textField.addToPage(page, { x: 20, y: 100, width: 150, height: 20 });
+
+  const checkbox = form.createCheckBox('agree');
+  checkbox.addToPage(page, { x: 20, y: 60, width: 20, height: 20 });
+
+  return Buffer.from(await document.save());
+}
+
+describe('POST /pdf/form-fields', () => {
+  it('lists every AcroForm field with its type', async () => {
+    const pdf = await buildFormPdf();
+    const response = await postPages(server.baseUrl, '/pdf/form-fields', [
+      { filename: 'form.pdf', fieldName: 'file', bytes: pdf },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/json');
+    const fields = JSON.parse(response.body.toString('utf8'));
+    assert.equal(Array.isArray(fields), true);
+    const byName = Object.fromEntries(fields.map((f: { name: string }) => [f.name, f]));
+    assert.equal(byName.name.type, 'text');
+    assert.equal(byName.agree.type, 'checkbox');
+    assert.equal(byName.agree.value, false);
+  });
+
+  it('returns an empty array for a PDF with no form', async () => {
+    const pdf = buildMinimalPdf(['No form here']);
+    const response = await postPages(server.baseUrl, '/pdf/form-fields', [
+      { filename: 'plain.pdf', fieldName: 'file', bytes: pdf },
+    ]);
+
+    assert.equal(response.status, 200);
+    const fields = JSON.parse(response.body.toString('utf8'));
+    assert.deepEqual(fields, []);
+  });
+});
+
+describe('POST /pdf/fill-form', () => {
+  it('fills a text field and a checkbox, and the values round-trip', async () => {
+    const pdf = await buildFormPdf();
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/fill-form',
+      [{ filename: 'form.pdf', fieldName: 'file', bytes: pdf }],
+      { fields: JSON.stringify({ name: 'Ada Lovelace', agree: true }) },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+
+    const document = await PDFDocument.load(response.body);
+    const form = document.getForm();
+    assert.equal(form.getTextField('name').getText(), 'Ada Lovelace');
+    assert.equal(form.getCheckBox('agree').isChecked(), true);
+  });
+
+  it('flattening removes the fields, leaving the values as page content', async () => {
+    const pdf = await buildFormPdf();
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/fill-form',
+      [{ filename: 'form.pdf', fieldName: 'file', bytes: pdf }],
+      { fields: JSON.stringify({ name: 'Flattened' }), flatten: 'true' },
+    );
+
+    assert.equal(response.status, 200);
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getForm().getFields().length, 0);
+  });
+
+  it('rejects an unknown field name', async () => {
+    const pdf = await buildFormPdf();
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/fill-form',
+      [{ filename: 'form.pdf', fieldName: 'file', bytes: pdf }],
+      { fields: JSON.stringify({ nope: 'x' }) },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects malformed JSON in the fields field', async () => {
+    const pdf = await buildFormPdf();
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/fill-form',
+      [{ filename: 'form.pdf', fieldName: 'file', bytes: pdf }],
+      { fields: '{not json' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});
+
+describe('POST /pdf/compare', () => {
+  it('reports every shared page as equal for two identical PDFs', async () => {
+    const a = buildMinimalPdf(['Page one', 'Page two']);
+    const b = buildMinimalPdf(['Page one', 'Page two']);
+
+    const response = await postPages(server.baseUrl, '/pdf/compare', [
+      { filename: 'a.pdf', bytes: a },
+      { filename: 'b.pdf', bytes: b },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/json');
+    const report = JSON.parse(response.body.toString('utf8'));
+    assert.equal(report.pageCountA, 2);
+    assert.equal(report.pageCountB, 2);
+    assert.equal(report.pages.every((p: { equal: boolean }) => p.equal), true);
+    assert.deepEqual(report.extraPagesInA, []);
+    assert.deepEqual(report.extraPagesInB, []);
+  });
+
+  it('reports a non-equal diff for a page whose text changed', async () => {
+    const a = buildMinimalPdf(['Hello world']);
+    const b = buildMinimalPdf(['Goodbye world']);
+
+    const response = await postPages(server.baseUrl, '/pdf/compare', [
+      { filename: 'a.pdf', bytes: a },
+      { filename: 'b.pdf', bytes: b },
+    ]);
+
+    assert.equal(response.status, 200);
+    const report = JSON.parse(response.body.toString('utf8'));
+    assert.equal(report.pages[0].equal, false);
+    assert.equal(Array.isArray(report.pages[0].diff), true);
+    const ops = report.pages[0].diff.map((d: { op: string }) => d.op);
+    assert.equal(ops.includes('equal') || ops.includes('replace') || ops.includes('insert') || ops.includes('delete'), true);
+  });
+
+  it('reports extra pages on the longer document', async () => {
+    const a = buildMinimalPdf(['Only page']);
+    const b = buildMinimalPdf(['Only page', 'Extra page']);
+
+    const response = await postPages(server.baseUrl, '/pdf/compare', [
+      { filename: 'a.pdf', bytes: a },
+      { filename: 'b.pdf', bytes: b },
+    ]);
+
+    assert.equal(response.status, 200);
+    const report = JSON.parse(response.body.toString('utf8'));
+    assert.deepEqual(report.extraPagesInA, []);
+    assert.deepEqual(report.extraPagesInB, [2]);
+  });
+
+  it('refuses a single file', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/compare', [
+      { filename: 'a.pdf', bytes: buildMinimalPdf(['A']) },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_TOO_FEW_FILES');
+  });
+
+  it('refuses three files', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/compare', [
+      { filename: 'a.pdf', bytes: buildMinimalPdf(['A']) },
+      { filename: 'b.pdf', bytes: buildMinimalPdf(['B']) },
+      { filename: 'c.pdf', bytes: buildMinimalPdf(['C']) },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
   });
 });

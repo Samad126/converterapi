@@ -15,6 +15,10 @@
  *   POST /pdf/crop           one PDF        -> a PDF with `pages` (or all) cropped by margins
  *   POST /pdf/page-numbers   one PDF        -> a PDF with a number drawn on every page
  *   POST /pdf/repair         one PDF        -> the same PDF, rewritten to fix what qpdf can recover
+ *   POST /pdf/ocr            one PDF        -> the same PDF with a searchable OCR text layer added
+ *   POST /pdf/form-fields    one PDF        -> JSON describing every AcroForm field
+ *   POST /pdf/fill-form      one PDF        -> a PDF with `fields` filled in (optionally flattened)
+ *   POST /pdf/compare        two PDFs       -> JSON, a per-page text diff
  */
 import { Router } from 'express';
 
@@ -131,6 +135,38 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createSinglePdfUploadMiddleware(),
     controller.repair,
+  );
+
+  router.post(
+    '/pdf/ocr',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.ocr,
+  );
+
+  router.post(
+    '/pdf/form-fields',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.formFields,
+  );
+
+  router.post(
+    '/pdf/fill-form',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.fillForm,
+  );
+
+  router.post(
+    '/pdf/compare',
+    controller.admit,
+    controller.prepareWorkspace,
+    createPdfFilesUploadMiddleware(),
+    controller.compare,
   );
 
   return router;

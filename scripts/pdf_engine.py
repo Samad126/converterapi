@@ -11,12 +11,21 @@ this script instead, one purpose-built engine per target.
 
 Invocation, matching what pdf-engine.service.ts spawns:
 
-    pdf_engine.py <docx|pptx|xlsx> <input.pdf> <output-path> [ocr]
+    pdf_engine.py <docx|pptx|xlsx|ocr> <input.pdf> <output-path> [ocr|force]
+    pdf_engine.py compare <inputA.pdf> <inputB.pdf> <output.json>
 
 `ocr` (`true`/`false`, defaults to `true`) only affects the `docx` operation -
 see `convert_to_docx` and `_pdf_has_no_extractable_text`. It is accepted
 positionally for every operation regardless, so the caller does not have to
-special-case which operation it is talking to.
+special-case which operation it is talking to. For the `ocr` operation itself,
+the same positional slot instead means `force` (`true`/`false`, defaults to
+`false`) - see `run_ocr_operation`.
+
+`compare` is the one operation with a genuinely different shape: two PDFs in,
+one JSON report out, rather than one PDF in and one PDF/OOXML file out. It is
+special-cased in `main()` before the generic argument parsing below, the same
+way this file already treats xlsx's NO_TABLES_EXIT_CODE as a case the general
+flow does not cover.
 
 Exit codes:
     0  wrote the output
@@ -27,7 +36,10 @@ Each operation is independent and imports its own dependency, so a missing
 package fails with a clear ModuleNotFoundError naming exactly what is missing,
 rather than every operation going down if one dependency is absent.
 """
+import difflib
+import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -435,22 +447,144 @@ def sheet_name(page_index: int, table_index: int, used_names: set) -> str:
     return name
 
 
+def run_ocr_operation(input_path: str, output_path: str, force: bool = False) -> None:
+    """
+    Make `input_path` searchable, standalone - the `/pdf/ocr` endpoint's
+    engine call, as opposed to OCR as an internal step of `convert_to_docx`.
+
+    Three cases, matched to the two existing OCR helpers rather than a third
+    one, because the decision they embody ("does this page already have a
+    text layer I can trust") is exactly the decision this endpoint needs too:
+
+      - `force` true: always re-OCR via `_force_ocr_pdf`, discarding whatever
+        text is already there. For a document whose existing text is wrong in
+        some way (Type3 glyphs, a bad OCR pass from another tool) - the same
+        justification `convert_to_docx` has for reaching for
+        `_force_ocr_pdf` on a Type3 PDF, just user-triggered instead of
+        content-triggered.
+      - `force` false and the PDF already has real extractable text on every
+        page: nothing to do. Copying the input to the output unchanged (not
+        an error) is the same "opened fine, nothing to extract" philosophy
+        E_NO_TABLES/E_NO_LAYERS document on the TypeScript side, applied
+        here instead of raising a distinct exit code for it, since a no-op
+        success is a perfectly good answer to "make this searchable" when it
+        already is.
+      - `force` false and the PDF has no extractable text (a scan): run
+        `_ocr_pdf`, the normal OCRmyPDF `skip_text` pass.
+    """
+    if force:
+        workspace = os.path.dirname(os.path.abspath(output_path)) or tempfile.gettempdir()
+        produced = _force_ocr_pdf(input_path, workspace)
+        shutil.copyfile(produced, output_path)
+        return
+
+    if not _pdf_has_no_extractable_text(input_path):
+        shutil.copyfile(input_path, output_path)
+        return
+
+    workspace = os.path.dirname(os.path.abspath(output_path)) or tempfile.gettempdir()
+    produced = _ocr_pdf(input_path, workspace)
+    shutil.copyfile(produced, output_path)
+
+
+def run_compare_operation(input_path_a: str, input_path_b: str, output_path: str) -> None:
+    """
+    Per-page text diff of two PDFs, written as JSON to `output_path`.
+
+    Page numbers in the JSON are 1-based - this is API-facing output read by
+    a phone, not an internal pdf-lib page index, and 1-based is what a person
+    comparing "page 4 changed" actually means. The rest of this codebase's
+    TypeScript layer uses 0-based indices for pdf-lib operations; that is a
+    different layer with a different audience and staying consistent WITHIN
+    this JSON matters more than matching a convention from a language this
+    file is not written in.
+
+    Pages are compared pairwise up to `min(pageCountA, pageCountB)`; anything
+    beyond that is reported separately as `extraPagesInA`/`extraPagesInB`
+    rather than diffed against nothing, since "page 5 doesn't exist in B" is a
+    different fact from "page 5 changed".
+
+    `SequenceMatcher` over each page's text split into lines (rather than a
+    single whole-page string diff) is what lets the response say WHICH lines
+    were inserted/deleted/replaced instead of only "this page differs" -
+    `get_text()` already gives text broken at PDF's own line boundaries via
+    embedded whitespace, so splitting on '\\n' recovers the layout PyMuPDF saw.
+    """
+    import fitz  # PyMuPDF
+
+    document_a = fitz.open(input_path_a)
+    document_b = fitz.open(input_path_b)
+    try:
+        page_count_a = document_a.page_count
+        page_count_b = document_b.page_count
+        shared = min(page_count_a, page_count_b)
+
+        pages = []
+        for index in range(shared):
+            lines_a = document_a[index].get_text().splitlines()
+            lines_b = document_b[index].get_text().splitlines()
+            if lines_a == lines_b:
+                pages.append({'page': index + 1, 'equal': True})
+                continue
+
+            diff = []
+            matcher = difflib.SequenceMatcher(a=lines_a, b=lines_b, autojunk=False)
+            for tag, a_start, a_end, b_start, b_end in matcher.get_opcodes():
+                if tag == 'equal':
+                    op = 'equal'
+                elif tag == 'insert':
+                    op = 'insert'
+                elif tag == 'delete':
+                    op = 'delete'
+                else:
+                    op = 'replace'
+                diff.append({'op': op, 'a': lines_a[a_start:a_end], 'b': lines_b[b_start:b_end]})
+            pages.append({'page': index + 1, 'equal': False, 'diff': diff})
+
+        report = {
+            'pageCountA': page_count_a,
+            'pageCountB': page_count_b,
+            'pages': pages,
+            'extraPagesInA': list(range(shared + 1, page_count_a + 1)),
+            'extraPagesInB': list(range(shared + 1, page_count_b + 1)),
+        }
+    finally:
+        document_a.close()
+        document_b.close()
+
+    with open(output_path, 'w', encoding='utf-8') as handle:
+        json.dump(report, handle)
+
+
 OPERATIONS = {
     'docx': convert_to_docx,
     'pptx': convert_to_pptx,
     'xlsx': convert_to_xlsx,
+    'ocr': run_ocr_operation,
 }
 
 
 def main() -> int:
+    # `compare` takes two input PDFs, not one, so its argument count and
+    # shape are genuinely different from every other operation here - special
+    # cased before the generic parsing below, the same way NO_TABLES_EXIT_CODE
+    # is a special case rather than being squeezed into the general flow.
+    if len(sys.argv) >= 2 and sys.argv[1] == 'compare':
+        if len(sys.argv) != 5:
+            print(f'usage: {sys.argv[0]} compare <inputA.pdf> <inputB.pdf> <output.json>', file=sys.stderr)
+            return 1
+        try:
+            run_compare_operation(sys.argv[2], sys.argv[3], sys.argv[4])
+        except Exception as error:  # noqa: BLE001 - reported to stderr, not swallowed
+            print(f'compare failed: {error}', file=sys.stderr)
+            return 1
+        return 0
+
     if len(sys.argv) not in (4, 5):
-        print(f'usage: {sys.argv[0]} <docx|pptx|xlsx> <input.pdf> <output-path> [ocr]', file=sys.stderr)
+        print(f'usage: {sys.argv[0]} <docx|pptx|xlsx|ocr> <input.pdf> <output-path> [ocr|force]', file=sys.stderr)
         return 1
 
     operation, input_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
-    # Only convert_to_docx reads this; accepted for every operation anyway so
-    # the caller never has to special-case which one it is talking to.
-    ocr = sys.argv[4].lower() != 'false' if len(sys.argv) == 5 else True
     handler = OPERATIONS.get(operation)
     if handler is None:
         print(f'unknown operation "{operation}", expected one of {sorted(OPERATIONS)}', file=sys.stderr)
@@ -458,7 +592,17 @@ def main() -> int:
 
     try:
         if operation == 'docx':
+            # Defaults true: anything other than the literal string "false"
+            # is treated as "yes, OCR it" - matches this flag's original,
+            # already-shipped behaviour for the docx operation exactly.
+            ocr = sys.argv[4].lower() != 'false' if len(sys.argv) == 5 else True
             convert_to_docx(input_path, output_path, ocr=ocr)
+        elif operation == 'ocr':
+            # Defaults false: same positional slot, opposite polarity - see
+            # run_ocr_operation for why "should I force re-OCR" defaults to
+            # no rather than yes.
+            force = sys.argv[4].lower() == 'true' if len(sys.argv) == 5 else False
+            run_ocr_operation(input_path, output_path, force=force)
         else:
             handler(input_path, output_path)
     except SystemExit:

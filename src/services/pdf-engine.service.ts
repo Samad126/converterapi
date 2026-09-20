@@ -18,7 +18,7 @@
 import { PDF_ENGINE_SCRIPT, PYTHON_BIN } from '../config.ts';
 import { runProcess, type ProcessOutcome } from './soffice.service.ts';
 
-export type PdfEngineOperation = 'docx' | 'pptx' | 'xlsx';
+export type PdfEngineOperation = 'docx' | 'pptx' | 'xlsx' | 'ocr';
 
 /**
  * Exit code `pdf_engine.py`'s xlsx operation uses to say "this PDF has no
@@ -44,14 +44,26 @@ export interface PdfEngineRun {
    * special-case which operation this run is.
    */
   ocr?: boolean;
+  /**
+   * `ocr` operation only: re-OCR from scratch even if the page already has a
+   * text layer this pipeline would otherwise trust. Defaults to false - the
+   * same "trust existing text unless told otherwise" default every other
+   * caller of `_pdf_has_no_extractable_text` uses. Shares the same
+   * positional argument slot as `ocr` above (`pdf_engine.py` only ever runs
+   * one of the two operations that read it), so passing both together would
+   * be a caller bug, not something this interface needs to prevent - nothing
+   * in `pages.controller.ts` does.
+   */
+  force?: boolean;
 }
 
 export function runPdfEngine(run: PdfEngineRun): Promise<ProcessOutcome> {
-  const { operation, inputPath, outputPath, workspace, deadline, signal, ocr } = run;
+  const { operation, inputPath, outputPath, workspace, deadline, signal, ocr, force } = run;
+  const flag = operation === 'ocr' ? String(force ?? false) : String(ocr ?? true);
 
   return runProcess({
     bin: PYTHON_BIN,
-    args: [PDF_ENGINE_SCRIPT, operation, inputPath, outputPath, String(ocr ?? true)],
+    args: [PDF_ENGINE_SCRIPT, operation, inputPath, outputPath, flag],
     workspace,
     deadline,
     signal,
@@ -64,6 +76,44 @@ export function runPdfEngine(run: PdfEngineRun): Promise<ProcessOutcome> {
     // image installs these system-wide, where this would not matter, but the
     // real HOME costs nothing to restore and is what makes a non-Docker
     // install (or any environment using `--user` packages) work too.
+    env: { HOME: process.env.HOME ?? workspace },
+  });
+}
+
+export interface PdfCompareRun {
+  inputPathA: string;
+  inputPathB: string;
+  outputPath: string;
+  workspace: string;
+  deadline: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * `/pdf/compare`'s engine call: two PDFs in, a JSON diff report written to
+ * `outputPath`.
+ *
+ * Deliberately NOT `PdfEngineRun` with a second input bolted on: that
+ * interface's whole shape - one `inputPath`, one `operation` id reused as
+ * both the CLI verb and (for `docx`) a flag name - is built around "one file
+ * becomes one file", which `compare` genuinely is not. Forcing it in would
+ * mean either a second unused `inputPath`-shaped field on every other run or
+ * a union type every call site has to narrow before it can read anything -
+ * more confusing than a second small function that mirrors `runPdfEngine`'s
+ * body almost exactly.
+ */
+export function runPdfCompare(run: PdfCompareRun): Promise<ProcessOutcome> {
+  const { inputPathA, inputPathB, outputPath, workspace, deadline, signal } = run;
+
+  return runProcess({
+    bin: PYTHON_BIN,
+    args: [PDF_ENGINE_SCRIPT, 'compare', inputPathA, inputPathB, outputPath],
+    workspace,
+    deadline,
+    signal,
+    // See runPdfEngine's identical comment: a sandboxed HOME hides Python
+    // packages installed under `--user`, which has nothing to do with either
+    // PDF being compared.
     env: { HOME: process.env.HOME ?? workspace },
   });
 }

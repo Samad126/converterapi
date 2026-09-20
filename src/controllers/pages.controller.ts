@@ -28,7 +28,9 @@ import {
   addPageNumbers,
   addWatermark,
   cropPages,
+  fillForm as fillFormFields,
   imagesToPdf,
+  listFormFields,
   mergePdfs,
   pdfPageCount,
   removePages,
@@ -36,9 +38,11 @@ import {
   selectPages,
   splitPdf,
   type CropMargins,
+  type FormFieldValue,
   type PageNumberPosition,
   type ScanImage,
 } from '../services/pdf-pages.service.ts';
+import { runPdfCompare, runPdfEngine } from '../services/pdf-engine.service.ts';
 import { protectWithQpdf, repairWithQpdf, unlockWithQpdf } from '../services/qpdf.service.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest } from '../middleware/request-context.ts';
@@ -64,6 +68,10 @@ export interface PagesController {
   crop: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   pageNumbers: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   repair: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  ocr: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  formFields: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  fillForm: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  compare: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 }
 
 interface PagesResult {
@@ -125,6 +133,51 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
 
       await cleanup(ctx);
       sendPagesResult(res, result);
+      logRequest(ctx, 'ok', { status: 200 });
+    } catch (error) {
+      if (error instanceof ClientGoneError) {
+        logRequest(ctx, 'client_gone');
+        return;
+      }
+      next(error);
+    } finally {
+      await cleanup(ctx);
+    }
+  }
+
+  /**
+   * The JSON-response twin of `run`, above - identical shape (gate on the
+   * queue, produce a result, send it, clean up, log it) except the result IS
+   * the response body rather than a file/archive to wrap in `Content-
+   * Disposition` headers. `/pdf/form-fields` and `/pdf/compare` are the only
+   * two endpoints in this file that answer with structured data instead of a
+   * document, so they get their own tiny send path rather than stretching
+   * `PagesResult`/`sendPagesResult` to carry a JSON variant those two never
+   * otherwise need.
+   */
+  async function runJson(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+    operation: string,
+    produce: () => Promise<unknown>,
+  ): Promise<void> {
+    const ctx = getContext(req);
+    ctx.operation = operation;
+
+    try {
+      const result = await queue.run(ctx.controller.signal, produce);
+
+      if (res.writableEnded || ctx.controller.signal.aborted) {
+        logRequest(ctx, 'client_gone');
+        return;
+      }
+
+      await cleanup(ctx);
+      const body = Buffer.from(JSON.stringify(result), 'utf8');
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Length', String(body.length));
+      res.status(200).end(body);
       logRequest(ctx, 'ok', { status: 200 });
     } catch (error) {
       if (error instanceof ClientGoneError) {
@@ -445,6 +498,90 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const ocr: PagesController['ocr'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'ocr', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+      const force = parseBooleanField(req.body?.force, 'force', false);
+
+      const workspace = requireWorkspace(req);
+      const outputPath = join(workspace, 'output.pdf');
+      const outcome = await runPdfEngine({
+        operation: 'ocr',
+        inputPath: file.path,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+        force,
+      });
+      const result = await readPdfEngineOutput(outcome, outputPath);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const formFields: PagesController['formFields'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await runJson(req, res, next, 'form-fields', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      return listFormFields(buffer);
+    });
+  };
+
+  const fillFormHandler: PagesController['fillForm'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'fill-form', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const values = parseFormFieldsJson(req.body?.fields);
+      const flatten = parseBooleanField(req.body?.flatten, 'flatten', false);
+
+      const buffer = await fsp.readFile(file.path);
+      const result = await fillFormFields(buffer, values, { flatten });
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
+  const compare: PagesController['compare'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    ctx.bytes = files.reduce((total, file) => total + file.size, 0);
+
+    await runJson(req, res, next, 'compare', async () => {
+      if (files.length !== 2) {
+        throw Errors.tooFewFiles('Comparing needs exactly two PDF files.');
+      }
+      await assertUploadsUsable(files);
+
+      const workspace = requireWorkspace(req);
+      const outputPath = join(workspace, 'compare.json');
+      const outcome = await runPdfCompare({
+        inputPathA: files[0]!.path,
+        inputPathB: files[1]!.path,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+      });
+      return readPdfCompareOutput(outcome, outputPath);
+    });
+  };
+
   return {
     admit,
     prepareWorkspace,
@@ -461,6 +598,10 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     crop,
     pageNumbers,
     repair,
+    ocr,
+    formFields,
+    fillForm: fillFormHandler,
+    compare,
   };
 }
 
@@ -544,6 +685,96 @@ function parseStartAt(raw: unknown): number {
     throw Errors.invalidField('The "startAt" field must be a positive whole number.');
   }
   return Number.parseInt(raw, 10);
+}
+
+/**
+ * A `true`/`false` multipart field, defaulting to `fallback` when omitted -
+ * `force` on `/pdf/ocr`, `flatten` on `/pdf/fill-form`. Anything else typed
+ * in is a mistake worth a clear `E_INVALID_FIELD` rather than being silently
+ * coerced, the same reasoning `parseRotationDegrees` applies to `degrees`.
+ */
+function parseBooleanField(raw: unknown, fieldName: string, fallback: boolean): boolean {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw Errors.invalidField(`The "${fieldName}" field must be "true" or "false".`);
+}
+
+/**
+ * The `fields` multipart field for `/pdf/fill-form`: JSON text naming a
+ * value per form field. Parsed and shape-checked here rather than left to
+ * `fillForm` in the service, so a malformed request never gets as far as
+ * loading the PDF at all - the same "validate the request before touching
+ * pdf-lib" order every other handler in this file follows.
+ */
+function parseFormFieldsJson(raw: unknown): Record<string, FormFieldValue> {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw Errors.invalidField('The "fields" field is required and must be a JSON object.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw Errors.invalidField('The "fields" field must be valid JSON.');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw Errors.invalidField('The "fields" field must be a JSON object mapping field names to values.');
+  }
+  for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value !== 'string' && typeof value !== 'boolean') {
+      throw Errors.invalidField(`The value given for field "${name}" must be a string or a boolean.`);
+    }
+  }
+  return parsed as Record<string, FormFieldValue>;
+}
+
+/**
+ * Turn a `pdf_engine.py` `ocr` run into either the bytes it produced or the
+ * right AppError - the `pdf_engine.py` twin of `readQpdfOutput` below, for
+ * the one page-operation endpoint that goes through the Python engine rather
+ * than qpdf or pdf-lib.
+ */
+async function readPdfEngineOutput(
+  outcome: import('../services/soffice.service.ts').ProcessOutcome,
+  outputPath: string,
+): Promise<Buffer> {
+  if (outcome.kind === 'timeout') throw Errors.timeout();
+  if (outcome.kind === 'aborted') throw new ClientGoneError();
+  if (outcome.kind === 'exited' && (outcome.exitCode ?? -1) !== 0) {
+    throw Errors.convertFailed(outcome.stderr || `pdf_engine.py exited ${outcome.exitCode}`);
+  }
+  try {
+    const data = await fsp.readFile(outputPath);
+    if (data.length === 0) throw new Error('pdf_engine.py produced an empty file');
+    return data;
+  } catch (error) {
+    throw Errors.convertFailed(error);
+  }
+}
+
+/**
+ * Turn a `pdf_engine.py` `compare` run into the parsed JSON report it wrote,
+ * or the right AppError. Unlike every PDF-producing outcome in this file,
+ * an empty output is not itself suspicious to check for - a valid, empty-ish
+ * JSON body is small but never zero bytes - so this only has to distinguish
+ * "the process didn't finish" from "the process wrote something that isn't
+ * the JSON it promised".
+ */
+async function readPdfCompareOutput(
+  outcome: import('../services/soffice.service.ts').ProcessOutcome,
+  outputPath: string,
+): Promise<unknown> {
+  if (outcome.kind === 'timeout') throw Errors.timeout();
+  if (outcome.kind === 'aborted') throw new ClientGoneError();
+  if (outcome.kind === 'exited' && (outcome.exitCode ?? -1) !== 0) {
+    throw Errors.convertFailed(outcome.stderr || `pdf_engine.py exited ${outcome.exitCode}`);
+  }
+  try {
+    const data = await fsp.readFile(outputPath, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    throw Errors.convertFailed(error);
+  }
 }
 
 /**

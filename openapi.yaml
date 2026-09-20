@@ -531,6 +531,150 @@ paths:
         '503':
           $ref: '#/components/responses/Busy'
 
+  /pdf/ocr:
+    post:
+      tags: [pages]
+      operationId: ocrPdf
+      summary: Make a PDF searchable
+      description: |
+        Adds an invisible, searchable OCR text layer to a PDF and answers
+        with the result - the same OCR engine `/convert/docx` uses
+        internally on a scanned source, exposed here as its own "make this
+        searchable" endpoint rather than only a side effect of a Word export.
+
+        With `force` false (the default): a PDF that already has real text
+        on every page is returned unchanged, since there is nothing to do.
+        A PDF with no extractable text at all (a scan) is OCR'd.
+
+        With `force` true: the PDF is re-OCR'd unconditionally, discarding
+        whatever text is already there first - for a document whose existing
+        text layer is wrong in some way and cannot be trusted.
+      requestBody:
+        $ref: '#/components/requestBodies/OcrUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /pdf/form-fields:
+    post:
+      tags: [pages]
+      operationId: listPdfFormFields
+      summary: List a PDF's AcroForm fields
+      description: |
+        Answers with JSON describing every AcroForm field in the PDF: its
+        name, type, current value and (for a radio group, dropdown or option
+        list) its available choices. A PDF with no AcroForm at all - most
+        PDFs - answers with an empty array, not an error: the document opened
+        fine and simply has no form fields, the same "nothing to extract"
+        situation `E_NO_TABLES`/`E_NO_LAYERS` describe for other extractors.
+
+        This is the one page endpoint that answers with `application/json`
+        instead of a PDF.
+      requestBody:
+        $ref: '#/components/requestBodies/RepairUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/FormFieldsResult'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/fill-form:
+    post:
+      tags: [pages]
+      operationId: fillPdfForm
+      summary: Fill a PDF's AcroForm fields
+      description: |
+        Sets the named AcroForm fields to the given values and answers with
+        the resulting PDF. `fields` is a JSON object mapping each field name
+        to a string (text, radio, dropdown or option-list fields) or a
+        boolean (checkboxes). Naming a field that does not exist on the form
+        is refused with `400 E_INVALID_FIELD`, as is a value of the wrong
+        type for its field.
+
+        With `flatten` true, the filled values are baked into permanent page
+        content and the form fields are removed afterwards - useful for a
+        "final" document nobody should edit further. Defaults to `false`,
+        leaving the fields in place and editable.
+      requestBody:
+        $ref: '#/components/requestBodies/FillFormUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /pdf/compare:
+    post:
+      tags: [pages]
+      operationId: comparePdfs
+      summary: Diff two PDFs, page by page
+      description: |
+        Answers with JSON: each pair of pages (up to the shorter document's
+        page count) is compared as text, line by line, and reported as either
+        equal or a list of `equal`/`insert`/`delete`/`replace` diff chunks.
+        Pages beyond the shorter document's length are reported separately as
+        `extraPagesInA`/`extraPagesInB` rather than diffed against nothing.
+
+        Needs EXACTLY two PDFs, under the field name `files` - one file or
+        three or more is refused with `400`.
+      requestBody:
+        $ref: '#/components/requestBodies/CompareUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/CompareResult'
+        '400':
+          $ref: '#/components/responses/TooFewFiles'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /formats:
     get:
       tags: [discovery]
@@ -993,7 +1137,135 @@ components:
                 format: binary
                 description: The PDF to repair.
 
+    OcrUpload:
+      required: true
+      description: One PDF, plus whether to unconditionally re-OCR it.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file]
+            additionalProperties: false
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to make searchable.
+              force:
+                type: string
+                enum: ['true', 'false']
+                default: 'false'
+                description: |
+                  When true, re-OCR the PDF unconditionally, discarding any
+                  existing text layer first. When false (the default), a PDF
+                  that already has real text is returned unchanged and only
+                  a PDF with none is OCR'd.
+
+    FillFormUpload:
+      required: true
+      description: One PDF, plus the field values to set.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, fields]
+            additionalProperties: false
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF whose form fields should be filled.
+              fields:
+                type: string
+                description: |
+                  A JSON object mapping each field name to its new value: a
+                  string for a text, radio, dropdown or option-list field, or
+                  a boolean for a checkbox.
+                example: '{"name": "Ada Lovelace", "agree": true}'
+              flatten:
+                type: string
+                enum: ['true', 'false']
+                default: 'false'
+                description: |
+                  When true, bake the filled values into permanent page
+                  content and remove the form fields afterwards, so the
+                  result is no longer editable.
+
+    CompareUpload:
+      required: true
+      description: Exactly two PDFs, both under the field name `files`.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [files]
+            properties:
+              files:
+                type: array
+                minItems: 2
+                maxItems: 2
+                items:
+                  type: string
+                  format: binary
+                description: The two PDFs to compare.
+
   schemas:
+    FormField:
+      type: object
+      description: One AcroForm field, as read by `POST /pdf/form-fields`.
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          description: The field's fully-qualified name in the PDF.
+        type:
+          type: string
+          enum: [text, checkbox, radio, dropdown, optionList, button, unknown]
+        value:
+          description: |
+            The field's current value: a string for `text`, a boolean for
+            `checkbox`, a string (or absent, if nothing is selected) for
+            `radio`/`dropdown`, an array of strings for a multiselect
+            `optionList`, or absent for `button`/`unknown`.
+        options:
+          type: array
+          items:
+            type: string
+          description: Available choices - `radio`, `dropdown` and `optionList` only.
+
+    ComparePageDiffOp:
+      type: object
+      required: [op, a, b]
+      properties:
+        op:
+          type: string
+          enum: [equal, insert, delete, replace]
+        a:
+          type: array
+          items:
+            type: string
+          description: The lines from document A this chunk covers.
+        b:
+          type: array
+          items:
+            type: string
+          description: The lines from document B this chunk covers.
+
+    ComparePage:
+      type: object
+      required: [page, equal]
+      properties:
+        page:
+          type: integer
+          description: 1-based page number.
+        equal:
+          type: boolean
+        diff:
+          type: array
+          description: Present only when `equal` is false.
+          items:
+            $ref: '#/components/schemas/ComparePageDiffOp'
+
     TargetId:
       type: string
       description: |
@@ -1075,6 +1347,74 @@ components:
             type: string
             format: binary
             description: The PDF bytes, beginning with `%PDF-`.
+
+    FormFieldsResult:
+      description: |
+        Every AcroForm field in the PDF - `[]` if it has no form at all.
+      headers:
+        X-Request-Id:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/FormField'
+          example:
+            - name: name
+              type: text
+              value: ''
+            - name: agree
+              type: checkbox
+              value: false
+
+    CompareResult:
+      description: |
+        The per-page text diff of the two uploaded PDFs.
+      headers:
+        X-Request-Id:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [pageCountA, pageCountB, pages, extraPagesInA, extraPagesInB]
+            properties:
+              pageCountA:
+                type: integer
+              pageCountB:
+                type: integer
+              pages:
+                type: array
+                description: One entry per page pair, up to the shorter document's length.
+                items:
+                  $ref: '#/components/schemas/ComparePage'
+              extraPagesInA:
+                type: array
+                items:
+                  type: integer
+                description: 1-based pages that exist in A but not in B.
+              extraPagesInB:
+                type: array
+                items:
+                  type: integer
+                description: 1-based pages that exist in B but not in A.
+          example:
+            pageCountA: 2
+            pageCountB: 2
+            pages:
+              - page: 1
+                equal: true
+              - page: 2
+                equal: false
+                diff:
+                  - op: replace
+                    a: [Hello world]
+                    b: [Goodbye world]
+            extraPagesInA: []
+            extraPagesInB: []
 
     ConvertedToTarget:
       description: |
@@ -1342,23 +1682,34 @@ components:
 
     TooFewFiles:
       description: |
-        `/pdf/merge` needs at least two files, and `/pdf/scan-to-pdf` needs at
-        least one - both a genuine "there is nothing to do" rather than a
+        `/pdf/merge` needs at least two files, `/pdf/scan-to-pdf` needs at
+        least one, and `/pdf/compare` needs EXACTLY two - each a genuine
+        "there is nothing to do" (or "not what was asked for") rather than a
         malformed request.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: E_TOO_FEW_FILES
-              message: Merging needs at least two PDF files.
+          examples:
+            merge:
+              summary: '`/pdf/merge`: fewer than two files.'
+              value:
+                error:
+                  code: E_TOO_FEW_FILES
+                  message: Merging needs at least two PDF files.
+            compare:
+              summary: '`/pdf/compare`: not exactly two files.'
+              value:
+                error:
+                  code: E_TOO_FEW_FILES
+                  message: Comparing needs exactly two PDF files.
 
     InvalidField:
       description: |
-        A form field for `/pdf/rotate`, `/pdf/watermark`, `/pdf/protect` or
-        `/pdf/unlock` (`degrees`, `text`, `password`) is missing or malformed.
-        The message names the specific field and what is wrong with it.
+        A form field for `/pdf/rotate`, `/pdf/watermark`, `/pdf/protect`,
+        `/pdf/unlock`, `/pdf/ocr` or `/pdf/fill-form` (`degrees`, `text`,
+        `password`, `force`, `fields`) is missing or malformed. The message
+        names the specific field and what is wrong with it.
       content:
         application/json:
           schema:
@@ -1376,6 +1727,18 @@ components:
                 error:
                   code: E_INVALID_FIELD
                   message: The "text" field is required.
+            badForce:
+              summary: '`/pdf/ocr`: `force` was not `true`/`false`.'
+              value:
+                error:
+                  code: E_INVALID_FIELD
+                  message: The "force" field must be "true" or "false".
+            unknownFormField:
+              summary: '`/pdf/fill-form`: a field name the PDF does not have.'
+              value:
+                error:
+                  code: E_INVALID_FIELD
+                  message: There is no form field named "nope" in this PDF.
 
     WrongPassword:
       description: |
