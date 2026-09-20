@@ -189,17 +189,17 @@ extraction handles these correctly — checked directly against the file that
 exposed this — but pdf2docx's layout reconstruction does not: on that file it
 duplicated and overlapped every line, and no `pdf2docx` setting (table
 detection on or off, stream or lattice) changed that. `pdf_engine.py` checks
-for a Type3 font up front (`page.get_fonts()`) and, when it finds one,
-renders each page whole into its own docx section sized to that page,
-instead of attempting a reconstruction already known to corrupt itself on
-this input. With `ocr=true` (the default), each rendered page is also
-force-OCR'd and the recognised text added as a real, selectable paragraph
-right after that page's image — a Type3 document trades duplicated,
-corrupted text for a faithful picture **plus** genuine text, not a picture
-alone. That text is not positioned to overlay the image: OCR gives you
-recognised words, not a coordinate map to match them against the picture,
-and pretending otherwise would be a worse kind of dishonesty than just
-appending it as its own paragraph.
+for a Type3 font up front (`page.get_fonts()`). With `ocr=true` (the
+default), it does NOT fall back to an image at all: the PDF is force-OCR'd
+(`_force_ocr_pdf` — the existing Type3 text is exactly what would make
+OCRmyPDF's normal skip-text mode refuse to touch the page, so this uses
+`force_ocr` instead, which strips it and re-rasters from scratch) and read
+back through the same text-only `pdf2docx` `ocr=2` path a genuine scan uses
+below — raw recognised text, no embedded images, which is what OCR is for.
+The full-page-image fallback only happens if `ocr=false`, or if OCR itself
+fails (a missing language pack, a pathological page): a faithful picture of
+each page with no text at all, the same result this pipeline gave a Type3
+PDF before OCR existed.
 
 **A PDF with no extractable text at all — a scan — is OCR'd before
 reconstruction, by default.** pdf2docx has no OCR of its own: its `ocr=1`

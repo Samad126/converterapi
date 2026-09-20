@@ -113,9 +113,9 @@ paths:
         limit; both are sources of `429` and `503` that a well-formed request
         can hit.
 
-        A PDF with no extractable text at all (a scan) asking for `docx` is
-        OCR'd before reconstruction by default - see the `ocr` field on the
-        request body.
+        A PDF with no extractable text at all (a scan), or one built on
+        Type3 fonts, asking for `docx` is OCR'd before reconstruction by
+        default - see the `ocr` field on the request body.
       x-max-upload-bytes: 26214400
       parameters:
         - name: target
@@ -699,14 +699,15 @@ components:
                 enum: ['true', 'false']
                 default: 'true'
                 description: |
-                  Only meaningful for a PDF with no extractable text (a scan)
-                  asking for `docx` - silently ignored by every other
-                  source/target pair. When true (the default), the scan is
-                  OCR'd before reconstruction, so it becomes real, reflowable
-                  text instead of an uneditable picture of one. Set to
-                  `false` to skip OCR and get the page as a plain image
-                  embedded in the docx, the same result this endpoint always
-                  gave a scan before this field existed.
+                  Only meaningful for a PDF asking for `docx` with no
+                  extractable text (a scan) or built on Type3 fonts -
+                  silently ignored by every other source/target pair. When
+                  true (the default), the page is OCR'd, so it becomes real,
+                  reflowable text instead of an uneditable picture of one -
+                  with no embedded image, for either case. Set to `false` to
+                  skip OCR and get the page as a plain image with no text
+                  instead, the same result this endpoint always gave before
+                  this field existed.
           encoding:
             file:
               contentType: application/octet-stream

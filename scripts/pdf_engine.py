@@ -152,10 +152,10 @@ def _ocr_pdf(input_path: str, workspace: str) -> str:
     return output_path
 
 
-def _ocr_page_texts(input_path: str, workspace: str) -> list:
+def _force_ocr_pdf(input_path: str, workspace: str) -> str:
     """
-    Recognise each page's text via OCRmyPDF's `force_ocr`, for a PDF whose
-    pages already have a text layer pdf2docx cannot safely read - a
+    Re-OCR `input_path` from scratch via OCRmyPDF's `force_ocr`, for a PDF
+    whose pages already have a text layer pdf2docx cannot safely read - a
     Type3-font PDF (see `_pdf_uses_type3_fonts`), where the existing text is
     exactly what corrupts a normal reconstruction, not a substitute for real
     OCR.
@@ -164,10 +164,11 @@ def _ocr_page_texts(input_path: str, workspace: str) -> list:
     `skip_text` still REFUSES to touch a page it thinks already has usable
     text, and a Type3 page technically does (that is the whole problem) -
     `force_ocr` strips whatever text layer is there, re-rasters the page to
-    a plain image, and OCRs that fresh image instead. The rendering this
-    produces is the same one `_convert_to_docx_as_pages` already puts in the
-    docx on its own, so nothing about how the page LOOKS changes; only the
-    text this function returns is new.
+    a plain image, and OCRs that fresh image instead. The result is
+    structurally identical to what `_ocr_pdf` produces for a genuine scan -
+    a page image plus an invisible OCR text layer - which is what lets the
+    caller read it back with pdf2docx's `ocr=2` the same way, text only, no
+    Type3 glyphs and no duplicated lines.
 
     `output_type='pdf'`, `optimize=0` and `jobs=1` for the same measured
     reason `_ocr_pdf` documents on its own call: OCRmyPDF's defaults add a
@@ -176,7 +177,6 @@ def _ocr_page_texts(input_path: str, workspace: str) -> list:
     real document OOM-killed this service's own 1GB container without
     disabling both.
     """
-    import fitz  # PyMuPDF
     import ocrmypdf
 
     output_path = os.path.join(workspace, 'forced-ocr.pdf')
@@ -190,11 +190,7 @@ def _ocr_page_texts(input_path: str, workspace: str) -> list:
         jobs=1,
         progress_bar=False,
     )
-    document = fitz.open(output_path)
-    try:
-        return [page.get_text() for page in document]
-    finally:
-        document.close()
+    return output_path
 
 
 def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None:
@@ -207,13 +203,16 @@ def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None
     which is why it earns its own target (`word`) instead of piggybacking on
     the `docx` id that direct LibreOffice conversions use.
 
-    Falls back to `_convert_to_docx_as_pages` for a PDF with Type3 fonts -
-    see `_pdf_uses_type3_fonts` for why that specific trigger is checked
-    rather than attempting the reconstruction and hoping. When `ocr` is true
-    (the default), that fallback also OCRs the rendered pages and adds the
-    recognised text as real, selectable paragraphs alongside each page's
-    image - see `_ocr_page_texts` - so a Type3 document trades duplicated,
-    corrupted text for a faithful picture PLUS real text, not just a picture.
+    Falls back for a PDF with Type3 fonts - see `_pdf_uses_type3_fonts` for
+    why that specific trigger is checked rather than attempting the
+    reconstruction and hoping. With `ocr` true (the default), that fallback
+    is real recognised text and nothing else: the page is force-OCR'd
+    (`_force_ocr_pdf`) and read back through the exact same text-only
+    `pdf2docx` `ocr=2` path a genuine scan uses below - no embedded images,
+    raw text only, which is what OCR is FOR. If OCR is turned off or fails,
+    the fallback is `_convert_to_docx_as_pages` instead: a faithful picture
+    of each page with no text at all, the same result this pipeline gave a
+    Type3 PDF before OCR existed.
 
     For a PDF with no extractable text at all - a scanned document - and
     `ocr` true (the default), runs OCRmyPDF first and hands pdf2docx the
@@ -225,11 +224,23 @@ def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None
     every scanned PDF before this feature existed - rather than failing the
     whole request over what is, for this endpoint, a best-effort enhancement.
     """
-    if _pdf_uses_type3_fonts(input_path):
-        _convert_to_docx_as_pages(input_path, output_path, ocr=ocr)
-        return
-
     from pdf2docx import Converter
+
+    if _pdf_uses_type3_fonts(input_path):
+        if ocr:
+            try:
+                workspace = os.path.dirname(os.path.abspath(output_path)) or tempfile.gettempdir()
+                forced = _force_ocr_pdf(input_path, workspace)
+                converter = Converter(forced)
+                try:
+                    converter.convert(output_path, ocr=2)
+                    return
+                finally:
+                    converter.close()
+            except Exception as error:  # noqa: BLE001 - degrade, don't fail the request over this
+                print(f'OCR failed for a Type3 PDF, falling back to a plain page image: {error}', file=sys.stderr)
+        _convert_to_docx_as_pages(input_path, output_path)
+        return
 
     working_input = input_path
     ocr_settings = {}
@@ -248,7 +259,7 @@ def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None
         converter.close()
 
 
-def _convert_to_docx_as_pages(input_path: str, output_path: str, ocr: bool = False) -> None:
+def _convert_to_docx_as_pages(input_path: str, output_path: str) -> None:
     """
     One page per page, each rendered whole as a full-bleed image - the docx
     twin of `convert_to_pptx`'s fallback, and for the same reason: this trades
@@ -262,17 +273,11 @@ def _convert_to_docx_as_pages(input_path: str, output_path: str, ocr: bool = Fal
     one fixed size - the same reasoning `imagesToPdf` in pdf-pages.service.ts
     applies to a set of scanned images.
 
-    When `ocr` is true, each page's OCR'd text (`_ocr_page_texts`) is added
-    as an ordinary paragraph right after that page's image - real, selectable
-    text alongside the faithful picture, rather than a picture alone. It is
-    NOT positioned to overlay the image: reconstructing exact word positions
-    from OCR output and matching them against the rendered picture is a much
-    larger undertaking than this fallback's job (proving the layout is
-    right), and a plain paragraph under the image is an honest presentation
-    of what OCR actually gives you - recognised text, not a coordinate map -
-    rather than a pretence at a pixel-accurate overlay this does not build.
-    An OCR failure here degrades to the plain image with no text, exactly
-    the result this fallback gave before OCR existed.
+    No text, ever - this is the LAST resort, reached only when `ocr=false`
+    or OCR itself failed. When OCR succeeds, `convert_to_docx` never calls
+    this at all; it reads recognised text back through `pdf2docx`'s own
+    `ocr=2` path instead, which is text only with no image, matching what
+    OCR is actually for.
     """
     import io
 
@@ -289,14 +294,6 @@ def _convert_to_docx_as_pages(input_path: str, output_path: str, ocr: bool = Fal
     # PDF points are 1/72"; EMUs are 914400 per inch - the ratio a page's own
     # point-based size converts by, independent of the raster DPI above.
     emu_per_point = 914400 / 72.0
-
-    page_texts = None
-    if ocr:
-        try:
-            workspace = os.path.dirname(os.path.abspath(output_path)) or tempfile.gettempdir()
-            page_texts = _ocr_page_texts(input_path, workspace)
-        except Exception as error:  # noqa: BLE001 - degrade, don't fail the request over this
-            print(f'OCR failed for the page-image fallback, continuing without recognised text: {error}', file=sys.stderr)
 
     document = fitz.open(input_path)
     try:
@@ -325,10 +322,6 @@ def _convert_to_docx_as_pages(input_path: str, output_path: str, ocr: bool = Fal
             paragraph.add_run().add_picture(
                 io.BytesIO(pixmap.tobytes('png')), width=width_emu, height=height_emu
             )
-
-            text = page_texts[index].strip() if page_texts and index < len(page_texts) else ''
-            if text:
-                output.add_paragraph(text)
 
         output.save(output_path)
     finally:
