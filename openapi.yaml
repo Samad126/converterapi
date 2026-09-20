@@ -723,6 +723,82 @@ paths:
         '503':
           $ref: '#/components/responses/Busy'
 
+  /pdf/sign:
+    post:
+      tags: [pages]
+      operationId: signPdf
+      summary: Stamp a "simple signature" onto a PDF's pages
+      description: |
+        Draws `elements` permanently onto the page content - a typed, drawn or
+        uploaded signature/initials, a company stamp image, or a name/date/
+        free text field - each placed by the caller at an exact `x`/`y`/
+        `width`/`height` box on a given page.
+
+        This is a VISUAL mark only, the same kind `/pdf/watermark` and
+        `/pdf/page-numbers` bake in, not a cryptographic signature: there is
+        no certificate, no PKI, and nothing an eIDAS/ESIGN/UETA-style
+        verifier would recognise as a digital signature. Real (certificate-
+        based) signing is not implemented by this endpoint or this service.
+
+        `elements` is a JSON array (as a plain multipart text field, like
+        `/pdf/fill-form`'s `fields`). Each element:
+
+        ```
+        {
+          "type": "signature" | "initials" | "stamp" | "name" | "date" | "text",
+          "page": 1,
+          "x": 72, "y": 700, "width": 200, "height": 40,
+          "value": "Ada Lovelace",
+          "imageIndex": 0,
+          "fontStyle": "cursive",
+          "color": "black"
+        }
+        ```
+
+        `x`/`y` are TOP-LEFT origin in points - (0,0) is the page's top-left
+        corner, the natural coordinate system a browser canvas overlay
+        reports - which this endpoint flips internally to PDF's bottom-left
+        origin.
+
+        Exactly one of `value`/`imageIndex` is required per element, and
+        which one depends on `type`: `"stamp"` REQUIRES `imageIndex` (there
+        is no typed stamp); `"name"`/`"date"`/`"text"` REQUIRE `value` (there
+        is no image form of these, and they always render in a plain font
+        regardless of `fontStyle`); `"signature"`/`"initials"` accept EITHER
+        - `value` for a typed signature, `imageIndex` for one drawn or
+        uploaded as an image.
+
+        `imageIndex` is a 0-based index into the `images` files uploaded
+        alongside `file`. Only PNG/JPG are accepted for `images` - SVG
+        signature/stamp uploads are not supported, since rasterising
+        arbitrary SVG would need a conversion step (a dedicated rasteriser or
+        LibreOffice Draw) this pipeline does not otherwise have.
+
+        `fontStyle` (default `"cursive"`) only affects a TYPED signature/
+        initials: `"cursive"` is an embedded handwriting-style font,
+        `"cursive2"` a second, visually distinct style, `"plain"` a plain
+        sans-serif. `color` (default `"black"`) applies to any text-rendered
+        element; both are ignored for image-backed elements.
+      requestBody:
+        $ref: '#/components/requestBodies/SignUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /formats:
     get:
       tags: [discovery]
@@ -1280,6 +1356,39 @@ components:
                   type: string
                   format: binary
                 description: The two PDFs to compare.
+
+    SignUpload:
+      required: true
+      description: One PDF, the elements to stamp onto it, and any images those elements reference.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, elements]
+            additionalProperties: false
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF being signed.
+              elements:
+                type: string
+                description: |
+                  A JSON array of elements to draw onto the page. See the
+                  `/pdf/sign` description for the full shape and the rules
+                  around `value`/`imageIndex`.
+                example: |
+                  [{"type":"name","page":1,"x":72,"y":700,"width":200,"height":24,"value":"Ada Lovelace"}]
+              images:
+                type: array
+                description: |
+                  PNG/JPG images referenced by 0-based index from
+                  `elements[].imageIndex` - drawn/uploaded signatures,
+                  initials and company stamps. Optional; omit entirely when
+                  every element is typed text.
+                items:
+                  type: string
+                  format: binary
 
   schemas:
     FormField:

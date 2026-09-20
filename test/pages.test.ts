@@ -980,3 +980,244 @@ describe('POST /pdf/compare', () => {
     assert.equal(response.status, 400);
   });
 });
+
+/**
+ * `pdftotext -bbox` (poppler-utils, already required) reports each word's
+ * bounding box in an HTML/XML dump, in the SAME top-left-origin coordinate
+ * system `/pdf/sign`'s `x`/`y`/`width`/`height` are specified in - which
+ * makes it the tool for verifying the coordinate flip actually lands text
+ * where a caller asked for it, rather than trusting the `H - y - height`
+ * arithmetic in `signPdf` on faith.
+ */
+async function pdfWordBoxes(
+  pdf: Buffer,
+  pageNumber: number,
+): Promise<Array<{ word: string; xMin: number; yMin: number; xMax: number; yMax: number }>> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-sign-bbox-'));
+  try {
+    const inPath = join(dir, 'in.pdf');
+    await fsp.writeFile(inPath, pdf);
+    const xml = await new Promise<string>((resolve, reject) => {
+      execFile(
+        'pdftotext',
+        ['-bbox', '-f', String(pageNumber), '-l', String(pageNumber), inPath, '-'],
+        { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
+    });
+    const boxes: Array<{ word: string; xMin: number; yMin: number; xMax: number; yMax: number }> = [];
+    const wordRe = /<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]*)<\/word>/g;
+    for (const match of xml.matchAll(wordRe)) {
+      boxes.push({
+        xMin: Number(match[1]),
+        yMin: Number(match[2]),
+        xMax: Number(match[3]),
+        yMax: Number(match[4]),
+        word: match[5]!,
+      });
+    }
+    return boxes;
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+describe('POST /pdf/sign', () => {
+  it('places a typed "name" element at roughly the requested top-left position', async () => {
+    // A tall page and a box near the top so top-vs-bottom mistakes in the
+    // coordinate flip are obvious rather than accidentally close either way.
+    const pdf = buildMinimalPdf(['Original']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      {
+        elements: JSON.stringify([
+          { type: 'name', page: 1, x: 50, y: 40, width: 200, height: 30, value: 'Ada Lovelace' },
+        ]),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getPageCount(), 1);
+    const original = await pdfPageText(response.body, 1);
+    assert.match(original, /Original/);
+    assert.match(original, /Ada/);
+
+    const boxes = await pdfWordBoxes(response.body, 1);
+    const word = boxes.find((b) => b.word.includes('Ada'));
+    assert.ok(word, 'expected to find the word "Ada" in the page bounding boxes');
+    // Requested top-left y was 40, box height 30: the text should land near
+    // the top of that box (well above the page's lower half), not near the
+    // bottom of the page the way an un-flipped coordinate would put it.
+    assert.ok(word!.yMin >= 30 && word!.yMax <= 90, `expected y around 40-70, got ${word!.yMin}-${word!.yMax}`);
+    assert.ok(word!.xMin >= 40 && word!.xMin <= 120, `expected x around 50, got ${word!.xMin}`);
+  });
+
+  it('a typed signature succeeds with each fontStyle', async () => {
+    for (const fontStyle of ['cursive', 'cursive2', 'plain']) {
+      const pdf = buildMinimalPdf(['Doc']);
+      const response = await postPages(
+        server.baseUrl,
+        '/pdf/sign',
+        [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+        {
+          elements: JSON.stringify([
+            { type: 'signature', page: 1, x: 20, y: 20, width: 180, height: 50, value: 'Ada L.', fontStyle },
+          ]),
+        },
+      );
+      assert.equal(response.status, 200, `fontStyle=${fontStyle}`);
+      const document = await PDFDocument.load(response.body);
+      assert.equal(document.getPageCount(), 1);
+    }
+  });
+
+  it('supports color on a typed element', async () => {
+    const pdf = buildMinimalPdf(['Doc']);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      {
+        elements: JSON.stringify([
+          { type: 'text', page: 1, x: 20, y: 20, width: 180, height: 30, value: 'Approved', color: 'red' },
+        ]),
+      },
+    );
+    assert.equal(response.status, 200);
+  });
+
+  it('a "stamp" element using an uploaded PNG lands on the right page', async () => {
+    const pdf = buildMinimalPdf(['Page one', 'Page two']);
+    const stamp = buildSolidPng(40, 40, [200, 0, 0]);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [
+        { filename: 'doc.pdf', fieldName: 'file', bytes: pdf },
+        { filename: 'stamp.png', fieldName: 'images', bytes: stamp },
+      ],
+      {
+        elements: JSON.stringify([{ type: 'stamp', page: 2, x: 10, y: 10, width: 40, height: 40, imageIndex: 0 }]),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getPageCount(), 2);
+    // The stamp is an image, not text, so pdftotext on its own page should
+    // still show only the original page content - the useful check here is
+    // that the request succeeded and the document is otherwise intact.
+    assert.match(await pdfPageText(response.body, 1), /Page one/);
+    assert.match(await pdfPageText(response.body, 2), /Page two/);
+  });
+
+  it('a drawn/uploaded "signature" element (imageIndex) succeeds', async () => {
+    const pdf = buildMinimalPdf(['Doc']);
+    const sig = buildSolidPng(100, 30, [0, 0, 0]);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [
+        { filename: 'doc.pdf', fieldName: 'file', bytes: pdf },
+        { filename: 'sig.png', fieldName: 'images', bytes: sig },
+      ],
+      {
+        elements: JSON.stringify([
+          { type: 'signature', page: 1, x: 10, y: 10, width: 100, height: 30, imageIndex: 0 },
+        ]),
+      },
+    );
+    assert.equal(response.status, 200);
+  });
+
+  it('rejects an element missing both value and imageIndex', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { elements: JSON.stringify([{ type: 'signature', page: 1, x: 0, y: 0, width: 10, height: 10 }]) },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects an element with both value and imageIndex', async () => {
+    const stamp = buildSolidPng(10, 10, [0, 0, 0]);
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [
+        { filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) },
+        { filename: 'stamp.png', fieldName: 'images', bytes: stamp },
+      ],
+      {
+        elements: JSON.stringify([
+          { type: 'signature', page: 1, x: 0, y: 0, width: 10, height: 10, value: 'X', imageIndex: 0 },
+        ]),
+      },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects an unknown element type', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { elements: JSON.stringify([{ type: 'bogus', page: 1, x: 0, y: 0, width: 10, height: 10, value: 'x' }]) },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects an imageIndex that was not uploaded', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      {
+        elements: JSON.stringify([
+          { type: 'stamp', page: 1, x: 0, y: 0, width: 10, height: 10, imageIndex: 0 },
+        ]),
+      },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects a page beyond the document page count', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      {
+        elements: JSON.stringify([{ type: 'text', page: 5, x: 0, y: 0, width: 10, height: 10, value: 'x' }]),
+      },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects malformed JSON in the elements field', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/sign',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { elements: '{not json' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});

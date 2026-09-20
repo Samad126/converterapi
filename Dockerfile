@@ -136,6 +136,11 @@ COPY package.json ./
 # src/), so it has to land at /app/scripts regardless of which one runs.
 COPY scripts ./scripts
 
+# signature-fonts.ts resolves this the same way, two levels up from
+# dist/services/ or src/services/, for the embedded Dancing Script TTF
+# `/pdf/sign` uses for typed cursive signatures/initials.
+COPY assets ./assets
+
 # The OpenAPI document is read at runtime (served at /openapi.json and /docs),
 # not compiled, so it has to be copied across separately. src/openapi.ts
 # resolves it as `../openapi.yaml`, which lands here from dist/.

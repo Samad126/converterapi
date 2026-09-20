@@ -36,11 +36,17 @@ import {
   removePages,
   rotatePages,
   selectPages,
+  signPdf,
   splitPdf,
   type CropMargins,
   type FormFieldValue,
   type PageNumberPosition,
   type ScanImage,
+  type SignColor,
+  type SignElement,
+  type SignElementType,
+  type SignFontStyle,
+  type SignImage,
 } from '../services/pdf-pages.service.ts';
 import { runPdfCompare, runPdfEngine } from '../services/pdf-engine.service.ts';
 import {
@@ -79,6 +85,7 @@ export interface PagesController {
   formFields: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   fillForm: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   compare: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  sign: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 }
 
 interface PagesResult {
@@ -623,6 +630,38 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const sign: PagesController['sign'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    // `.fields()` middleware shapes `req.files` as `{ <fieldName>: File[] }`
+    // rather than the flat `File[]` every other multi-file handler in this
+    // file sees from `.array()` - see `createSignUploadMiddleware`.
+    const filesByField = (req.files as Record<string, Express.Multer.File[]> | undefined) ?? {};
+    const file = filesByField.file?.[0];
+    const imageFiles = filesByField.images ?? [];
+    ctx.bytes = (file?.size ?? 0) + imageFiles.reduce((total, f) => total + f.size, 0);
+
+    await run(req, res, next, 'sign', async () => {
+      if (!file) throw Errors.badRequest('no file part named "file"');
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const pageCount = await pdfPageCount(buffer);
+      const elements = parseSignElements(req.body?.elements, pageCount, imageFiles.length);
+
+      const images: SignImage[] = await Promise.all(
+        imageFiles.map(async (imageFile) => ({
+          data: await fsp.readFile(imageFile.path),
+          format: imageFile.originalname?.toLowerCase().endsWith('.png') ? ('png' as const) : ('jpg' as const),
+        })),
+      );
+
+      const result = await signPdf(buffer, elements, images);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
   return {
     admit,
     prepareWorkspace,
@@ -644,6 +683,7 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     formFields,
     fillForm: fillFormHandler,
     compare,
+    sign,
   };
 }
 
@@ -779,6 +819,139 @@ function parseFormFieldsJson(raw: unknown): Record<string, FormFieldValue> {
     }
   }
   return parsed as Record<string, FormFieldValue>;
+}
+
+const SIGN_ELEMENT_TYPES: readonly SignElementType[] = ['signature', 'initials', 'stamp', 'name', 'date', 'text'];
+const SIGN_FONT_STYLES: readonly SignFontStyle[] = ['cursive', 'cursive2', 'plain'];
+const SIGN_COLORS: readonly SignColor[] = ['black', 'red', 'blue', 'green'];
+
+/**
+ * The `elements` multipart field for `/pdf/sign`: JSON text describing every
+ * mark to bake into the page. Parsed and fully shape-checked here, before
+ * `signPdf` ever loads the PDF a second time (via `pdfPageCount` already
+ * having loaded it once to know how many pages exist to validate `page`
+ * against) - the same "validate the request before touching pdf-lib for the
+ * real work" order `parseFormFieldsJson` follows for `/pdf/fill-form`.
+ */
+function parseSignElements(raw: unknown, pageCount: number, imageCount: number): SignElement[] {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw Errors.invalidField('The "elements" field is required and must be a JSON array.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw Errors.invalidField('The "elements" field must be valid JSON.');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw Errors.invalidField('The "elements" field must be a non-empty JSON array.');
+  }
+  return parsed.map((item, index) => parseSignElement(item, index, pageCount, imageCount));
+}
+
+/**
+ * One entry of `elements`. Every field the person can control is checked by
+ * name (mirroring `parseCropMargins`/`parsePageNumberPosition`'s style of
+ * naming the exact field and problem), and the value/imageIndex rule is
+ * enforced per the type-specific contract in `pdf-pages.service.ts`'s
+ * `SignElement` doc comment: "stamp" REQUIRES `imageIndex` and forbids
+ * `value`; "name"/"date"/"text" REQUIRE `value` and forbid `imageIndex`;
+ * "signature"/"initials" need EXACTLY one of the two, either is valid.
+ */
+function parseSignElement(item: unknown, index: number, pageCount: number, imageCount: number): SignElement {
+  const label = `elements[${index}]`;
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    throw Errors.invalidField(`${label} must be a JSON object.`);
+  }
+  const obj = item as Record<string, unknown>;
+
+  const type = obj.type;
+  if (typeof type !== 'string' || !SIGN_ELEMENT_TYPES.includes(type as SignElementType)) {
+    throw Errors.invalidField(`${label}.type must be one of: ${SIGN_ELEMENT_TYPES.join(', ')}.`);
+  }
+
+  const page = obj.page;
+  if (typeof page !== 'number' || !Number.isInteger(page) || page < 1 || page > pageCount) {
+    throw Errors.invalidField(`${label}.page must be a whole page number between 1 and ${pageCount}.`);
+  }
+
+  const geometry: Record<string, number> = {};
+  for (const field of ['x', 'y', 'width', 'height'] as const) {
+    const value = obj[field];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw Errors.invalidField(`${label}.${field} must be a finite number.`);
+    }
+    geometry[field] = value;
+  }
+  if (geometry.width! <= 0 || geometry.height! <= 0) {
+    throw Errors.invalidField(`${label}.width and ${label}.height must both be positive.`);
+  }
+
+  const hasValue = obj.value !== undefined;
+  const hasImageIndex = obj.imageIndex !== undefined;
+  const isImageOnlyType = type === 'stamp';
+  const isValueOnlyType = type === 'name' || type === 'date' || type === 'text';
+
+  if (isImageOnlyType) {
+    if (!hasImageIndex || hasValue) {
+      throw Errors.invalidField(`${label}: type "stamp" requires "imageIndex" and must not have "value".`);
+    }
+  } else if (isValueOnlyType) {
+    if (!hasValue || hasImageIndex) {
+      throw Errors.invalidField(`${label}: type "${type}" requires "value" and must not have "imageIndex".`);
+    }
+  } else if (hasValue === hasImageIndex) {
+    // signature / initials: exactly one of the two, whichever it is.
+    throw Errors.invalidField(`${label}: exactly one of "value" or "imageIndex" is required for type "${type}".`);
+  }
+
+  let value: string | undefined;
+  if (hasValue) {
+    if (typeof obj.value !== 'string' || obj.value.trim() === '') {
+      throw Errors.invalidField(`${label}.value must be a non-empty string.`);
+    }
+    value = obj.value;
+  }
+
+  let imageIndex: number | undefined;
+  if (hasImageIndex) {
+    const rawIndex = obj.imageIndex;
+    if (typeof rawIndex !== 'number' || !Number.isInteger(rawIndex) || rawIndex < 0 || rawIndex >= imageCount) {
+      throw Errors.invalidField(
+        `${label}.imageIndex must reference one of the ${imageCount} uploaded "images" files.`,
+      );
+    }
+    imageIndex = rawIndex;
+  }
+
+  let fontStyle: SignFontStyle | undefined;
+  if (obj.fontStyle !== undefined) {
+    if (typeof obj.fontStyle !== 'string' || !SIGN_FONT_STYLES.includes(obj.fontStyle as SignFontStyle)) {
+      throw Errors.invalidField(`${label}.fontStyle must be one of: ${SIGN_FONT_STYLES.join(', ')}.`);
+    }
+    fontStyle = obj.fontStyle as SignFontStyle;
+  }
+
+  let color: SignColor | undefined;
+  if (obj.color !== undefined) {
+    if (typeof obj.color !== 'string' || !SIGN_COLORS.includes(obj.color as SignColor)) {
+      throw Errors.invalidField(`${label}.color must be one of: ${SIGN_COLORS.join(', ')}.`);
+    }
+    color = obj.color as SignColor;
+  }
+
+  return {
+    type: type as SignElementType,
+    page,
+    x: geometry.x!,
+    y: geometry.y!,
+    width: geometry.width!,
+    height: geometry.height!,
+    value,
+    imageIndex,
+    fontStyle,
+    color,
+  };
 }
 
 /**

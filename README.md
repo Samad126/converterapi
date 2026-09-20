@@ -571,6 +571,161 @@ exactly the case `/pdf/repair` exists for, not a failure. It refuses an
 encrypted input the same as every other page endpoint; there is nowhere to
 put a password on this one.
 
+### POST /pdf/ocr
+
+Makes a scanned PDF searchable, as a standalone result rather than only as the
+internal first step of a PDF-to-`docx` conversion.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/ocr` | One PDF, field `file`, optional text field `force` (default `false`) | The same PDF, with an invisible OCR text layer behind each scanned page |
+
+```bash
+curl -F "file=@scan.pdf" \
+     https://converterapi.example.com/pdf/ocr -o scan-searchable.pdf
+
+curl -F "file=@type3-report.pdf" -F "force=true" \
+     https://converterapi.example.com/pdf/ocr -o report-searchable.pdf
+```
+
+**This is `pdf_engine.py`'s existing OCR pipeline (OCRmyPDF + Tesseract),
+exposed directly** rather than only running as `/convert/docx`'s internal
+scan-detection step — see [PDF as a source](#pdf-as-a-source-and-why-some-of-its-targets-are-not-libreoffice-either).
+With `force=false` (the default), a PDF that already has real extractable
+text on every page is returned unchanged — there is nothing to OCR, and this
+is not an error. A PDF with no extractable text (a genuine scan) is OCR'd.
+`force=true` re-OCRs regardless of what text is already there, discarding it
+first — the same escape hatch `convert_to_docx` uses internally for a
+Type3-font PDF, whose existing "text" is exactly what corrupts a normal
+reader rather than being usable.
+
+### POST /pdf/compress
+
+Shrinks a PDF's file size by recompressing its internal streams and images.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/compress` | One PDF, field `file`, optional text field `level` (`low`/`medium`/`high`, default `medium`) | The same PDF, recompressed |
+
+```bash
+curl -F "file=@report.pdf" -F "level=high" \
+     https://converterapi.example.com/pdf/compress -o report-small.pdf
+```
+
+**This is `qpdf`, not a new engine.** `qpdf` has no lossy image-quality dial
+(there is no `--jpeg-quality` flag, despite what several other PDF tools
+offer) — its own lever is `--optimize-images`, which re-encodes an image as
+JPEG only when that comes out smaller, gated by a minimum width/height/area
+so tiny images are left alone. `level` controls how many images qualify for
+that re-encoding (`low` touches no images at all, stream recompression only;
+`high` makes every image, however small, a candidate) rather than how much
+quality is sacrificed, because that is the only axis qpdf actually exposes.
+An already-encrypted upload is refused with the usual `422 E_ENCRYPTED`, the
+same as every other page endpoint. Unlike `/pdf/repair`, qpdf's exit code 3
+("recovered with warnings") is **not** treated as success here — silently
+repairing a broken file would be a surprising side effect of a request that
+only asked for a smaller one.
+
+### POST /pdf/{form-fields,fill-form}
+
+Reads and fills a PDF's AcroForm fields.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/form-fields` | One PDF, field `file` | JSON: every field's name, type and current value (or options, for a dropdown/radio/option list) |
+| `POST /pdf/fill-form` | One PDF, field `file`, text field `fields` (a JSON object of field name → value), optional text field `flatten` (default `false`) | The PDF with those fields filled |
+
+```bash
+curl -F "file=@application.pdf" \
+     https://converterapi.example.com/pdf/form-fields
+
+curl -F "file=@application.pdf" \
+     -F 'fields={"Full Name":"Jane Doe","Agree":true}' \
+     -F "flatten=true" \
+     https://converterapi.example.com/pdf/fill-form -o application-filled.pdf
+```
+
+**Both are `pdf-lib`'s own AcroForm API** — no new engine. A PDF with no
+AcroForm at all answers `/pdf/form-fields` with an empty array, not an error:
+the file opened fine and genuinely has nothing to extract, the same
+philosophy as `E_NO_TABLES`/`E_NO_LAYERS` elsewhere in this service, just
+without needing a dedicated error code since an empty JSON array is already
+an unambiguous answer. `/pdf/fill-form` names the specific field in its error
+when `fields` names one that does not exist on the form, or gives a value of
+the wrong shape for that field's type (e.g. a string for a checkbox) —
+`400 E_INVALID_FIELD`, not a generic failure. `flatten=true` bakes the filled
+values into the page content and removes the fields themselves, for a
+"final", no-longer-editable copy.
+
+### POST /pdf/compare
+
+A per-page text diff between two PDFs.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/compare` | Exactly two PDFs, field `files` | JSON: a per-page diff, plus page-count metadata |
+
+```bash
+curl -F "files=@contract-v1.pdf" -F "files=@contract-v2.pdf" \
+     https://converterapi.example.com/pdf/compare
+```
+
+Returns `{"pageCountA":.., "pageCountB":.., "pages":[{"page":1,"equal":true},
+{"page":2,"equal":false,"diff":[...]}], "extraPagesInA":[...],
+"extraPagesInB":[...]}`, 1-based throughout — deliberately not this
+codebase's usual 0-based `pdf-lib` convention, since this is JSON-API-facing
+output from a different layer (`pdf_engine.py`), not an internal page index.
+
+**This runs through `pdf_engine.py`, not `pdf-lib`.** `pdf-lib` has no text
+extraction of its own, and this service's only text-extraction capability
+already lives in the Python side (`fitz`/PyMuPDF), used elsewhere for the
+Type3-font and no-extractable-text checks that gate OCR — see
+[PDF as a source](#pdf-as-a-source-and-why-some-of-its-targets-are-not-libreoffice-either).
+Each shared page is diffed line-by-line with Python's own `difflib`; pages
+beyond the shorter document's page count are reported separately as
+`extraPagesInA`/`extraPagesInB` rather than forced into a same-length
+comparison. Anything other than exactly two files is `400 E_TOO_FEW_FILES`
+("Comparing needs exactly two PDF files.").
+
+### POST /pdf/sign
+
+Stamps a visual signature, initials, name, date, free text or company stamp
+onto a PDF, at caller-given positions.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/sign` | One PDF (`file`), a JSON array of placements (`elements`), zero or more PNG/JPG images (`images`) | The PDF with every element drawn onto its page |
+
+```bash
+curl -F "file=@contract.pdf" \
+     -F 'elements=[{"type":"signature","page":1,"x":72,"y":700,"width":180,"height":50,"value":"Jane Doe","fontStyle":"cursive","color":"blue"},{"type":"date","page":1,"x":72,"y":760,"width":100,"height":20,"value":"2026-09-20"}]' \
+     https://converterapi.example.com/pdf/sign -o contract-signed.pdf
+```
+
+Each element in `elements` is one of `signature`/`initials`/`stamp` (typed as
+text via `value`, or drawn/uploaded as an image via `imageIndex` into
+`images` — `stamp` only ever comes from an image) or `name`/`date`/`text`
+(always `value`, always text). `x`/`y` are the element's **top-left** corner
+in points, the natural coordinate system a browser canvas overlay reports —
+the server flips this to `pdf-lib`'s bottom-left origin internally.
+
+**This is a visual mark only, not a cryptographic signature.** It bakes text
+or an image permanently into the page content — the same category of
+operation as `/pdf/watermark`/`/pdf/page-numbers`, just with caller-chosen
+positions and several element types instead of one fixed formula — and
+carries none of the guarantees a real PKI-based digital signature makes
+(tamper-evidence, identity verification against a trust chain). A genuine
+certificate-based signing endpoint would need a real key-management story
+(whose certificate signs the file, and how its private key is handled) that
+has not been built. Typed `signature`/`initials` text can be rendered in one
+of three `fontStyle`s: `cursive` (an embedded, OFL-licensed handwriting font,
+`assets/fonts/DancingScript.ttf`, embedded via `@pdf-lib/fontkit` since
+`pdf-lib`'s own `StandardFonts` has no script font at all), `cursive2` (a
+bold-oblique variant, for a second distinct look without a second embedded
+font), or `plain` (Helvetica). SVG signature/stamp uploads are not accepted
+(PNG/JPG only, the same as `/pdf/scan-to-pdf`) — rasterising arbitrary SVG
+would need its own conversion step this pipeline does not have.
+
 ### GET /formats
 
 The [conversion matrix](#conversion-matrix) as JSON — every accepted extension,

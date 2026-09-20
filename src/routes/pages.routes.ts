@@ -20,6 +20,7 @@
  *   POST /pdf/form-fields    one PDF        -> JSON describing every AcroForm field
  *   POST /pdf/fill-form      one PDF        -> a PDF with `fields` filled in (optionally flattened)
  *   POST /pdf/compare        two PDFs       -> JSON, a per-page text diff
+ *   POST /pdf/sign           one PDF + images -> a PDF with `elements` stamped on (visual signature only, not cryptographic)
  */
 import { Router } from 'express';
 
@@ -27,6 +28,7 @@ import { createPagesController, type PagesControllerDeps } from '../controllers/
 import {
   createPdfFilesUploadMiddleware,
   createScanImagesUploadMiddleware,
+  createSignUploadMiddleware,
   createSinglePdfUploadMiddleware,
 } from '../middleware/pages-upload.ts';
 
@@ -176,6 +178,14 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createPdfFilesUploadMiddleware(),
     controller.compare,
+  );
+
+  router.post(
+    '/pdf/sign',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSignUploadMiddleware(),
+    controller.sign,
   );
 
   return router;
