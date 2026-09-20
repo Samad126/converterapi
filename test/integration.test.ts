@@ -36,6 +36,7 @@ const {
   buildMinimalOdp,
   buildSolidPng,
   pdfProbe,
+  pdfScannedProbe,
   pdfWithType3FontProbe,
   pdfTableProbe,
   psdProbe,
@@ -675,6 +676,42 @@ describe('POST /convert/<target> - PDF sources', () => {
       ['word/media/image1.png'],
       'expected exactly one full-page image, not a reconstructed text layout',
     );
+  });
+
+  it('still produces a valid DOCX for a PDF with no extractable text (a scan), ocr defaulting on', async () => {
+    // Not an assertion about Tesseract's own accuracy - that is not something
+    // a unit test should pin to - only that a PDF `_pdf_has_no_extractable_
+    // text` flags for OCR still converts successfully end to end, whether or
+    // not this host actually has tesseract installed (pdf_engine.py degrades
+    // to a plain, non-OCR conversion rather than failing if it does not -
+    // see its own `convert_to_docx` docstring).
+    const response = await upload(server.baseUrl, 'scan.pdf', pdfScannedProbe(), { target: 'docx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'not a ZIP-based package');
+  });
+
+  it('accepts ocr=false and still produces a valid DOCX', async () => {
+    const response = await upload(server.baseUrl, 'scan.pdf', pdfScannedProbe(), {
+      target: 'docx',
+      fields: { ocr: 'false' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'not a ZIP-based package');
+  });
+
+  it('rejects a malformed ocr field', async () => {
+    const response = await upload(server.baseUrl, 'doc.pdf', pdfProbe(), {
+      target: 'docx',
+      fields: { ocr: 'maybe' },
+    });
+    const body = JSON.parse(response.body.toString('utf8')) as { error: { code: string; message: string } };
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+    assert.equal(body.error.message, 'The "ocr" field must be "true" or "false".');
   });
 
   it('builds one slide per page, each a full-page image', async () => {

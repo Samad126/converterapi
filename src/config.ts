@@ -132,6 +132,15 @@ export const PDF_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'pdf
 export const QPDF_BIN = process.env.QPDF_BIN ?? 'qpdf';
 
 /**
+ * `tesseract`, the OCR engine `ocrmypdf` drives for a scanned PDF asking for
+ * `docx`. Checked directly, the same as every other subprocess binary this
+ * service depends on - `ocrmypdf` itself imports fine without it and only
+ * fails at the moment a scan actually needs OCR, which is a worse time to
+ * find out than boot. See pdf_engine.py's `_ocr_pdf`.
+ */
+export const TESSERACT_BIN = process.env.TESSERACT_BIN ?? 'tesseract';
+
+/**
  * How many pages we will rasterise into one archive.
  *
  * The whole archive is built in memory before it is sent, so this is a memory

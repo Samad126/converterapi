@@ -31,6 +31,7 @@ export async function startServer(port = PORT): Promise<StartedServer> {
       soffice: report.sofficeVersion,
       rasterizer: report.rasterizerVersion,
       fonts: report.fonts.length,
+      ocrAvailable: report.ocrAvailable,
     }),
   );
 

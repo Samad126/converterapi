@@ -71,7 +71,13 @@ export async function upload(
   baseUrl: string,
   filename: string,
   bytes: Buffer,
-  options: { mimeType?: string; fieldName?: string; target?: string } = {},
+  options: {
+    mimeType?: string;
+    fieldName?: string;
+    target?: string;
+    /** Extra multipart text fields - `ocr` on `/convert/docx`, for instance. */
+    fields?: Record<string, string>;
+  } = {},
 ): Promise<RawResponse> {
   const form = new FormData();
   form.append(
@@ -79,6 +85,9 @@ export async function upload(
     new Blob([bytes], { type: options.mimeType ?? 'application/octet-stream' }),
     filename,
   );
+  for (const [key, value] of Object.entries(options.fields ?? {})) {
+    form.append(key, value);
+  }
   const path = `/convert/${options.target ?? 'pdf'}`;
   const response = await fetch(`${baseUrl}${path}`, { method: 'POST', body: form });
   return {

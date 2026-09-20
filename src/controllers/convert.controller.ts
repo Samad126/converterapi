@@ -117,11 +117,14 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
         throw Errors.unsupportedTarget(extension, targetsFor(extension));
       }
 
+      const ocr = parseOcrFlag(req.body?.ocr);
+
       const result = await queue.run(ctx.controller.signal, () =>
         convert({
           workspace: ctx.workspace!,
           conversion,
           signal: ctx.controller.signal,
+          ocr,
         }),
       );
 
@@ -167,6 +170,24 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
   };
 
   return { admit, validateTarget, prepareWorkspace, handle };
+}
+
+/**
+ * The optional `ocr` form field: whether a PDF with no extractable text (a
+ * scan) asking for `docx` should be OCR'd before reconstruction. Defaults to
+ * true, and is silently ignored by every other source/target pair - see
+ * `PdfEngineRun.ocr` for why accepting it universally, rather than only for
+ * `.pdf -> docx`, costs nothing and avoids a special case here.
+ */
+function parseOcrFlag(raw: unknown): boolean {
+  if (raw === undefined || raw === null || raw === '') return true;
+  if (typeof raw !== 'string') {
+    throw Errors.invalidField('The "ocr" field must be "true" or "false".');
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  throw Errors.invalidField('The "ocr" field must be "true" or "false".');
 }
 
 /**

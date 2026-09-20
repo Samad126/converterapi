@@ -132,6 +132,7 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.invalidField('Cropping page 1 by these margins would leave nothing: it is 300x150pt.'),
     Errors.invalidField('The "position" field must be one of: bottom-center, bottom-left, bottom-right.'),
     Errors.invalidField('The "startAt" field must be a positive whole number.'),
+    Errors.invalidField('The "ocr" field must be "true" or "false".'),
     Errors.busy(),
     Errors.badRequest('test detail'),
     Errors.rateLimited(),

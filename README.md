@@ -196,6 +196,29 @@ this input. The trade is the usual one for a raster fallback — the text is
 no longer selectable — made only for the specific input where the
 alternative is confirmed to be wrong, not merely different.
 
+**A PDF with no extractable text at all — a scan — is OCR'd before
+reconstruction, by default.** pdf2docx has no OCR of its own: its `ocr=1`
+("do OCR") setting is an unimplemented stub in the installed version —
+`RawPageFitz.py` raises `SystemExit` if it is ever reached, confirmed by
+reading the source directly — so a real OCR pass has to run first. This is a
+**fifth conversion engine**, [OCRmyPDF](https://ocrmypdf.readthedocs.io/)
+(driving [Tesseract](https://github.com/tesseract-ocr/tesseract)), which
+writes an invisible, searchable text layer behind the scanned page without
+touching how it looks; `pdf2docx` then reads that layer instead of the
+(nonexistent) visible text, via its own `ocr=2` mode. This only ever runs on
+a PDF with **no text on any page** — a document that already has real text
+next to a legitimate image is left alone, because `ocr=2` is a document-wide
+switch that discards every page's embedded images in favour of the OCR text,
+which would wrongly delete a real picture on a page that was never scanned.
+Send `ocr=false` on `/convert/docx` to skip this and get the scan as a plain
+embedded image instead, with no selectable text — the same result this
+endpoint always gave a scan before this feature existed. An OCR failure (a
+missing language pack, a pathological image) degrades to that same
+plain-image result rather than failing the request: OCR here is a
+best-effort enhancement to an already-working target, not a target of its
+own. Tesseract ships with English, Azerbaijani, Turkish and Russian language
+data by default (`OCR_LANGUAGES`, `+`-joined tesseract codes, to change it).
+
 `pptx` has no editable-shapes equivalent to fall back on — there is no
 PDF-to-Impress import to reconstruct from — so it does what real "PDF to
 PowerPoint" tools do for anything that is not already a native deck: render
@@ -226,15 +249,20 @@ npm start          # http://localhost:3001
 The service **refuses to boot** if LibreOffice is missing, if the rasteriser is
 missing, if the metric-compatible fonts are not installed, if the PDF
 engine's Python dependencies are not importable, or if `qpdf` is missing — see
-[Fonts](#fonts-and-why-they-are-not-optional). On a bare Debian/Ubuntu box:
+[Fonts](#fonts-and-why-they-are-not-optional). A missing `tesseract` is the
+one exception: it is logged as a warning at boot, not a boot refusal, because
+OCR is a best-effort enhancement to a target that already works without it —
+see [PDF as a source](#pdf-as-a-source-and-why-some-of-its-targets-are-not-libreoffice-either).
+On a bare Debian/Ubuntu box:
 
 ```bash
 sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
   poppler-utils \
   fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig \
-  python3 python3-pip qpdf
+  python3 python3-pip qpdf \
+  tesseract-ocr tesseract-ocr-eng tesseract-ocr-aze tesseract-ocr-tur tesseract-ocr-rus
 sudo fc-cache -f
-pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl python-docx
+pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl python-docx ocrmypdf
 ```
 
 All four LibreOffice modules are required, not just the writer. They are
@@ -279,6 +307,10 @@ curl -F "file=@report.docx;type=application/octet-stream" \
 
 curl -F "file=@sheet.csv" https://converterapi.example.com/convert/xlsx -o sheet.xlsx
 curl -F "file=@deck.pptx" https://converterapi.example.com/convert/png -o slides.zip
+
+# Optional, only meaningful for a scanned PDF -> docx (default is "true"):
+curl -F "file=@scan.pdf" -F "ocr=false" \
+     https://converterapi.example.com/convert/docx -o scan.docx
 ```
 
 There is deliberately no bare `/convert` that assumes a format. One address that
@@ -1235,6 +1267,8 @@ All configuration is environment variables read in
 | `SOFFICE_BIN` | `soffice` | If not on `PATH` |
 | `PDFTOPPM_BIN` | `pdftoppm` | If not on `PATH`; needed by the PNG/JPG targets |
 | `QPDF_BIN` | `qpdf` | If not on `PATH`; needed by `/pdf/protect` and `/pdf/unlock` |
+| `TESSERACT_BIN` | `tesseract` | If not on `PATH`; OCR for a scanned PDF's `docx` - missing is a boot warning, not a refusal |
+| `OCR_LANGUAGES` | `eng+aze+tur+rus` | `+`-joined tesseract language codes; must match the installed `tesseract-ocr-<lang>` packages |
 | `RASTER_DPI` | `150` | Resolution of a rasterised page |
 | `RASTER_JPEG_QUALITY` | `90` | For the `jpg` target |
 | `MAX_RASTER_PAGES` | `100` | Refused with `E_TOO_LARGE` beyond this |

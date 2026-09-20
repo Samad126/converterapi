@@ -117,10 +117,15 @@ export interface ConvertOptions {
   /** Already resolved and validated against the matrix by the caller. */
   conversion: ResolvedConversion;
   signal?: AbortSignal;
+  /**
+   * A PDF asking for `docx`: OCR a scanned source before reconstructing it.
+   * Defaults to true. Ignored by every other pair - see `PdfEngineRun.ocr`.
+   */
+  ocr?: boolean;
 }
 
 export async function convert(options: ConvertOptions): Promise<ConversionResult> {
-  const { workspace, conversion, signal } = options;
+  const { workspace, conversion, signal, ocr } = options;
   const { source, target } = conversion;
 
   const inputPath = join(workspace, inputFileNameFor(source.extension));
@@ -142,7 +147,7 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
 
   const startedAt = Date.now();
   const files = conversion.viaEngine
-    ? await runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline })
+    ? await runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline, ocr })
     : target.mode === 'extract'
       ? await runExtractPipeline({ inputPath, target, signal, deadline })
       : target.mode === 'raster'
@@ -557,8 +562,9 @@ async function runEnginePipeline(run: {
   target: TargetFormat;
   deadline: number;
   signal?: AbortSignal;
+  ocr?: boolean;
 }): Promise<ProducedFile[]> {
-  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+  const { inputPath, outDir, workspace, target, deadline, signal, ocr } = run;
   const operation = target.id as PdfEngineOperation;
 
   const outputName = `converted${target.extension}`;
@@ -571,6 +577,7 @@ async function runEnginePipeline(run: {
     workspace,
     deadline,
     signal,
+    ocr,
   });
 
   if (outcome.kind === 'exited' && outcome.exitCode === PDF_ENGINE_NO_TABLES_EXIT_CODE) {

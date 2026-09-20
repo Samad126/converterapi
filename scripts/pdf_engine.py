@@ -11,7 +11,12 @@ this script instead, one purpose-built engine per target.
 
 Invocation, matching what pdf-engine.service.ts spawns:
 
-    pdf_engine.py <docx|pptx|xlsx> <input.pdf> <output-path>
+    pdf_engine.py <docx|pptx|xlsx> <input.pdf> <output-path> [ocr]
+
+`ocr` (`true`/`false`, defaults to `true`) only affects the `docx` operation -
+see `convert_to_docx` and `_pdf_has_no_extractable_text`. It is accepted
+positionally for every operation regardless, so the caller does not have to
+special-case which operation it is talking to.
 
 Exit codes:
     0  wrote the output
@@ -22,9 +27,19 @@ Each operation is independent and imports its own dependency, so a missing
 package fails with a clear ModuleNotFoundError naming exactly what is missing,
 rather than every operation going down if one dependency is absent.
 """
+import os
 import sys
+import tempfile
 
 NO_TABLES_EXIT_CODE = 2
+
+# Tesseract language codes, joined with '+' the way tesseract/ocrmypdf expect.
+# English plus the languages this service's own real-world documents use
+# (Azerbaijani, Turkish - the same alphabet family and the same "print to
+# PDF" driver behaviour - and Russian, common alongside them in the same
+# region). Overridable so a deployment with a different document mix is not
+# stuck paying for language data it never uses.
+OCR_LANGUAGES = os.environ.get('OCR_LANGUAGES', 'eng+aze+tur+rus')
 
 
 def _pdf_uses_type3_fonts(input_path: str) -> bool:
@@ -57,7 +72,70 @@ def _pdf_uses_type3_fonts(input_path: str) -> bool:
         document.close()
 
 
-def convert_to_docx(input_path: str, output_path: str) -> None:
+def _pdf_has_no_extractable_text(input_path: str) -> bool:
+    """
+    True if every page's text layer is essentially empty - the "this PDF is a
+    picture of a document, not a document" signal every OCR tool checks for,
+    and the ONLY condition `convert_to_docx` ever runs OCR on.
+
+    A PDF that already has real text on even one page is left alone even if
+    `ocr=true`: pdf2docx's OCR mode (`ocr=2`, see `_ocr_pdf`) is a
+    document-wide switch that discards every page's embedded IMAGES in
+    favour of its hidden OCR text layer - exactly right for a page that is
+    nothing but a scan, and actively wrong for a page that already has real
+    text sitting next to a legitimate picture, which would otherwise lose
+    that picture for no benefit (there is no OCR text to gain from a page
+    that was never scanned in the first place).
+
+    A 10-character threshold rather than a strict emptiness check absorbs a
+    stray page number or watermark on an otherwise blank scanned page without
+    treating the document as "has real text after all".
+    """
+    import fitz  # PyMuPDF
+
+    document = fitz.open(input_path)
+    try:
+        return all(len(page.get_text().strip()) < 10 for page in document)
+    finally:
+        document.close()
+
+
+def _ocr_pdf(input_path: str, workspace: str) -> str:
+    """
+    Run OCRmyPDF over `input_path`, writing a new PDF into `workspace` that
+    looks identical but now carries an invisible, searchable text layer
+    behind each scanned page.
+
+    This is the two-stage pipeline every serious "PDF OCR" tool actually
+    uses, not a shortcut: pdf2docx has no OCR engine of its own - its own
+    `ocr=1` ("do OCR") setting is an unimplemented stub in the installed
+    version (`RawPageFitz.py` raises `SystemExit` if it is ever reached,
+    confirmed by reading the source directly) - so a real OCR pass has to
+    happen first, and pdf2docx's job is only to read what it produced
+    (`ocr=2`, "this PDF has already been OCR-ed").
+
+    `skip_text=True` is what makes this safe to run unconditionally on
+    whatever `_pdf_has_no_extractable_text` already approved: OCRmyPDF's
+    default behaviour is to REFUSE a PDF that already has any text layer at
+    all (`PriorOcrFoundError`), and that flag tells it to OCR whichever pages
+    genuinely have none and leave the rest untouched instead of raising -
+    the caller's own check already means every page qualifies here, but this
+    is the belt to that check's suspenders, not a redundant one.
+    """
+    import ocrmypdf
+
+    output_path = os.path.join(workspace, 'ocred.pdf')
+    ocrmypdf.ocr(
+        input_path,
+        output_path,
+        language=OCR_LANGUAGES,
+        skip_text=True,
+        progress_bar=False,
+    )
+    return output_path
+
+
+def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None:
     """
     Reconstruct the PDF as an editable, reflowable Word document.
 
@@ -70,6 +148,16 @@ def convert_to_docx(input_path: str, output_path: str) -> None:
     Falls back to `_convert_to_docx_as_pages` for a PDF with Type3 fonts -
     see `_pdf_uses_type3_fonts` for why that specific trigger is checked
     rather than attempting the reconstruction and hoping.
+
+    For a PDF with no extractable text at all - a scanned document - and
+    `ocr` true (the default), runs OCRmyPDF first and hands pdf2docx the
+    result instead of the original, so a scan becomes real, reflowable text
+    rather than an uneditable picture of one. An OCR failure (a missing
+    language pack, a pathological image) degrades to the same plain
+    conversion `ocr=false` would have produced - a docx with the page's
+    image but no selectable text, which is what this pipeline already gave
+    every scanned PDF before this feature existed - rather than failing the
+    whole request over what is, for this endpoint, a best-effort enhancement.
     """
     if _pdf_uses_type3_fonts(input_path):
         _convert_to_docx_as_pages(input_path, output_path)
@@ -77,9 +165,19 @@ def convert_to_docx(input_path: str, output_path: str) -> None:
 
     from pdf2docx import Converter
 
-    converter = Converter(input_path)
+    working_input = input_path
+    ocr_settings = {}
+    if ocr and _pdf_has_no_extractable_text(input_path):
+        try:
+            workspace = os.path.dirname(os.path.abspath(output_path)) or tempfile.gettempdir()
+            working_input = _ocr_pdf(input_path, workspace)
+            ocr_settings = {'ocr': 2}
+        except Exception as error:  # noqa: BLE001 - degrade, don't fail the request over this
+            print(f'OCR failed, falling back to a non-OCR conversion: {error}', file=sys.stderr)
+
+    converter = Converter(working_input)
     try:
-        converter.convert(output_path)
+        converter.convert(output_path, **ocr_settings)
     finally:
         converter.close()
 
@@ -262,18 +360,24 @@ OPERATIONS = {
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
-        print(f'usage: {sys.argv[0]} <docx|pptx|xlsx> <input.pdf> <output-path>', file=sys.stderr)
+    if len(sys.argv) not in (4, 5):
+        print(f'usage: {sys.argv[0]} <docx|pptx|xlsx> <input.pdf> <output-path> [ocr]', file=sys.stderr)
         return 1
 
     operation, input_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    # Only convert_to_docx reads this; accepted for every operation anyway so
+    # the caller never has to special-case which one it is talking to.
+    ocr = sys.argv[4].lower() != 'false' if len(sys.argv) == 5 else True
     handler = OPERATIONS.get(operation)
     if handler is None:
         print(f'unknown operation "{operation}", expected one of {sorted(OPERATIONS)}', file=sys.stderr)
         return 1
 
     try:
-        handler(input_path, output_path)
+        if operation == 'docx':
+            convert_to_docx(input_path, output_path, ocr=ocr)
+        else:
+            handler(input_path, output_path)
     except SystemExit:
         raise
     except Exception as error:  # noqa: BLE001 - reported to stderr, not swallowed

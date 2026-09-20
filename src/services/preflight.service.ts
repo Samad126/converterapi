@@ -26,6 +26,7 @@ import {
   QPDF_BIN,
   REQUIRED_FONT_ALIASES,
   SOFFICE_BIN,
+  TESSERACT_BIN,
 } from '../config.ts';
 import { PreflightError } from '../errors.ts';
 import { archivesFiles, resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
@@ -48,6 +49,8 @@ export interface PreflightReport {
   sofficeVersion: string;
   rasterizerVersion: string;
   fonts: Array<{ requested: string; resolved: string }>;
+  /** False means a scanned PDF's `docx` will convert without OCR - see `checkTesseractPresent`. */
+  ocrAvailable: boolean;
 }
 
 export async function preflight(): Promise<PreflightReport> {
@@ -57,7 +60,14 @@ export async function preflight(): Promise<PreflightReport> {
   const fonts = assertMetricCompatibleFonts();
   assertPdfEnginePresent();
   assertQpdfPresent();
-  return { sofficeVersion, rasterizerVersion, fonts };
+  const ocrAvailable = checkTesseractPresent();
+  if (!ocrAvailable) {
+    console.warn(
+      `tesseract (${TESSERACT_BIN}) is not available: a scanned PDF asking for docx will ` +
+        'convert without OCR text. Install tesseract-ocr to enable it - see the Dockerfile.',
+    );
+  }
+  return { sofficeVersion, rasterizerVersion, fonts, ocrAvailable };
 }
 
 function assertNotRoot(): void {
@@ -164,7 +174,7 @@ function assertRasterizerPresent(): string {
 function assertPdfEnginePresent(): void {
   const result = spawnSync(
     PYTHON_BIN,
-    ['-c', 'import pdf2docx, pptx, pdfplumber, openpyxl, fitz, docx'],
+    ['-c', 'import pdf2docx, pptx, pdfplumber, openpyxl, fitz, docx, ocrmypdf'],
     { encoding: 'utf8', timeout: 30_000 },
   );
 
@@ -189,7 +199,7 @@ function assertPdfEnginePresent(): void {
       [
         'The PDF engine\'s Python dependencies are not all installed.',
         '',
-        `  pip install pdf2docx pdfplumber python-pptx openpyxl python-docx`,
+        `  pip install pdf2docx pdfplumber python-pptx openpyxl python-docx ocrmypdf`,
         '  Docker:  use the provided Dockerfile',
         '',
         `stderr: ${(result.stderr ?? '').trim()}`,
@@ -233,6 +243,25 @@ function assertQpdfPresent(): void {
       `"${QPDF_BIN} --version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
     );
   }
+}
+
+/**
+ * tesseract, used by `ocrmypdf` for a scanned PDF (no extractable text at
+ * all) asking for `docx`.
+ *
+ * Deliberately NOT a `PreflightError`, unlike every other check in this
+ * file: OCR is a best-effort enhancement to an already-working target, not
+ * a target of its own - `pdf_engine.py`'s `_ocr_pdf` already degrades to a
+ * plain, non-OCR conversion (the same result this service gave a scanned
+ * PDF before OCR existed) if tesseract is missing or fails, rather than
+ * failing the request. Refusing to boot over a missing enhancement would be
+ * exactly the "gap of its own" this file exists to prevent elsewhere, turned
+ * inside out. A missing tesseract is logged instead, so it is visible
+ * without being fatal.
+ */
+function checkTesseractPresent(): boolean {
+  const result = spawnSync(TESSERACT_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  return !result.error && result.status === 0;
 }
 
 function assertMetricCompatibleFonts(): Array<{ requested: string; resolved: string }> {

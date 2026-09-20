@@ -363,6 +363,93 @@ export function pdfProbe(): Buffer {
 }
 
 /**
+ * A one-page PDF that is a picture of a document rather than one: an image
+ * XObject filling the page, and no `/Font` resource and no text-showing
+ * operator anywhere in it - a real scan (or a "print to image, then wrap in
+ * a PDF" export) has exactly this shape. This is the fixture for
+ * `_pdf_has_no_extractable_text` in pdf_engine.py: it exercises the OCR
+ * trigger path honestly, by giving it a PDF PyMuPDF's own `get_text()`
+ * agrees has nothing in it, rather than asserting on the OCR engine's
+ * accuracy - Tesseract's actual character recognition is not something a
+ * unit test should be pinned to.
+ *
+ * The image itself is a solid colour, deliberately not real, readable text:
+ * nothing here reads back what Tesseract recognised, only that a document
+ * with no text layer at all still converts successfully end to end.
+ */
+export function pdfScannedProbe(): Buffer {
+  const width = 100;
+  const height = 60;
+  const rgb: [number, number, number] = [180, 180, 180];
+  const imageData = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < width * height; i += 1) {
+    imageData[i * 3] = rgb[0];
+    imageData[i * 3 + 1] = rgb[1];
+    imageData[i * 3 + 2] = rgb[2];
+  }
+
+  const content = `q ${width} 0 0 ${height} 0 0 cm /Im0 Do Q`;
+
+  const objects = new Map<number, string | Buffer>();
+  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objects.set(2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  objects.set(
+    3,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] ` +
+      '/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>',
+  );
+  objects.set(4, `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`);
+  objects.set(
+    5,
+    Buffer.concat([
+      Buffer.from(
+        `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} ` +
+          `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${imageData.length} >>\nstream\n`,
+        'latin1',
+      ),
+      imageData,
+      Buffer.from('\nendstream', 'latin1'),
+    ]),
+  );
+
+  const highestId = 5;
+  const chunks: Buffer[] = [Buffer.from('%PDF-1.4\n', 'latin1')];
+  const offsets = new Map<number, number>();
+  let cursor = chunks[0]!.length;
+
+  for (let id = 1; id <= highestId; id += 1) {
+    const body = objects.get(id);
+    if (body === undefined) continue;
+    offsets.set(id, cursor);
+    const piece = Buffer.concat([
+      Buffer.from(`${id} 0 obj\n`, 'latin1'),
+      typeof body === 'string' ? Buffer.from(body, 'latin1') : body,
+      Buffer.from('\nendobj\n', 'latin1'),
+    ]);
+    chunks.push(piece);
+    cursor += piece.length;
+  }
+
+  const xrefOffset = cursor;
+  const xrefLines = ['xref', `0 ${highestId + 1}`, '0000000000 65535 f '];
+  for (let id = 1; id <= highestId; id += 1) {
+    const offset = offsets.get(id);
+    xrefLines.push(
+      offset === undefined ? '0000000000 00000 f ' : `${String(offset).padStart(10, '0')} 00000 n `,
+    );
+  }
+  chunks.push(
+    Buffer.from(
+      `${xrefLines.join('\n')}\n` +
+        `trailer\n<< /Size ${highestId + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+      'latin1',
+    ),
+  );
+
+  return Buffer.concat(chunks);
+}
+
+/**
  * A one-page PDF whose only font is a Type3 font - a real regression
  * fixture, not a synthetic one: it reproduces the exact structure that made
  * `pdf_engine.py`'s `docx` reconstruction duplicate and overlap every line

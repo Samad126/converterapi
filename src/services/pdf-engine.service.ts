@@ -35,14 +35,23 @@ export interface PdfEngineRun {
   workspace: string;
   deadline: number;
   signal?: AbortSignal;
+  /**
+   * `docx` only: OCR a PDF with no extractable text (a scan) before
+   * reconstructing it, so a scanned page becomes real text instead of an
+   * uneditable picture. Defaults to true. Harmless to pass for `pptx`/
+   * `xlsx` - `pdf_engine.py` accepts it positionally for every operation and
+   * only `convert_to_docx` reads it, so the caller here never has to
+   * special-case which operation this run is.
+   */
+  ocr?: boolean;
 }
 
 export function runPdfEngine(run: PdfEngineRun): Promise<ProcessOutcome> {
-  const { operation, inputPath, outputPath, workspace, deadline, signal } = run;
+  const { operation, inputPath, outputPath, workspace, deadline, signal, ocr } = run;
 
   return runProcess({
     bin: PYTHON_BIN,
-    args: [PDF_ENGINE_SCRIPT, operation, inputPath, outputPath],
+    args: [PDF_ENGINE_SCRIPT, operation, inputPath, outputPath, String(ocr ?? true)],
     workspace,
     deadline,
     signal,

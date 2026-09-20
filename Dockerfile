@@ -61,6 +61,18 @@ FROM node:22-bookworm-slim AS runtime
 # and `/pdf/unlock` shell out to qpdf instead, a small dependency-free CLI
 # built for exactly this. See qpdf.service.ts.
 #
+# tesseract-ocr plus ocrmypdf is a FIFTH engine, for a PDF with no
+# extractable text at all (a scan) asking for `docx`. pdf2docx has no OCR of
+# its own - its `ocr=1` setting is an unimplemented stub in the installed
+# version, confirmed by reading pdf2docx's own source - so a real OCR pass
+# has to run first and hand pdf2docx a PDF that already has a text layer to
+# read (`ocr=2`). See `_ocr_pdf` in pdf_engine.py. Language packs beyond
+# English are for this service's own real documents (Azerbaijani, Turkish -
+# the same alphabet family and the same "print to PDF" behaviour - and
+# Russian, common alongside them); override OCR_LANGUAGES if a deployment's
+# documents are in different languages, and add the matching
+# tesseract-ocr-<lang> package here to match.
+#
 # The font packages are NOT optional and NOT cosmetic. Calibri and Cambria do
 # not exist on Linux; without metric-compatible substitutes LibreOffice picks a
 # font with different glyph widths, so every line breaks in a different place
@@ -93,6 +105,11 @@ RUN apt-get update \
       python3 \
       python3-pip \
       qpdf \
+      tesseract-ocr \
+      tesseract-ocr-eng \
+      tesseract-ocr-aze \
+      tesseract-ocr-tur \
+      tesseract-ocr-rus \
  && fc-cache -f \
  && pip3 install --no-cache-dir --break-system-packages \
       pdf2docx \
@@ -100,6 +117,7 @@ RUN apt-get update \
       python-pptx \
       openpyxl \
       python-docx \
+      ocrmypdf \
  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \

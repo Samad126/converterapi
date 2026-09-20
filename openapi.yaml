@@ -112,6 +112,10 @@ paths:
         rate-limited per IP and conversions run under a bounded concurrency
         limit; both are sources of `429` and `503` that a well-formed request
         can hit.
+
+        A PDF with no extractable text at all (a scan) asking for `docx` is
+        OCR'd before reconstruction by default - see the `ocr` field on the
+        request body.
       x-max-upload-bytes: 26214400
       parameters:
         - name: target
@@ -663,8 +667,9 @@ components:
     Upload:
       required: true
       description: |
-        Exactly one file part named `file`. Additional parts, or a part under
-        a different name, are rejected with `400`.
+        One file part named `file`, plus the optional `ocr` field below. Any
+        other part, or a file part under a different name, is rejected with
+        `400`.
 
         The overall body limit is **26214400 bytes (25 MB)**, matching the
         client's own `MAX_UPLOAD_BYTES` and the reverse proxy's body limit.
@@ -689,6 +694,19 @@ components:
                   written to a server-generated name inside a per-request
                   temporary directory, so a name like `../../etc/passwd.docx`
                   is harmless.
+              ocr:
+                type: string
+                enum: ['true', 'false']
+                default: 'true'
+                description: |
+                  Only meaningful for a PDF with no extractable text (a scan)
+                  asking for `docx` - silently ignored by every other
+                  source/target pair. When true (the default), the scan is
+                  OCR'd before reconstruction, so it becomes real, reflowable
+                  text instead of an uneditable picture of one. Set to
+                  `false` to skip OCR and get the page as a plain image
+                  embedded in the docx, the same result this endpoint always
+                  gave a scan before this field existed.
           encoding:
             file:
               contentType: application/octet-stream
@@ -1150,15 +1168,25 @@ components:
     BadRequest:
       description: |
         The request was not a usable upload: no file part named `file`, several
-        files, or a part under a different name.
+        files, a part under a different name - or, distinctly, the optional
+        `ocr` field was something other than `true`/`false`.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            error:
-              code: E_BAD_REQUEST
-              message: The document could not be received. Please try again.
+          examples:
+            badRequest:
+              summary: No usable file part.
+              value:
+                error:
+                  code: E_BAD_REQUEST
+                  message: The document could not be received. Please try again.
+            invalidOcrField:
+              summary: The `ocr` field was not `true`/`false`.
+              value:
+                error:
+                  code: E_INVALID_FIELD
+                  message: The "ocr" field must be "true" or "false".
 
     NotFound:
       description: |
