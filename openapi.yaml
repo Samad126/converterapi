@@ -799,6 +799,67 @@ paths:
         '503':
           $ref: '#/components/responses/Busy'
 
+  /pdf/redact:
+    post:
+      tags: [pages]
+      operationId: redactPdf
+      summary: Permanently remove content under `areas`, not draw over it
+      description: |
+        For every rectangle in `areas`, the underlying text, embedded images
+        and vector graphics that intersect it are genuinely DELETED from the
+        document - not covered by an opaque box drawn on top, which would
+        leave the original content fully intact and extractable underneath
+        (`pdftotext`, copy-paste, or any viewer's "show hidden layers" would
+        still recover it). This is real redaction: after this endpoint runs,
+        the removed content is not present anywhere in the output PDF's text
+        or graphics, confirmed by extracting text from a redacted region and
+        finding it gone.
+
+        `areas` is a JSON array (a plain multipart text field, like
+        `/pdf/fill-form`'s `fields` and `/pdf/sign`'s `elements`):
+
+        ```
+        [{ "page": 1, "x": 100, "y": 200, "width": 150, "height": 30 }]
+        ```
+
+        `page` is 1-based. `x`/`y`/`width`/`height` are in points, TOP-LEFT
+        origin - `(0,0)` is the page's top-left corner, the same convention
+        `/pdf/sign`'s `elements` already use, so a caller already familiar
+        with that endpoint's coordinate system reuses it here unchanged.
+
+        Limitation, observed directly rather than assumed: the underlying
+        engine removes exactly the glyphs/graphics that intersect the
+        rectangle, at whatever granularity the page's content stream stores
+        them at - it does NOT expand a partial overlap to cover a whole word.
+        A rectangle covering only the first half of a word removes only
+        that half; the remaining half is still fully present, both visually
+        and in extracted text. A rectangle must fully cover everything that
+        needs to disappear - a caller drawing an under-sized box will leak
+        a visible, readable fragment of the "redacted" content.
+
+        `areas` must be non-empty: a redact request naming nothing to redact
+        is not treated as a harmless no-op, since there is no reason to call
+        this endpoint at all with nothing to remove.
+      requestBody:
+        $ref: '#/components/requestBodies/RedactUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /formats:
     get:
       tags: [discovery]
@@ -1389,6 +1450,29 @@ components:
                 items:
                   type: string
                   format: binary
+
+    RedactUpload:
+      required: true
+      description: One PDF, plus the regions to permanently strip from it.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, areas]
+            additionalProperties: false
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to redact.
+              areas:
+                type: string
+                description: |
+                  A non-empty JSON array of `{page, x, y, width, height}`
+                  regions to genuinely remove (not merely cover) - see the
+                  `/pdf/redact` description for the full coordinate contract
+                  and the partial-overlap limitation.
+                example: '[{"page":1,"x":100,"y":200,"width":150,"height":30}]'
 
   schemas:
     FormField:

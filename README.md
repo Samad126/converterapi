@@ -726,6 +726,48 @@ font), or `plain` (Helvetica). SVG signature/stamp uploads are not accepted
 (PNG/JPG only, the same as `/pdf/scan-to-pdf`) — rasterising arbitrary SVG
 would need its own conversion step this pipeline does not have.
 
+### POST /pdf/redact
+
+Permanently removes text and vector content under caller-given rectangles —
+not a black box drawn on top of it.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/redact` | One PDF, field `file`, text field `areas` (a JSON array of `{page, x, y, width, height}`) | The PDF with that content genuinely removed and replaced with a black fill |
+
+```bash
+curl -F "file=@case-file.pdf" \
+     -F 'areas=[{"page":1,"x":72,"y":600,"width":250,"height":18}]' \
+     https://converterapi.example.com/pdf/redact -o case-file-redacted.pdf
+```
+
+`page` is 1-based; `x`/`y`/`width`/`height` are in points, **top-left
+origin** — the same convention `/pdf/sign`'s `elements` already use, so a
+frontend built against one reuses the other's coordinate math unchanged.
+
+**This is `pdf_engine.py`/PyMuPDF, not `pdf-lib`**, and deliberately so:
+drawing a filled rectangle over content with `pdf-lib` would leave the
+original text and images sitting untouched underneath it in the file — every
+PDF text-extraction tool, and plenty of ordinary PDF viewers, would still
+read the "redacted" secret right through it. PyMuPDF's own redaction
+annotations (`add_redact_annot` + `apply_redactions`) actually strip the
+glyphs and vector content intersecting each rectangle from the page's
+content stream, confirmed directly before this was built: a page holding
+`"SECRET"` immediately next to `"KEEP"` inside one rectangle-adjacent region,
+redacted over just the first word, comes back from text extraction as
+`"KEEP"` with `"SECRET"` **absent entirely**, not merely invisible.
+
+**The one real limitation, and it matters**: redaction happens at whatever
+granularity the content stream already stores text in, not at the word
+level — a rectangle that only partially covers a word removes exactly the
+glyphs it overlaps and leaves the rest intact and readable (confirmed: a
+rectangle over the left half of `"HelloWorld"` left `"orld"` fully present in
+the extracted text afterward). **Draw redaction boxes generously; a
+too-tight box leaks the uncovered fragment of whatever it was meant to
+remove.** An empty `areas` array is refused with `400 E_INVALID_FIELD`
+rather than treated as a harmless no-op — there is no reason to call this
+endpoint with nothing to redact.
+
 ### GET /formats
 
 The [conversion matrix](#conversion-matrix) as JSON — every accepted extension,

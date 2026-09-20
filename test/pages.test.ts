@@ -10,7 +10,8 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
+
 
 import {
   buildJpegFixture,
@@ -1219,5 +1220,227 @@ describe('POST /pdf/sign', () => {
     const body = JSON.parse(response.body.toString('utf8'));
     assert.equal(response.status, 400);
     assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+});
+
+/**
+ * A one-page, 300x300pt PDF with two well-separated, distinctly-named text
+ * strings drawn via `pdf-lib`'s own `drawText` at known baseline positions -
+ * `buildMinimalPdf` (used by every other test above) only supports a single
+ * line per page at a fixed position, which is not enough control to reliably
+ * target one piece of text with a redaction rectangle while leaving another
+ * untouched. `pdf-lib` coordinates are bottom-left origin (y counts up from
+ * the bottom), which is NOT what `/pdf/redact`'s API or its engine (PyMuPDF)
+ * use - both are top-left origin - so this helper hands back each string's
+ * bounding box already converted to top-left, ready to pass straight to
+ * `/pdf/redact`'s `areas`.
+ */
+async function buildRedactFixture(): Promise<{
+  pdf: Buffer;
+  pageHeight: number;
+  secretBox: { x: number; y: number; width: number; height: number };
+  keepBox: { x: number; y: number; width: number; height: number };
+}> {
+  const pageWidth = 300;
+  const pageHeight = 300;
+  const fontSize = 14;
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([pageWidth, pageHeight]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+
+  const secretText = 'CLASSIFIEDSECRET';
+  const keepText = 'PublicKeepThis';
+  const secretBaselineY = 250; // near the top of the page, bottom-left-origin
+  const keepBaselineY = 30; // near the bottom of the page, bottom-left-origin
+  const x = 20;
+
+  page.drawText(secretText, { x, y: secretBaselineY, size: fontSize, font });
+  page.drawText(keepText, { x, y: keepBaselineY, size: fontSize, font });
+
+  const secretWidth = font.widthOfTextAtSize(secretText, fontSize);
+  const keepWidth = font.widthOfTextAtSize(keepText, fontSize);
+  // A generous vertical pad around each baseline (ascender/descender room),
+  // converted from pdf-lib's bottom-left y to the top-left y this endpoint's
+  // `areas` field expects: topY = pageHeight - bottomY - boxHeight.
+  const pad = 6;
+  const boxHeight = fontSize + pad * 2;
+
+  const secretBox = {
+    x: x - 4,
+    y: pageHeight - (secretBaselineY + fontSize + pad),
+    width: secretWidth + 8,
+    height: boxHeight,
+  };
+  const keepBox = {
+    x: x - 4,
+    y: pageHeight - (keepBaselineY + fontSize + pad),
+    width: keepWidth + 8,
+    height: boxHeight,
+  };
+
+  return { pdf: Buffer.from(await doc.save()), pageHeight, secretBox, keepBox };
+}
+
+describe('POST /pdf/redact', () => {
+  it('genuinely removes the redacted text - it is absent from extracted text, not merely covered', async () => {
+    const { pdf, secretBox } = await buildRedactFixture();
+
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { areas: JSON.stringify([{ page: 1, ...secretBox }]) },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+
+    const document = await PDFDocument.load(response.body);
+    assert.equal(document.getPageCount(), 1);
+
+    const text = await pdfPageText(response.body, 1);
+    // The core "not fake" assertion: the redacted string must not survive
+    // ANYWHERE in the extracted text, not just be visually hidden.
+    assert.doesNotMatch(text, /CLASSIFIEDSECRET/);
+    // Text elsewhere on the same page is untouched.
+    assert.match(text, /PublicKeepThis/);
+  });
+
+  it('redacts multiple areas across multiple pages in one request', async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const pageWidth = 300;
+    const pageHeight = 300;
+    const fontSize = 14;
+
+    // Page 1: SECRETONE (top) + KEEPONE (bottom). Page 2: SECRETTWO (top) + KEEPTWO (bottom).
+    const boxes: Array<{ page: number; x: number; y: number; width: number; height: number }> = [];
+    for (const [secretText, keepText] of [
+      ['SECRETONE', 'KEEPONE'],
+      ['SECRETTWO', 'KEEPTWO'],
+    ] as const) {
+      const page = doc.addPage([pageWidth, pageHeight]);
+      const pageNumber = doc.getPageCount();
+      const secretBaselineY = 250;
+      const keepBaselineY = 30;
+      const x = 20;
+      page.drawText(secretText, { x, y: secretBaselineY, size: fontSize, font });
+      page.drawText(keepText, { x, y: keepBaselineY, size: fontSize, font });
+
+      const secretWidth = font.widthOfTextAtSize(secretText, fontSize);
+      const pad = 6;
+      const boxHeight = fontSize + pad * 2;
+      boxes.push({
+        page: pageNumber,
+        x: x - 4,
+        y: pageHeight - (secretBaselineY + fontSize + pad),
+        width: secretWidth + 8,
+        height: boxHeight,
+      });
+    }
+
+    const pdf = Buffer.from(await doc.save());
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { areas: JSON.stringify(boxes) },
+    );
+
+    assert.equal(response.status, 200);
+    const page1Text = await pdfPageText(response.body, 1);
+    const page2Text = await pdfPageText(response.body, 2);
+    assert.doesNotMatch(page1Text, /SECRETONE/);
+    assert.match(page1Text, /KEEPONE/);
+    assert.doesNotMatch(page2Text, /SECRETTWO/);
+    assert.match(page2Text, /KEEPTWO/);
+  });
+
+  it('rejects a page beyond the document page count without invoking the engine', async () => {
+    const { pdf } = await buildRedactFixture();
+    const before_ = await listWorkspaces();
+
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { areas: JSON.stringify([{ page: 5, x: 0, y: 0, width: 10, height: 10 }]) },
+    );
+
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+    // The request never got far enough to spawn pdf_engine.py at all - the
+    // failure is a synchronous validation error, not a workspace left behind
+    // by a Python process that happened to fail fast on the same bad input.
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+
+  it('rejects malformed JSON in the areas field', async () => {
+    const { pdf } = await buildRedactFixture();
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { areas: '{not json' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects an empty areas array', async () => {
+    const { pdf } = await buildRedactFixture();
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { areas: '[]' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('rejects non-positive width/height', async () => {
+    const { pdf } = await buildRedactFixture();
+    for (const bad of [
+      { page: 1, x: 0, y: 0, width: 0, height: 10 },
+      { page: 1, x: 0, y: 0, width: 10, height: -5 },
+    ]) {
+      const response = await postPages(
+        server.baseUrl,
+        '/pdf/redact',
+        [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+        { areas: JSON.stringify([bad]) },
+      );
+      const body = JSON.parse(response.body.toString('utf8'));
+      assert.equal(response.status, 400, JSON.stringify(bad));
+      assert.equal(body.error.code, 'E_INVALID_FIELD');
+    }
+  });
+
+  it('rejects an encrypted upload', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'secret.pdf', fieldName: 'file', bytes: buildEncryptedPdfContainer() }],
+      { areas: JSON.stringify([{ page: 1, x: 0, y: 0, width: 10, height: 10 }]) },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 422);
+    assert.equal(body.error.code, 'E_ENCRYPTED');
+  });
+
+  it('deletes the workspace afterwards', async () => {
+    const { pdf, secretBox } = await buildRedactFixture();
+    const before_ = await listWorkspaces();
+    await postPages(
+      server.baseUrl,
+      '/pdf/redact',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: pdf }],
+      { areas: JSON.stringify([{ page: 1, ...secretBox }]) },
+    );
+    assert.deepEqual(await listWorkspaces(), before_);
   });
 });

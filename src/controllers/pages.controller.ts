@@ -48,7 +48,7 @@ import {
   type SignFontStyle,
   type SignImage,
 } from '../services/pdf-pages.service.ts';
-import { runPdfCompare, runPdfEngine } from '../services/pdf-engine.service.ts';
+import { runPdfCompare, runPdfEngine, runPdfRedact } from '../services/pdf-engine.service.ts';
 import {
   compressWithQpdf,
   protectWithQpdf,
@@ -86,6 +86,7 @@ export interface PagesController {
   fillForm: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   compare: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   sign: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  redact: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 }
 
 interface PagesResult {
@@ -662,6 +663,38 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const redact: PagesController['redact'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'redact', async () => {
+      const file = requireSingleFile(req);
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const pageCount = await pdfPageCount(buffer);
+      const areas = parseRedactAreas(req.body?.areas, pageCount);
+
+      const workspace = requireWorkspace(req);
+      const areasPath = join(workspace, 'redact-areas.json');
+      await fsp.writeFile(areasPath, JSON.stringify(areas), 'utf8');
+
+      const outputPath = join(workspace, 'output.pdf');
+      const outcome = await runPdfRedact({
+        inputPath: file.path,
+        areasPath,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+      });
+      const result = await readPdfEngineOutput(outcome, outputPath);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
   return {
     admit,
     prepareWorkspace,
@@ -684,6 +717,7 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     fillForm: fillFormHandler,
     compare,
     sign,
+    redact,
   };
 }
 
@@ -954,11 +988,90 @@ function parseSignElement(item: unknown, index: number, pageCount: number, image
   };
 }
 
+/** One entry of `/pdf/redact`'s `areas` field - see `parseRedactAreas`. */
+interface RedactArea {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /**
- * Turn a `pdf_engine.py` `ocr` run into either the bytes it produced or the
- * right AppError - the `pdf_engine.py` twin of `readQpdfOutput` below, for
- * the one page-operation endpoint that goes through the Python engine rather
- * than qpdf or pdf-lib.
+ * The `areas` multipart field for `/pdf/redact`: a JSON array naming every
+ * rectangle to strip. Parsed and fully shape-checked here, before
+ * `pdf_engine.py` is ever invoked - the same "validate the request before
+ * touching the real engine" order `parseSignElements` follows for
+ * `/pdf/sign` (its closest precedent: also a JSON-array-of-placement-objects
+ * field). `page` is checked against `pageCount` here, client-side of the
+ * Python call, the same defense-in-depth every other page-selecting
+ * endpoint in this file already applies via `pdfPageCount` - `pdf_engine.py`
+ * itself also rejects an out-of-range `page`, but that check existing too
+ * does not make this one redundant: this one is what keeps a malformed
+ * request from ever reaching a subprocess at all.
+ *
+ * An empty array is rejected rather than treated as a no-op: unlike
+ * `/pdf/sign`'s `elements` (where a caller might reasonably build up marks
+ * across several requests), "redact nothing" is not a coherent redaction
+ * request - there is no reason to invoke this endpoint at all with nothing
+ * to remove, and treating it as a silent success would only hide a caller
+ * bug that forgot to populate `areas`.
+ */
+function parseRedactAreas(raw: unknown, pageCount: number): RedactArea[] {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw Errors.invalidField('The "areas" field is required and must be a JSON array.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw Errors.invalidField('The "areas" field must be valid JSON.');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw Errors.invalidField('The "areas" field must be a non-empty JSON array.');
+  }
+  return parsed.map((item, index) => parseRedactArea(item, index, pageCount));
+}
+
+/** One entry of `areas` - see `parseRedactAreas`. */
+function parseRedactArea(item: unknown, index: number, pageCount: number): RedactArea {
+  const label = `areas[${index}]`;
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    throw Errors.invalidField(`${label} must be a JSON object.`);
+  }
+  const obj = item as Record<string, unknown>;
+
+  const page = obj.page;
+  if (typeof page !== 'number' || !Number.isInteger(page) || page < 1 || page > pageCount) {
+    throw Errors.invalidField(`${label}.page must be a whole page number between 1 and ${pageCount}.`);
+  }
+
+  const geometry: Record<string, number> = {};
+  for (const field of ['x', 'y', 'width', 'height'] as const) {
+    const value = obj[field];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw Errors.invalidField(`${label}.${field} must be a finite number.`);
+    }
+    geometry[field] = value;
+  }
+  if (geometry.width! <= 0 || geometry.height! <= 0) {
+    throw Errors.invalidField(`${label}.width and ${label}.height must both be positive.`);
+  }
+
+  return {
+    page,
+    x: geometry.x!,
+    y: geometry.y!,
+    width: geometry.width!,
+    height: geometry.height!,
+  };
+}
+
+/**
+ * Turn a `pdf_engine.py` run that produces a PDF (`ocr`, `redact`) into
+ * either the bytes it produced or the right AppError - the `pdf_engine.py`
+ * twin of `readQpdfOutput` below, for the page-operation endpoints that go
+ * through the Python engine rather than qpdf or pdf-lib.
  */
 async function readPdfEngineOutput(
   outcome: import('../services/soffice.service.ts').ProcessOutcome,

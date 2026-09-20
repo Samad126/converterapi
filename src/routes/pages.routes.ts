@@ -21,6 +21,7 @@
  *   POST /pdf/fill-form      one PDF        -> a PDF with `fields` filled in (optionally flattened)
  *   POST /pdf/compare        two PDFs       -> JSON, a per-page text diff
  *   POST /pdf/sign           one PDF + images -> a PDF with `elements` stamped on (visual signature only, not cryptographic)
+ *   POST /pdf/redact         one PDF        -> a PDF with `areas` genuinely stripped out (text/images/vectors removed, not covered)
  */
 import { Router } from 'express';
 
@@ -186,6 +187,14 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createSignUploadMiddleware(),
     controller.sign,
+  );
+
+  router.post(
+    '/pdf/redact',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.redact,
   );
 
   return router;

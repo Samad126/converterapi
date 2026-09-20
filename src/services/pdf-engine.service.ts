@@ -117,3 +117,48 @@ export function runPdfCompare(run: PdfCompareRun): Promise<ProcessOutcome> {
     env: { HOME: process.env.HOME ?? workspace },
   });
 }
+
+export interface PdfRedactRun {
+  inputPath: string;
+  /**
+   * Path to a JSON file (already written into the request workspace by the
+   * caller) holding the array of `{page, x, y, width, height}` regions to
+   * strip. Not a raw JSON string on argv, for the same reason
+   * `pdf_engine.py`'s own docstring gives for this operation: an argv string
+   * is subject to shell/exec argument-length limits and escaping hazards a
+   * long list of regions could realistically hit, where a file the caller
+   * already has a workspace for does not.
+   */
+  areasPath: string;
+  outputPath: string;
+  workspace: string;
+  deadline: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * `/pdf/redact`'s engine call: one PDF plus a JSON side-input describing the
+ * regions to strip, one redacted PDF out.
+ *
+ * A sibling of `runPdfCompare`, not a `PdfEngineRun` variant, for the same
+ * reason `runPdfCompare`'s own doc comment gives: this operation's shape
+ * (two paths in beyond the single `inputPath`/`outputPath` pair, neither of
+ * them the `ocr`/`force` flag `PdfEngineRun` already carries) does not fit
+ * that interface without either a second unused field on every other run or
+ * a union every call site has to narrow before reading anything.
+ */
+export function runPdfRedact(run: PdfRedactRun): Promise<ProcessOutcome> {
+  const { inputPath, areasPath, outputPath, workspace, deadline, signal } = run;
+
+  return runProcess({
+    bin: PYTHON_BIN,
+    args: [PDF_ENGINE_SCRIPT, 'redact', inputPath, areasPath, outputPath],
+    workspace,
+    deadline,
+    signal,
+    // See runPdfEngine's identical comment: a sandboxed HOME hides Python
+    // packages installed under `--user`, which has nothing to do with the
+    // PDF being redacted.
+    env: { HOME: process.env.HOME ?? workspace },
+  });
+}
