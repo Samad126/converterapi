@@ -32,7 +32,17 @@ jobs:
             # not necessarily the one this deploy logs in as. Without this, git
             # refuses to touch it: "detected dubious ownership in repository".
             git config --global --add safe.directory "$APP_DIR"
-            git -C "$APP_DIR" pull origin master
+
+            # Deliberately fetch + hard reset, not `git pull`. This checkout is
+            # a deploy target, not a workstation: nobody should be committing
+            # into it by hand, so there is nothing worth preserving if it ever
+            # diverges from origin/master - and `pull` alone refuses outright
+            # the moment it does, since it has no default merge/rebase strategy
+            # configured on a fresh runner and won't guess. Reset makes the
+            # server's checkout an exact mirror of the pushed commit every
+            # time, which is the only thing a deploy should ever do to it.
+            git -C "$APP_DIR" fetch origin master
+            git -C "$APP_DIR" reset --hard origin/master
 
             # Rebuild and replace the converterapi service only. The compose file
             # lives in this repo, so -f points into the checkout rather than at
