@@ -779,6 +779,49 @@ remove.** An empty `areas` array is refused with `400 E_INVALID_FIELD`
 rather than treated as a harmless no-op — there is no reason to call this
 endpoint with nothing to redact.
 
+### POST /pdf/edit
+
+The general-purpose sibling of `/pdf/sign`: draws text, images, rectangles,
+ellipses, lines and freehand strokes onto a PDF at caller-given positions,
+instead of one of six fixed signature-shaped marks.
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /pdf/edit` | One PDF (`file`), a JSON array of marks (`elements`), zero or more PNG/JPG images (`images`) | The PDF with every element drawn onto its page |
+
+```bash
+curl -F "file=@report.pdf" \
+     -F 'elements=[{"type":"text","page":1,"x":72,"y":700,"value":"Approved","fontSize":14,"color":"red"},{"type":"rectangle","page":1,"x":72,"y":600,"width":150,"height":30,"color":"blue"}]' \
+     https://converterapi.example.com/pdf/edit -o report-annotated.pdf
+```
+
+Every position is **top-left origin**, in points — the same convention
+`/pdf/sign` and `/pdf/redact` already use — flipped to `pdf-lib`'s
+bottom-left origin internally. Each element's shape depends on its `type`,
+since a general editor's marks do not share one geometry the way `/pdf/sign`'s
+fixed box does:
+
+| `type` | Required fields | Optional fields |
+|---|---|---|
+| `text` | `x`, `y`, `value` | `fontSize` (default `14`), `color` |
+| `image` | `x`, `y`, `width`, `height`, `imageIndex` | — |
+| `rectangle` / `ellipse` | `x`, `y`, `width`, `height` | `color`, `strokeWidth` (default `2`), `fill` (default `false`) |
+| `line` | `x1`, `y1`, `x2`, `y2` | `color`, `strokeWidth` |
+| `freehand` | `points` (≥2 `{x, y}`, in order) | `color`, `strokeWidth` |
+
+`imageIndex` is a 0-based index into the `images` files uploaded alongside
+`file`, the same as `/pdf/sign`'s `images` (PNG/JPG only). `freehand` draws a
+polyline through every point in `points` — a piecewise-straight
+approximation of the stroke rather than a fitted curve, which is close
+enough for anything sampled from mouse/touch movement at a reasonable rate
+and needs no curve-fitting step `pdf-lib` has no built-in support for.
+
+**This is a visual mark only, permanently baked into the page content — not
+an editable annotation layer and not a cryptographic signature**, exactly
+the same caveat `/pdf/sign` carries. There is no "move this text box later"
+after the request completes; the caller decides final positions client-side
+before sending them here.
+
 ### GET /formats
 
 The [conversion matrix](#conversion-matrix) as JSON — every accepted extension,

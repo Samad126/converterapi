@@ -22,6 +22,7 @@
  *   POST /pdf/compare        two PDFs       -> JSON, a per-page text diff
  *   POST /pdf/sign           one PDF + images -> a PDF with `elements` stamped on (visual signature only, not cryptographic)
  *   POST /pdf/redact         one PDF        -> a PDF with `areas` genuinely stripped out (text/images/vectors removed, not covered)
+ *   POST /pdf/edit           one PDF + images -> a PDF with `elements` (text/images/shapes/freehand) drawn on
  */
 import { Router } from 'express';
 
@@ -195,6 +196,18 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createSinglePdfUploadMiddleware(),
     controller.redact,
+  );
+
+  router.post(
+    '/pdf/edit',
+    controller.admit,
+    controller.prepareWorkspace,
+    // Same upload shape as `/pdf/sign` - one PDF under `file`, zero or more
+    // PNG/JPG images under `images` that `elements` references by index -
+    // and nothing about that shape is specific to signing, so it is reused
+    // rather than duplicated.
+    createSignUploadMiddleware(),
+    controller.edit,
   );
 
   return router;

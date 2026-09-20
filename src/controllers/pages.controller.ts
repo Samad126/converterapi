@@ -28,6 +28,7 @@ import {
   addPageNumbers,
   addWatermark,
   cropPages,
+  editPdf,
   fillForm as fillFormFields,
   imagesToPdf,
   listFormFields,
@@ -39,6 +40,11 @@ import {
   signPdf,
   splitPdf,
   type CropMargins,
+  type EditColor,
+  type EditElement,
+  type EditElementType,
+  type EditImage,
+  type EditPoint,
   type FormFieldValue,
   type PageNumberPosition,
   type ScanImage,
@@ -87,6 +93,7 @@ export interface PagesController {
   compare: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   sign: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   redact: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  edit: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 }
 
 interface PagesResult {
@@ -695,6 +702,36 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const edit: PagesController['edit'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    // Same `.fields()` shape as `sign` - see its own comment on this line.
+    const filesByField = (req.files as Record<string, Express.Multer.File[]> | undefined) ?? {};
+    const file = filesByField.file?.[0];
+    const imageFiles = filesByField.images ?? [];
+    ctx.bytes = (file?.size ?? 0) + imageFiles.reduce((total, f) => total + f.size, 0);
+
+    await run(req, res, next, 'edit', async () => {
+      if (!file) throw Errors.badRequest('no file part named "file"');
+      await assertUploadsUsable([file]);
+
+      const buffer = await fsp.readFile(file.path);
+      const pageCount = await pdfPageCount(buffer);
+      const elements = parseEditElements(req.body?.elements, pageCount, imageFiles.length);
+
+      const images: EditImage[] = await Promise.all(
+        imageFiles.map(async (imageFile) => ({
+          data: await fsp.readFile(imageFile.path),
+          format: imageFile.originalname?.toLowerCase().endsWith('.png') ? ('png' as const) : ('jpg' as const),
+        })),
+      );
+
+      const result = await editPdf(buffer, elements, images);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
   return {
     admit,
     prepareWorkspace,
@@ -718,6 +755,7 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     compare,
     sign,
     redact,
+    edit,
   };
 }
 
@@ -986,6 +1024,172 @@ function parseSignElement(item: unknown, index: number, pageCount: number, image
     fontStyle,
     color,
   };
+}
+
+const EDIT_ELEMENT_TYPES: readonly EditElementType[] = [
+  'text',
+  'image',
+  'rectangle',
+  'ellipse',
+  'line',
+  'freehand',
+];
+const EDIT_COLORS: readonly EditColor[] = ['black', 'red', 'blue', 'green', 'yellow', 'orange'];
+
+/**
+ * The `elements` multipart field for `/pdf/edit`: JSON text describing every
+ * mark to draw. Same shape and same validate-before-`editPdf` order as
+ * `parseSignElements` for `/pdf/sign`, its closest precedent - the
+ * difference is entirely in what each element TYPE requires, since a
+ * general-purpose editor's marks do not share one geometry the way a
+ * signature/stamp's fixed box does. See `parseEditElement`.
+ */
+function parseEditElements(raw: unknown, pageCount: number, imageCount: number): EditElement[] {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw Errors.invalidField('The "elements" field is required and must be a JSON array.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw Errors.invalidField('The "elements" field must be valid JSON.');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw Errors.invalidField('The "elements" field must be a non-empty JSON array.');
+  }
+  return parsed.map((item, index) => parseEditElement(item, index, pageCount, imageCount));
+}
+
+/** A required, finite `field` on `obj`, labelled `${label}.${field}` in any error. */
+function requireFiniteNumber(obj: Record<string, unknown>, field: string, label: string): number {
+  const value = obj[field];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw Errors.invalidField(`${label}.${field} must be a finite number.`);
+  }
+  return value;
+}
+
+/** The same, but additionally required to be > 0 - `width`/`height` on a box. */
+function requirePositiveNumber(obj: Record<string, unknown>, field: string, label: string): number {
+  const value = requireFiniteNumber(obj, field, label);
+  if (value <= 0) throw Errors.invalidField(`${label}.${field} must be positive.`);
+  return value;
+}
+
+/**
+ * One entry of `/pdf/edit`'s `elements`. Unlike `parseSignElement`, where
+ * every type shares one `x`/`y`/`width`/`height` box, each type here is
+ * validated against exactly the fields `EditElement`'s doc comment says it
+ * needs: a box for `text`/`image`/`rectangle`/`ellipse`, two endpoints for
+ * `line`, a point list for `freehand`. Fields a type does not use are simply
+ * ignored if present, the same tolerance `parseRedactArea` extends to
+ * anything past what it names.
+ */
+function parseEditElement(item: unknown, index: number, pageCount: number, imageCount: number): EditElement {
+  const label = `elements[${index}]`;
+  if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+    throw Errors.invalidField(`${label} must be a JSON object.`);
+  }
+  const obj = item as Record<string, unknown>;
+
+  const type = obj.type;
+  if (typeof type !== 'string' || !EDIT_ELEMENT_TYPES.includes(type as EditElementType)) {
+    throw Errors.invalidField(`${label}.type must be one of: ${EDIT_ELEMENT_TYPES.join(', ')}.`);
+  }
+
+  const page = obj.page;
+  if (typeof page !== 'number' || !Number.isInteger(page) || page < 1 || page > pageCount) {
+    throw Errors.invalidField(`${label}.page must be a whole page number between 1 and ${pageCount}.`);
+  }
+
+  let color: EditColor | undefined;
+  if (obj.color !== undefined) {
+    if (typeof obj.color !== 'string' || !EDIT_COLORS.includes(obj.color as EditColor)) {
+      throw Errors.invalidField(`${label}.color must be one of: ${EDIT_COLORS.join(', ')}.`);
+    }
+    color = obj.color as EditColor;
+  }
+
+  let strokeWidth: number | undefined;
+  if (obj.strokeWidth !== undefined) {
+    strokeWidth = requirePositiveNumber(obj, 'strokeWidth', label);
+  }
+
+  let fill: boolean | undefined;
+  if (obj.fill !== undefined) {
+    if (typeof obj.fill !== 'boolean') throw Errors.invalidField(`${label}.fill must be true or false.`);
+    fill = obj.fill;
+  }
+
+  const base = { type: type as EditElementType, page, color, strokeWidth, fill };
+
+  if (type === 'text') {
+    if (typeof obj.value !== 'string' || obj.value.trim() === '') {
+      throw Errors.invalidField(`${label}.value must be a non-empty string.`);
+    }
+    let fontSize: number | undefined;
+    if (obj.fontSize !== undefined) fontSize = requirePositiveNumber(obj, 'fontSize', label);
+    return {
+      ...base,
+      value: obj.value,
+      fontSize,
+      x: requireFiniteNumber(obj, 'x', label),
+      y: requireFiniteNumber(obj, 'y', label),
+    };
+  }
+
+  if (type === 'image') {
+    const rawIndex = obj.imageIndex;
+    if (typeof rawIndex !== 'number' || !Number.isInteger(rawIndex) || rawIndex < 0 || rawIndex >= imageCount) {
+      throw Errors.invalidField(
+        `${label}.imageIndex must reference one of the ${imageCount} uploaded "images" files.`,
+      );
+    }
+    return {
+      ...base,
+      imageIndex: rawIndex,
+      x: requireFiniteNumber(obj, 'x', label),
+      y: requireFiniteNumber(obj, 'y', label),
+      width: requirePositiveNumber(obj, 'width', label),
+      height: requirePositiveNumber(obj, 'height', label),
+    };
+  }
+
+  if (type === 'rectangle' || type === 'ellipse') {
+    return {
+      ...base,
+      x: requireFiniteNumber(obj, 'x', label),
+      y: requireFiniteNumber(obj, 'y', label),
+      width: requirePositiveNumber(obj, 'width', label),
+      height: requirePositiveNumber(obj, 'height', label),
+    };
+  }
+
+  if (type === 'line') {
+    return {
+      ...base,
+      x1: requireFiniteNumber(obj, 'x1', label),
+      y1: requireFiniteNumber(obj, 'y1', label),
+      x2: requireFiniteNumber(obj, 'x2', label),
+      y2: requireFiniteNumber(obj, 'y2', label),
+    };
+  }
+
+  // freehand
+  if (!Array.isArray(obj.points) || obj.points.length < 2) {
+    throw Errors.invalidField(`${label}.points must be an array of at least 2 {x, y} points.`);
+  }
+  const points: EditPoint[] = obj.points.map((point, pointIndex) => {
+    if (typeof point !== 'object' || point === null || Array.isArray(point)) {
+      throw Errors.invalidField(`${label}.points[${pointIndex}] must be a JSON object.`);
+    }
+    const pointObj = point as Record<string, unknown>;
+    return {
+      x: requireFiniteNumber(pointObj, 'x', `${label}.points[${pointIndex}]`),
+      y: requireFiniteNumber(pointObj, 'y', `${label}.points[${pointIndex}]`),
+    };
+  });
+  return { ...base, points };
 }
 
 /** One entry of `/pdf/redact`'s `areas` field - see `parseRedactAreas`. */

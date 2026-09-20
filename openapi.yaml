@@ -872,6 +872,77 @@ paths:
         '503':
           $ref: '#/components/responses/Busy'
 
+  /pdf/edit:
+    post:
+      tags: [pages]
+      operationId: editPdf
+      summary: Draw text, images, shapes and freehand strokes onto a PDF's pages
+      description: |
+        The general-purpose sibling of `/pdf/sign`: draws `elements`
+        permanently onto the page content, where `/pdf/sign` only ever draws
+        one of six signature-shaped marks, this draws free text, an image,
+        a rectangle, an ellipse, a line or a freehand stroke, each placed by
+        the caller anywhere on a given page. Same request shape as
+        `/pdf/sign` (a JSON `elements` array, plus any images it references)
+        and the same VISUAL-mark caveat: this bakes pixels/glyphs into the
+        page content, it is not an editable annotation layer and it is not a
+        cryptographic signature.
+
+        `elements` is a JSON array (as a plain multipart text field, like
+        `/pdf/sign`'s `elements`). Each element's shape depends on its
+        `type` - there is no one geometry every mark shares:
+
+        ```
+        [
+          { "type": "text", "page": 1, "x": 72, "y": 700, "value": "Approved", "fontSize": 14, "color": "red" },
+          { "type": "image", "page": 1, "x": 72, "y": 600, "width": 120, "height": 40, "imageIndex": 0 },
+          { "type": "rectangle", "page": 1, "x": 72, "y": 500, "width": 150, "height": 30, "color": "blue", "fill": false },
+          { "type": "ellipse", "page": 1, "x": 72, "y": 450, "width": 60, "height": 60, "color": "green", "fill": true },
+          { "type": "line", "page": 1, "x1": 72, "y1": 400, "x2": 220, "y2": 400, "color": "black", "strokeWidth": 2 },
+          { "type": "freehand", "page": 1, "points": [{"x":72,"y":350},{"x":90,"y":360},{"x":110,"y":345}], "color": "black" }
+        ]
+        ```
+
+        - **`text`**: `x`/`y` (the box's top-left corner), `value`
+          (required), optional `fontSize` (default `14`) and `color`.
+        - **`image`**: `x`/`y`/`width`/`height` and `imageIndex`, a 0-based
+          index into the `images` files uploaded alongside `file` - PNG/JPG
+          only, the same as `/pdf/sign`'s `images`.
+        - **`rectangle`** / **`ellipse`**: `x`/`y`/`width`/`height`, optional
+          `color`, `strokeWidth` (default `2`) and `fill` (default `false` -
+          outline only; `true` fills the shape with `color` instead).
+        - **`line`**: `x1`/`y1`/`x2`/`y2` endpoints, optional `color` and
+          `strokeWidth`.
+        - **`freehand`**: `points`, an array of at least two `{x, y}`
+          coordinates in drawing order, connected as a polyline - optional
+          `color` and `strokeWidth`. This is a piecewise-straight
+          approximation of the stroke, not a fitted curve; sampling
+          mouse/touch movement at a reasonable rate makes the difference
+          visually negligible.
+
+        Every position is TOP-LEFT origin in points - `(0,0)` is the page's
+        top-left corner, the same convention `/pdf/sign` and `/pdf/redact`
+        already use, flipped internally to PDF's bottom-left origin.
+      requestBody:
+        $ref: '#/components/requestBodies/EditUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /formats:
     get:
       tags: [discovery]
@@ -1490,6 +1561,39 @@ components:
                   `/pdf/redact` description for the full coordinate contract
                   and the partial-overlap limitation.
                 example: '[{"page":1,"x":100,"y":200,"width":150,"height":30}]'
+
+    EditUpload:
+      required: true
+      description: One PDF, the elements to draw onto it, and any images those elements reference.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file, elements]
+            additionalProperties: false
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF being edited.
+              elements:
+                type: string
+                description: |
+                  A JSON array of marks to draw onto the page. See the
+                  `/pdf/edit` description for the full shape - it differs by
+                  `type` (`text`/`image`/`rectangle`/`ellipse`/`line`/
+                  `freehand`).
+                example: |
+                  [{"type":"text","page":1,"x":72,"y":700,"value":"Approved","fontSize":14}]
+              images:
+                type: array
+                description: |
+                  PNG/JPG images referenced by 0-based index from
+                  `elements[].imageIndex` (`type: "image"` elements only).
+                  Optional; omit entirely when no element is an image.
+                items:
+                  type: string
+                  format: binary
 
   schemas:
     FormField:
