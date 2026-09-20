@@ -58,6 +58,16 @@ services:
     # CONVERSIONS slot. It has not been load-tested against this limit the way
     # the LibreOffice pipelines have - watch for OOM kills on these three
     # targets specifically if raising MAX_CONCURRENT_CONVERSIONS.
+    #
+    # OCR (a PDF -> docx with no extractable text, or a Type3-font PDF, both
+    # with `ocr=true`) is the heaviest thing in this budget by far - measured
+    # directly: a real 6MB, 10-page PDF OOM-killed the WHOLE CONTAINER under
+    # this same 1g limit with OCRmyPDF's own defaults. pdf_engine.py pins
+    # `output_type='pdf'`, `optimize=0` and `jobs=1` on every OCR call for
+    # exactly this reason - see the README's "PDF as a source" section. If
+    # this limit is lowered, or OCR_LANGUAGES is given many more languages,
+    # re-verify against a real multi-page scan before trusting it in
+    # production.
     mem_limit: 1g
     memswap_limit: 1g
     cpus: 2

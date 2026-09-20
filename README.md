@@ -192,9 +192,14 @@ detection on or off, stream or lattice) changed that. `pdf_engine.py` checks
 for a Type3 font up front (`page.get_fonts()`) and, when it finds one,
 renders each page whole into its own docx section sized to that page,
 instead of attempting a reconstruction already known to corrupt itself on
-this input. The trade is the usual one for a raster fallback — the text is
-no longer selectable — made only for the specific input where the
-alternative is confirmed to be wrong, not merely different.
+this input. With `ocr=true` (the default), each rendered page is also
+force-OCR'd and the recognised text added as a real, selectable paragraph
+right after that page's image — a Type3 document trades duplicated,
+corrupted text for a faithful picture **plus** genuine text, not a picture
+alone. That text is not positioned to overlay the image: OCR gives you
+recognised words, not a coordinate map to match them against the picture,
+and pretending otherwise would be a worse kind of dishonesty than just
+appending it as its own paragraph.
 
 **A PDF with no extractable text at all — a scan — is OCR'd before
 reconstruction, by default.** pdf2docx has no OCR of its own: its `ocr=1`
@@ -218,6 +223,18 @@ plain-image result rather than failing the request: OCR here is a
 best-effort enhancement to an already-working target, not a target of its
 own. Tesseract ships with English, Azerbaijani, Turkish and Russian language
 data by default (`OCR_LANGUAGES`, `+`-joined tesseract codes, to change it).
+
+**Both OCR calls pin `output_type='pdf'`, `optimize=0` and `jobs=1` -
+measured necessities, not tuning.** OCRmyPDF's own defaults
+(`output_type='pdfa'`, `optimize=1`) add a second full Ghostscript rendering
+pass and a pikepdf-based recompression pass, for a PDF/A-conformant file
+this pipeline only ever reads the text back out of and then discards; its
+default per-page multiprocessing (`jobs`) holds several rasterised pages in
+memory at once. A real 6MB, 10-page PDF OOM-killed the whole container under
+this service's own `mem_limit: 1g` (`docker-compose.yml`) with OCRmyPDF's
+defaults, and completed cleanly - slower, at around 200MB peak - with these
+three set. If `OCR_LANGUAGES` or `mem_limit` change, re-check this: OCR is
+by far the most memory-hungry thing in this container.
 
 `pptx` has no editable-shapes equivalent to fall back on — there is no
 PDF-to-Impress import to reconstruct from — so it does what real "PDF to

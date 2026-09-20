@@ -121,6 +121,20 @@ def _ocr_pdf(input_path: str, workspace: str) -> str:
     genuinely have none and leave the rest untouched instead of raising -
     the caller's own check already means every page qualifies here, but this
     is the belt to that check's suspenders, not a redundant one.
+
+    `output_type='pdf'`, `optimize=0` and `jobs=1` are load-bearing, not
+    tuning: measured directly, a real 6MB, 10-page PDF OOM-killed the whole
+    container under this service's own `mem_limit: 1g` (docker-compose.yml)
+    without them. OCRmyPDF's DEFAULTS are `output_type='pdfa'` (a second,
+    full Ghostscript rendering pass on top of the OCR rasterisation
+    Tesseract already did, purely for PDF/A conformance nobody here asked
+    for - the result is read for its text and then discarded) and
+    `optimize=1` (a further pikepdf-based recompression pass) - both pure
+    memory and CPU cost for a PDF this pipeline never serves to anyone.
+    `jobs=1` disables OCRmyPDF's own per-page multiprocessing, which
+    otherwise holds several rasterised pages in memory at once, competing
+    with this same container's soffice processes for the memory
+    `MAX_CONCURRENT_CONVERSIONS` was sized against.
     """
     import ocrmypdf
 
@@ -130,9 +144,57 @@ def _ocr_pdf(input_path: str, workspace: str) -> str:
         output_path,
         language=OCR_LANGUAGES,
         skip_text=True,
+        output_type='pdf',
+        optimize=0,
+        jobs=1,
         progress_bar=False,
     )
     return output_path
+
+
+def _ocr_page_texts(input_path: str, workspace: str) -> list:
+    """
+    Recognise each page's text via OCRmyPDF's `force_ocr`, for a PDF whose
+    pages already have a text layer pdf2docx cannot safely read - a
+    Type3-font PDF (see `_pdf_uses_type3_fonts`), where the existing text is
+    exactly what corrupts a normal reconstruction, not a substitute for real
+    OCR.
+
+    `force_ocr` rather than the `skip_text` mode `_ocr_pdf` uses: OCRmyPDF's
+    `skip_text` still REFUSES to touch a page it thinks already has usable
+    text, and a Type3 page technically does (that is the whole problem) -
+    `force_ocr` strips whatever text layer is there, re-rasters the page to
+    a plain image, and OCRs that fresh image instead. The rendering this
+    produces is the same one `_convert_to_docx_as_pages` already puts in the
+    docx on its own, so nothing about how the page LOOKS changes; only the
+    text this function returns is new.
+
+    `output_type='pdf'`, `optimize=0` and `jobs=1` for the same measured
+    reason `_ocr_pdf` documents on its own call: OCRmyPDF's defaults add a
+    second full Ghostscript rendering pass (for PDF/A conformance nobody
+    reads this intermediate file for) and per-page multiprocessing, and a
+    real document OOM-killed this service's own 1GB container without
+    disabling both.
+    """
+    import fitz  # PyMuPDF
+    import ocrmypdf
+
+    output_path = os.path.join(workspace, 'forced-ocr.pdf')
+    ocrmypdf.ocr(
+        input_path,
+        output_path,
+        language=OCR_LANGUAGES,
+        force_ocr=True,
+        output_type='pdf',
+        optimize=0,
+        jobs=1,
+        progress_bar=False,
+    )
+    document = fitz.open(output_path)
+    try:
+        return [page.get_text() for page in document]
+    finally:
+        document.close()
 
 
 def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None:
@@ -147,7 +209,11 @@ def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None
 
     Falls back to `_convert_to_docx_as_pages` for a PDF with Type3 fonts -
     see `_pdf_uses_type3_fonts` for why that specific trigger is checked
-    rather than attempting the reconstruction and hoping.
+    rather than attempting the reconstruction and hoping. When `ocr` is true
+    (the default), that fallback also OCRs the rendered pages and adds the
+    recognised text as real, selectable paragraphs alongside each page's
+    image - see `_ocr_page_texts` - so a Type3 document trades duplicated,
+    corrupted text for a faithful picture PLUS real text, not just a picture.
 
     For a PDF with no extractable text at all - a scanned document - and
     `ocr` true (the default), runs OCRmyPDF first and hands pdf2docx the
@@ -160,7 +226,7 @@ def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None
     whole request over what is, for this endpoint, a best-effort enhancement.
     """
     if _pdf_uses_type3_fonts(input_path):
-        _convert_to_docx_as_pages(input_path, output_path)
+        _convert_to_docx_as_pages(input_path, output_path, ocr=ocr)
         return
 
     from pdf2docx import Converter
@@ -182,7 +248,7 @@ def convert_to_docx(input_path: str, output_path: str, ocr: bool = True) -> None
         converter.close()
 
 
-def _convert_to_docx_as_pages(input_path: str, output_path: str) -> None:
+def _convert_to_docx_as_pages(input_path: str, output_path: str, ocr: bool = False) -> None:
     """
     One page per page, each rendered whole as a full-bleed image - the docx
     twin of `convert_to_pptx`'s fallback, and for the same reason: this trades
@@ -195,6 +261,18 @@ def _convert_to_docx_as_pages(input_path: str, output_path: str) -> None:
     still gets a correctly-shaped page for each rather than being forced into
     one fixed size - the same reasoning `imagesToPdf` in pdf-pages.service.ts
     applies to a set of scanned images.
+
+    When `ocr` is true, each page's OCR'd text (`_ocr_page_texts`) is added
+    as an ordinary paragraph right after that page's image - real, selectable
+    text alongside the faithful picture, rather than a picture alone. It is
+    NOT positioned to overlay the image: reconstructing exact word positions
+    from OCR output and matching them against the rendered picture is a much
+    larger undertaking than this fallback's job (proving the layout is
+    right), and a plain paragraph under the image is an honest presentation
+    of what OCR actually gives you - recognised text, not a coordinate map -
+    rather than a pretence at a pixel-accurate overlay this does not build.
+    An OCR failure here degrades to the plain image with no text, exactly
+    the result this fallback gave before OCR existed.
     """
     import io
 
@@ -211,6 +289,14 @@ def _convert_to_docx_as_pages(input_path: str, output_path: str) -> None:
     # PDF points are 1/72"; EMUs are 914400 per inch - the ratio a page's own
     # point-based size converts by, independent of the raster DPI above.
     emu_per_point = 914400 / 72.0
+
+    page_texts = None
+    if ocr:
+        try:
+            workspace = os.path.dirname(os.path.abspath(output_path)) or tempfile.gettempdir()
+            page_texts = _ocr_page_texts(input_path, workspace)
+        except Exception as error:  # noqa: BLE001 - degrade, don't fail the request over this
+            print(f'OCR failed for the page-image fallback, continuing without recognised text: {error}', file=sys.stderr)
 
     document = fitz.open(input_path)
     try:
@@ -239,6 +325,10 @@ def _convert_to_docx_as_pages(input_path: str, output_path: str) -> None:
             paragraph.add_run().add_picture(
                 io.BytesIO(pixmap.tobytes('png')), width=width_emu, height=height_emu
             )
+
+            text = page_texts[index].strip() if page_texts and index < len(page_texts) else ''
+            if text:
+                output.add_paragraph(text)
 
         output.save(output_path)
     finally:
