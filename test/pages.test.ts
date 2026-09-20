@@ -669,6 +669,60 @@ describe('POST /pdf/repair', () => {
   });
 });
 
+describe('POST /pdf/compress', () => {
+  it('compresses a normal PDF at the default level without losing content', async () => {
+    const original = buildMinimalPdf(['Hello', 'World']);
+    const response = await postPages(server.baseUrl, '/pdf/compress', [
+      { filename: 'doc.pdf', fieldName: 'file', bytes: original },
+    ]);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    assert.ok(response.body.length <= original.length);
+    assert.equal(await pageCount(response.body), 2);
+    assert.equal(await pdfPageText(response.body, 1), 'Hello');
+    assert.equal(await pdfPageText(response.body, 2), 'World');
+  });
+
+  for (const level of ['low', 'medium', 'high']) {
+    it(`accepts level=${level} and produces a valid PDF`, async () => {
+      const original = buildMinimalPdf(['A']);
+      const response = await postPages(
+        server.baseUrl,
+        '/pdf/compress',
+        [{ filename: 'doc.pdf', fieldName: 'file', bytes: original }],
+        { level },
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(response.contentType, 'application/pdf');
+      assert.equal(await pageCount(response.body), 1);
+      assert.equal(await pdfPageText(response.body, 1), 'A');
+    });
+  }
+
+  it('rejects an invalid level', async () => {
+    const response = await postPages(
+      server.baseUrl,
+      '/pdf/compress',
+      [{ filename: 'doc.pdf', fieldName: 'file', bytes: buildMinimalPdf(['A']) }],
+      { level: 'extreme' },
+    );
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'E_INVALID_FIELD');
+  });
+
+  it('refuses an already-encrypted PDF', async () => {
+    const response = await postPages(server.baseUrl, '/pdf/compress', [
+      { filename: 'secret.pdf', fieldName: 'file', bytes: buildEncryptedPdfContainer() },
+    ]);
+    const body = JSON.parse(response.body.toString('utf8'));
+    assert.equal(response.status, 422);
+    assert.equal(body.error.code, 'E_ENCRYPTED');
+  });
+});
+
 describe('POST /pdf/ocr', () => {
   it('passes a PDF that already has text through unchanged when force is not set', async () => {
     const pdf = buildMinimalPdf(['Already searchable']);

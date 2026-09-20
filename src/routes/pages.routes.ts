@@ -15,6 +15,7 @@
  *   POST /pdf/crop           one PDF        -> a PDF with `pages` (or all) cropped by margins
  *   POST /pdf/page-numbers   one PDF        -> a PDF with a number drawn on every page
  *   POST /pdf/repair         one PDF        -> the same PDF, rewritten to fix what qpdf can recover
+ *   POST /pdf/compress       one PDF        -> the same PDF, recompressed by qpdf at `level`
  *   POST /pdf/ocr            one PDF        -> the same PDF with a searchable OCR text layer added
  *   POST /pdf/form-fields    one PDF        -> JSON describing every AcroForm field
  *   POST /pdf/fill-form      one PDF        -> a PDF with `fields` filled in (optionally flattened)
@@ -135,6 +136,14 @@ export function createPagesRouter(deps: PagesControllerDeps): Router {
     controller.prepareWorkspace,
     createSinglePdfUploadMiddleware(),
     controller.repair,
+  );
+
+  router.post(
+    '/pdf/compress',
+    controller.admit,
+    controller.prepareWorkspace,
+    createSinglePdfUploadMiddleware(),
+    controller.compress,
   );
 
   router.post(

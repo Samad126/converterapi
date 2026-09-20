@@ -531,6 +531,54 @@ paths:
         '503':
           $ref: '#/components/responses/Busy'
 
+  /pdf/compress:
+    post:
+      tags: [pages]
+      operationId: compressPdf
+      summary: Recompress a PDF to shrink it
+      description: |
+        Recompresses the PDF's own streams, objects and images with qpdf -
+        the same engine `/pdf/protect`, `/pdf/unlock` and `/pdf/repair` use,
+        rather than adding Ghostscript or another engine for one more
+        endpoint. Refuses an encrypted file, the same as every other page
+        endpoint: qpdf needs the file unlocked to rewrite it at all.
+
+        `level` (default `medium`) controls how aggressively images are
+        recompressed:
+
+          - `low`: recompacts the PDF's internal object/stream structure
+            only. No image is re-encoded, so this is close to lossless.
+          - `medium`: also re-runs flate compression at its slowest, smallest
+            setting and re-encodes images above roughly 200x200 pixels as
+            JPEG where that is smaller.
+          - `high`: the same as `medium`, but with no minimum image size -
+            every image, however small, is a candidate for JPEG
+            re-encoding.
+
+        Unlike `/pdf/repair`, a damaged input that qpdf can only partially
+        recover (its "warnings only" exit code) is treated as a failure here,
+        not a success - a compression request should not silently also
+        repair and re-save a broken file.
+      requestBody:
+        $ref: '#/components/requestBodies/CompressUpload'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConvertedToPdf'
+        '400':
+          $ref: '#/components/responses/InvalidField'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /pdf/ocr:
     post:
       tags: [pages]
@@ -1136,6 +1184,30 @@ components:
                 type: string
                 format: binary
                 description: The PDF to repair.
+
+    CompressUpload:
+      required: true
+      description: One PDF, plus optionally how aggressively to recompress it.
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [file]
+            additionalProperties: false
+            properties:
+              file:
+                type: string
+                format: binary
+                description: The PDF to compress. Must not already be encrypted.
+              level:
+                type: string
+                enum: [low, medium, high]
+                default: medium
+                description: |
+                  How aggressively to recompress images and streams. `low`
+                  is close to lossless (no image re-encoding); `medium`
+                  (the default) re-encodes larger images as JPEG where
+                  smaller; `high` does the same with no minimum image size.
 
     OcrUpload:
       required: true

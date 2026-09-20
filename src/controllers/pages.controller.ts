@@ -43,7 +43,13 @@ import {
   type ScanImage,
 } from '../services/pdf-pages.service.ts';
 import { runPdfCompare, runPdfEngine } from '../services/pdf-engine.service.ts';
-import { protectWithQpdf, repairWithQpdf, unlockWithQpdf } from '../services/qpdf.service.ts';
+import {
+  compressWithQpdf,
+  protectWithQpdf,
+  repairWithQpdf,
+  unlockWithQpdf,
+  type CompressLevel,
+} from '../services/qpdf.service.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest } from '../middleware/request-context.ts';
 
@@ -68,6 +74,7 @@ export interface PagesController {
   crop: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   pageNumbers: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   repair: (req: Request, res: Response, next: NextFunction) => Promise<void>;
+  compress: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   ocr: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   formFields: (req: Request, res: Response, next: NextFunction) => Promise<void>;
   fillForm: (req: Request, res: Response, next: NextFunction) => Promise<void>;
@@ -498,6 +505,40 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     });
   };
 
+  const compress: PagesController['compress'] = async (req, res, next) => {
+    const ctx = getContext(req);
+    ctx.bytes = req.file?.size;
+
+    await run(req, res, next, 'compress', async () => {
+      const file = requireSingleFile(req);
+      // Same reasoning as `/pdf/protect`: qpdf needs the file unlocked to
+      // read and rewrite its streams at all, so an already-encrypted input
+      // gets the same E_ENCRYPTED every other page endpoint gives one.
+      await assertUploadsUsable([file]);
+      const level = parseCompressLevel(req.body?.level);
+
+      const workspace = requireWorkspace(req);
+      const outputPath = join(workspace, 'output.pdf');
+      const outcome = await compressWithQpdf({
+        inputPath: file.path,
+        outputPath,
+        workspace,
+        deadline: Date.now() + CONVERT_TIMEOUT_MS,
+        signal: ctx.controller.signal,
+        level,
+      });
+      // Deliberately NOT `warningsAreSuccess`, unlike `/pdf/repair`: someone
+      // asking to shrink a file is not asking to also silently accept
+      // whatever damage qpdf's exit-3 recovery path papered over along the
+      // way. If the input is broken enough to warn, that surprise belongs to
+      // `/pdf/repair`, not to a compression request that never mentioned it.
+      const result = await readQpdfOutput(outcome, outputPath);
+      const downloadName = downloadNameFor(file.originalname ?? '', '.pdf');
+
+      return { files: [{ name: downloadName, data: result }], archive: false, downloadName };
+    });
+  };
+
   const ocr: PagesController['ocr'] = async (req, res, next) => {
     const ctx = getContext(req);
     ctx.bytes = req.file?.size;
@@ -598,6 +639,7 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
     crop,
     pageNumbers,
     repair,
+    compress,
     ocr,
     formFields,
     fillForm: fillFormHandler,
@@ -676,6 +718,17 @@ function parsePageNumberPosition(raw: unknown): PageNumberPosition {
     throw Errors.invalidField(`The "position" field must be one of: ${PAGE_NUMBER_POSITIONS.join(', ')}.`);
   }
   return raw as PageNumberPosition;
+}
+
+const COMPRESS_LEVELS: readonly CompressLevel[] = ['low', 'medium', 'high'];
+
+/** `level` for `/pdf/compress`, defaulting to `medium` - see `qpdf.service.ts` for what each one does. */
+function parseCompressLevel(raw: unknown): CompressLevel {
+  if (raw === undefined || raw === null || raw === '') return 'medium';
+  if (typeof raw !== 'string' || !COMPRESS_LEVELS.includes(raw as CompressLevel)) {
+    throw Errors.invalidField(`The "level" field must be one of: ${COMPRESS_LEVELS.join(', ')}.`);
+  }
+  return raw as CompressLevel;
 }
 
 /** `startAt` for `/pdf/page-numbers`: a positive whole number, defaulting to 1. */
