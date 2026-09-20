@@ -277,6 +277,17 @@ export const MAX_PAGE_OPERATION_TOTAL_BYTES = intFromEnv(
   1,
 );
 
+/**
+ * `POST /convert/{target}` accepts one or more files under `files`, each
+ * converted independently, so the same two bounds `MAX_PAGE_OPERATION_FILES`/
+ * `MAX_PAGE_OPERATION_TOTAL_BYTES` exist for apply here: a file count so the
+ * request cannot ask for unbounded soffice processes, and a combined-size
+ * bound so `MAX_UPLOAD_BYTES` alone (a per-file cap) cannot be multiplied into
+ * an in-memory zip of hundreds of megabytes.
+ */
+export const MAX_CONVERT_FILES = intFromEnv('MAX_CONVERT_FILES', 15, 1);
+export const MAX_CONVERT_TOTAL_BYTES = intFromEnv('MAX_CONVERT_TOTAL_BYTES', 100 * MB, 1);
+
 /** Per-IP request budget. Unauthenticated endpoint on the public internet. */
 export const RATE_LIMIT_WINDOW_MS = intFromEnv('RATE_LIMIT_WINDOW_MS', 60_000, 1_000);
 export const RATE_LIMIT_MAX = intFromEnv('RATE_LIMIT_MAX', 30, 1);

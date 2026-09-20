@@ -37,6 +37,14 @@ export interface RequestContext {
   bytes?: number;
   /** Tracked by `pages-upload.ts` as each part of a multi-file upload arrives. */
   uploadedFileCount?: number;
+  /**
+   * One entry per file of a `POST /convert/{target}` request, in upload
+   * order - populated by `convert-upload.ts` as each part arrives, whether
+   * the request carries one file or several. Each file gets its own
+   * subdirectory of `workspace` (`convert()` expects a workspace to itself),
+   * which is why a directory rather than just a size is recorded.
+   */
+  bulkFiles?: Array<{ originalName: string; extension: AllowedExtension; dir: string }>;
   /** Aborted on client disconnect so a running soffice can be killed. */
   controller: AbortController;
   /**

@@ -829,7 +829,7 @@ describe('cancellation', () => {
   it('kills the running soffice when the client disconnects', async () => {
     const controller = new AbortController();
     const form = new FormData();
-    form.append('file', new Blob([LARGE_DOCX]), 'large.docx');
+    form.append('files', new Blob([LARGE_DOCX]), 'large.docx');
 
     const request = fetch(`${server.baseUrl}/convert/pdf`, {
       method: 'POST',

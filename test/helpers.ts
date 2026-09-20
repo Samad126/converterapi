@@ -81,7 +81,7 @@ export async function upload(
 ): Promise<RawResponse> {
   const form = new FormData();
   form.append(
-    options.fieldName ?? 'file',
+    options.fieldName ?? 'files',
     new Blob([bytes], { type: options.mimeType ?? 'application/octet-stream' }),
     filename,
   );

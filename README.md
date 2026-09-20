@@ -314,19 +314,30 @@ running" in one line.
 
 ### POST /convert/{target}
 
-`multipart/form-data` with exactly one file part named `file`. The target is
-part of the path and is **required**.
+`multipart/form-data` with one or more file parts, all named `files`. The
+target is part of the path and is **required**.
+
+Upload **exactly one file** and you get back exactly what this endpoint has
+always returned: the converted file itself (or its own archive, for an image
+target). Upload **two or more** and each is converted independently against
+the same target; the response is always one ZIP holding every result -
+`01-report.pdf`, `02-invoice.pdf`, ... - plus an `errors.json` entry for any
+file that failed, so one bad file in a batch does not lose the rest.
 
 ```bash
-curl -F "file=@report.docx;type=application/octet-stream" \
+curl -F "files=@report.docx;type=application/octet-stream" \
      https://converterapi.example.com/convert/pdf \
      -o report.pdf
 
-curl -F "file=@sheet.csv" https://converterapi.example.com/convert/xlsx -o sheet.xlsx
-curl -F "file=@deck.pptx" https://converterapi.example.com/convert/png -o slides.zip
+curl -F "files=@sheet.csv" https://converterapi.example.com/convert/xlsx -o sheet.xlsx
+curl -F "files=@deck.pptx" https://converterapi.example.com/convert/png -o slides.zip
+
+# Two or more files -> always a ZIP of results, one entry per input file:
+curl -F "files=@report.docx" -F "files=@notes.docx" \
+     https://converterapi.example.com/convert/pdf -o converted.zip
 
 # Optional, only meaningful for a scanned PDF -> docx (default is "true"):
-curl -F "file=@scan.pdf" -F "ocr=false" \
+curl -F "files=@scan.pdf" -F "ocr=false" \
      https://converterapi.example.com/convert/docx -o scan.docx
 ```
 

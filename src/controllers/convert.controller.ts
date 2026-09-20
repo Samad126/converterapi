@@ -1,5 +1,5 @@
 /**
- * The conversion endpoints, as HTTP.
+ * The conversion endpoint, as HTTP.
  *
  * This layer does three things and nothing else: validate that the request is
  * asking for something the matrix supports, hand the work to the conversion
@@ -15,7 +15,18 @@
  *                    be converted in and cleaned up with
  *   upload           the body itself
  *   handle           the conversion
+ *
+ * ONE file under `files`, or SEVERAL - the request shape is identical, always
+ * that one field name, and `handle` decides what a response looks like only
+ * once it knows the count: exactly one file gets the plain response `/convert`
+ * has always given (the bare converted file, or its own archive for a raster
+ * target), so nothing about today's callers has to change to keep working
+ * unconverted through this file's own rename from "the single-file path" to
+ * "the one-file case of the general path". Two or more get one ZIP holding
+ * every result, because there is no other honest way to answer "convert these
+ * N files" with N independent outcomes in one HTTP response.
  */
+import fsp from 'node:fs/promises';
 import type { NextFunction, Request, Response } from 'express';
 
 import {
@@ -23,15 +34,17 @@ import {
   isTargetId,
   resolveConversion,
   targetsFor,
+  type ResolvedConversion,
   type TargetId,
 } from '../formats.ts';
+import { MAX_CONVERT_TOTAL_BYTES } from '../config.ts';
 import { AppError, ClientGoneError, Errors } from '../errors.ts';
 import { contentDispositionFor, downloadNameFor } from '../lib/download-name.ts';
 import { BoundedQueue, RateLimiter } from '../lib/queue.ts';
-import { zipStored } from '../lib/zip.ts';
-import { convert } from '../services/conversion.service.ts';
+import { zipStored, type ZipEntry } from '../lib/zip.ts';
+import { convert, type ConversionResult } from '../services/conversion.service.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
-import { cleanup, getContext, logRequest } from '../middleware/request-context.ts';
+import { cleanup, getContext, logRequest, type RequestContext } from '../middleware/request-context.ts';
 
 export interface ConvertControllerDeps {
   queue: BoundedQueue;
@@ -87,67 +100,175 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
       .catch(next);
   };
 
+  /**
+   * One file's conversion, shared by both the single- and multi-file paths
+   * below. Throws an `AppError` on any failure - empty upload, a target this
+   * source cannot reach, or whatever `convert()` itself throws - and leaves
+   * it to the caller to decide whether that ends the request (one file) or is
+   * recorded alongside other files' successes (several).
+   */
+  async function convertOne(
+    meta: NonNullable<RequestContext['bulkFiles']>[number],
+    upload: Express.Multer.File | undefined,
+    targetId: TargetId,
+    ocr: boolean,
+    signal: AbortSignal,
+  ): Promise<{ conversion: ResolvedConversion; result: ConversionResult }> {
+    // A zero-byte upload is not a document, but LibreOffice cheerfully opens
+    // it as an empty one and exports a perfectly valid blank document - which
+    // would be a success carrying a file the user never had. Reject it here,
+    // where we still know it was empty.
+    if (!upload || upload.size === 0) {
+      throw Errors.convertFailed('uploaded file was empty');
+    }
+    const conversion = resolveConversion(meta.extension, targetId);
+    if (!conversion) {
+      // A real target, but not one this document can become. Tell the person
+      // what they CAN have instead.
+      throw Errors.unsupportedTarget(meta.extension, targetsFor(meta.extension));
+    }
+    const result = await queue.run(signal, () =>
+      convert({ workspace: meta.dir, conversion, signal, ocr }),
+    );
+    return { conversion, result };
+  }
+
   const handle: ConvertController['handle'] = async (req, res, next) => {
     const ctx = getContext(req);
-    ctx.bytes = req.file?.size;
+    const uploads = Array.isArray(req.files) ? (req.files as Express.Multer.File[]) : [];
+    ctx.bytes = uploads.reduce((total, file) => total + file.size, 0);
 
     try {
       const targetId = ctx.target as TargetId | undefined;
       if (!targetId) throw Errors.internal('target was not resolved before the upload');
 
-      if (!req.file) {
-        throw Errors.badRequest('no file part named "file"');
+      const files = ctx.bulkFiles ?? [];
+      if (files.length === 0) {
+        throw Errors.badRequest('no files under "files"');
       }
-      const extension = ctx.extension;
-      if (!extension) {
-        throw Errors.unsupported();
-      }
-      // A zero-byte upload is not a document, but LibreOffice cheerfully opens
-      // it as an empty one and exports a perfectly valid blank document - which
-      // would be a 200 carrying a file the user never had. Reject it here,
-      // where we still know it was empty.
-      if (req.file.size === 0) {
-        throw Errors.convertFailed('uploaded file was empty');
+      // Only worth checking once there is more than one file: a single file
+      // is already bounded by MAX_UPLOAD_BYTES, which this would just repeat.
+      if (files.length > 1 && ctx.bytes > MAX_CONVERT_TOTAL_BYTES) {
+        throw Errors.tooLarge(`combined upload of ${ctx.bytes} bytes exceeds the per-request limit`);
       }
 
-      const conversion = resolveConversion(extension, targetId);
-      if (!conversion) {
-        // A real target, but not one this document can become. Tell the person
-        // what they CAN have instead.
-        throw Errors.unsupportedTarget(extension, targetsFor(extension));
+      // For `logRequest`, which reads `ctx.extension` for the single-file
+      // shape every log line predates this endpoint's multi-file form, and
+      // falls back to a count when there is no one extension to name.
+      if (files.length === 1) {
+        ctx.extension = files[0]!.extension;
+      } else {
+        ctx.operation = `convert×${files.length}`;
       }
 
       const ocr = parseOcrFlag(req.body?.ocr);
 
-      const result = await queue.run(ctx.controller.signal, () =>
-        convert({
-          workspace: ctx.workspace!,
-          conversion,
-          signal: ctx.controller.signal,
+      if (files.length === 1) {
+        const meta = files[0]!;
+        const { conversion, result } = await convertOne(
+          meta,
+          uploads[0],
+          targetId,
           ocr,
-        }),
-      );
+          ctx.controller.signal,
+        );
 
-      if (res.writableEnded || ctx.controller.signal.aborted) {
-        // The client left while we were working. There is nobody to answer.
-        logRequest(ctx, 'client_gone');
+        if (res.writableEnded || ctx.controller.signal.aborted) {
+          // The client left while we were working. There is nobody to answer.
+          logRequest(ctx, 'client_gone');
+          return;
+        }
+
+        // The output is in memory now, so the input, the LibreOffice profile
+        // and any copy of the output on disk are all dead weight. Drop them
+        // before writing the response, so the space is reclaimed the moment
+        // the client has its file rather than a few milliseconds later.
+        await cleanup(ctx);
+
+        // The download keeps the upload's name, with the target's extension.
+        // Note that the original filename is read HERE and nowhere else: it
+        // is never used as a path, and it is never logged.
+        const downloadName = downloadNameFor(
+          meta.originalName,
+          result.archive ? '.zip' : conversion.target.extension,
+        );
+        sendResult(res, result, conversion.target.mediaType, downloadName);
+        logRequest(ctx, 'ok', { status: 200 });
         return;
       }
 
-      // The output is in memory now, so the input, the LibreOffice profile and
-      // any copy of the output on disk are all dead weight. Drop them before
-      // writing the response, so the space is reclaimed the moment the client
-      // has its file rather than a few milliseconds later.
+      // Two or more files: convert each independently, and answer with one
+      // ZIP holding every result. One file's failure - wrong type for this
+      // target, a damaged document - does not abort the rest: the caller
+      // asked to convert N files, and a partial answer ("here are the M that
+      // worked, and why the rest did not", recorded as an `errors.json` entry
+      // in the same archive) is more useful than losing all M to report on
+      // one.
+      const entries: ZipEntry[] = [];
+      const errors: Array<{ file: string; code: string; message: string }> = [];
+
+      for (let index = 0; index < files.length; index += 1) {
+        const meta = files[index]!;
+        const label = meta.originalName || `file ${index + 1}`;
+        const prefix = String(index + 1).padStart(2, '0');
+
+        try {
+          const { conversion, result } = await convertOne(
+            meta,
+            uploads[index],
+            targetId,
+            ocr,
+            ctx.controller.signal,
+          );
+
+          if (result.archive) {
+            // This file's own output is itself several files (a raster
+            // target) - keep them together under a folder named after it
+            // rather than flattening everything into one directory, where
+            // "slide-1.png" from two different source decks would collide.
+            const folder = `${prefix}-${downloadNameFor(meta.originalName, '')}`;
+            for (const inner of result.files) {
+              entries.push({ name: `${folder}/${inner.name}`, data: inner.data });
+            }
+          } else {
+            const file = result.files[0];
+            if (!file) throw new AppError('E_INTERNAL', 500, 'Something went wrong on the server.');
+            const name = downloadNameFor(meta.originalName, conversion.target.extension);
+            entries.push({ name: `${prefix}-${name}`, data: file.data });
+          }
+        } catch (error) {
+          if (error instanceof ClientGoneError) throw error;
+          const appError = error instanceof AppError ? error : Errors.internal(error);
+          errors.push({ file: label, code: appError.code, message: appError.userMessage });
+        } finally {
+          // Each file's own subdirectory (input, LibreOffice profile, output)
+          // is dead weight the moment it is either archived above or
+          // recorded as a failure - freed here rather than waiting for the
+          // whole batch's cleanup so a large batch does not hold every
+          // file's temp files on disk at once.
+          await fsp.rm(meta.dir, { recursive: true, force: true }).catch(() => {});
+        }
+
+        if (res.writableEnded || ctx.controller.signal.aborted) {
+          logRequest(ctx, 'client_gone');
+          return;
+        }
+      }
+
+      if (errors.length > 0) {
+        entries.push({
+          name: 'errors.json',
+          data: Buffer.from(JSON.stringify(errors, null, 2)),
+        });
+      }
+
       await cleanup(ctx);
 
-      // The download keeps the upload's name, with the target's extension. Note
-      // that the original filename is read HERE and nowhere else: it is never
-      // used as a path, and it is never logged.
-      const downloadName = downloadNameFor(
-        req.file.originalname ?? '',
-        result.archive ? '.zip' : conversion.target.extension,
-      );
-      sendResult(res, result, conversion.target.mediaType, downloadName);
+      const archive = zipStored(entries);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', contentDispositionFor('converted-files.zip'));
+      res.setHeader('Content-Length', String(archive.length));
+      res.status(200).end(archive);
       logRequest(ctx, 'ok', { status: 200 });
     } catch (error) {
       if (error instanceof ClientGoneError) {
@@ -177,7 +298,9 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
  * scan) asking for `docx` should be OCR'd before reconstruction. Defaults to
  * true, and is silently ignored by every other source/target pair - see
  * `PdfEngineRun.ocr` for why accepting it universally, rather than only for
- * `.pdf -> docx`, costs nothing and avoids a special case here.
+ * `.pdf -> docx`, costs nothing and avoids a special case here. One value for
+ * the whole request, single file or several: it is a request-level choice,
+ * not a per-file one.
  */
 function parseOcrFlag(raw: unknown): boolean {
   if (raw === undefined || raw === null || raw === '') return true;
@@ -191,7 +314,8 @@ function parseOcrFlag(raw: unknown): boolean {
 }
 
 /**
- * Turn the service's output into a response body.
+ * Turn a single file's conversion result into the whole response body - the
+ * one-file case of `handle`.
  *
  * A raster target is always an archive, even for a single slide, so that the
  * content type does not depend on how many slides the upload happened to have.

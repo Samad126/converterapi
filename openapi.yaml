@@ -66,12 +66,21 @@ info:
     render-then-rasterise second step an image target needs - so that it can
     still answer with a proper `504` instead of being killed mid-conversion.
 
-    ## Uploads
+    ## Uploads, and bulk conversion
 
-    Requests are `multipart/form-data` with exactly one file part. The import
-    filter is chosen from the **filename extension**, never from the declared
-    MIME type: the client deliberately sends `application/octet-stream`, and a
-    hostile client could declare anything at all.
+    Requests are `multipart/form-data` with one or more file parts, all under
+    the field name `files`. The import filter for each is chosen from its own
+    **filename extension**, never from the declared MIME type: the client
+    deliberately sends `application/octet-stream`, and a hostile client could
+    declare anything at all.
+
+    **Exactly one file** gets the response this endpoint has always given:
+    the converted file itself (or its own archive, for an image target) with
+    the target's media type. **Two or more files** are each converted
+    independently against the same `target`, and the response is always one
+    `application/zip` holding every result - one file's failure does not fail
+    the rest, and is instead recorded in an `errors.json` entry inside the
+    same archive. See `ConvertedToTarget` for the exact shape of both cases.
   contact:
     name: Converter maintainers
   license:
@@ -96,14 +105,17 @@ paths:
     post:
       tags: [convert]
       operationId: convertToFormat
-      summary: Convert a file to a named format
+      summary: Convert one or more files to a named format
       description: |
-        Converts the upload to `target`, which must be an id from
+        Converts every uploaded file to `target`, which must be an id from
         `GET /formats` (`pdf`, `odt`, `docx`, `txt`, `html`, `rtf`, `epub`,
         `ods`, `xlsx`, `csv`, `odp`, `pptx`, `png`, `jpg`, `tables`, `layers`,
-        `pdfa`).
+        `pdfa`), independently of one another - a file that cannot reach
+        `target` (wrong extension, damaged document) does not stop the rest
+        of the batch when more than one file was uploaded. With exactly one
+        file, that failure IS the response, exactly as it always was.
 
-        The document is parsed by LibreOffice, which is a large C++ codebase
+        Each document is parsed by LibreOffice, which is a large C++ codebase
         handling untrusted input. **Treat a conversion failure as an expected,
         normal event**, not as an incident.
 
@@ -996,33 +1008,39 @@ components:
     Upload:
       required: true
       description: |
-        One file part named `file`, plus the optional `ocr` field below. Any
-        other part, or a file part under a different name, is rejected with
-        `400`.
+        One or more file parts, all named `files`, plus the optional `ocr`
+        field below. A request with no `files` part is rejected with `400`;
+        one under any other name is simply not this field and is ignored the
+        same way any unrecognised part would be.
 
-        The overall body limit is **26214400 bytes (25 MB)**, matching the
-        client's own `MAX_UPLOAD_BYTES` and the reverse proxy's body limit.
-        Exceeding it at any layer produces `413`.
+        Each file is capped at **26214400 bytes (25 MB)**, matching the
+        client's own `MAX_UPLOAD_BYTES` and the reverse proxy's body limit -
+        exceeding it at any layer produces `413`. With more than one file,
+        their combined size is additionally capped (`MAX_CONVERT_TOTAL_BYTES`,
+        100 MB by default) and their count is capped at `MAX_CONVERT_FILES`
+        (15 by default), both also `413`.
       content:
         multipart/form-data:
           schema:
             type: object
-            required: [file]
-            additionalProperties: false
+            required: [files]
             properties:
-              file:
-                type: string
-                format: binary
+              files:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+                  format: binary
                 description: |
-                  The file to convert. Its **filename extension** selects the
-                  import filter and must be one of the extensions listed by
-                  `GET /formats` (case-insensitive). The declared `Content-Type`
-                  of this part is ignored.
+                  The file(s) to convert. Each one's **filename extension**
+                  selects its own import filter and must be one of the
+                  extensions listed by `GET /formats` (case-insensitive). The
+                  declared `Content-Type` of each part is ignored.
 
-                  The filename is never used as a path on disk: the upload is
-                  written to a server-generated name inside a per-request
-                  temporary directory, so a name like `../../etc/passwd.docx`
-                  is harmless.
+                  Filenames are never used as a path on disk: each upload is
+                  written to a server-generated name inside its own temporary
+                  directory, so a name like `../../etc/passwd.docx` is
+                  harmless.
               ocr:
                 type: string
                 enum: ['true', 'false']
@@ -1035,10 +1053,9 @@ components:
                   reflowable text instead of an uneditable picture of one -
                   with no embedded image, for either case. Set to `false` to
                   skip OCR and get the page as a plain image with no text
-                  instead, the same result this endpoint always gave before
-                  this field existed.
+                  instead. Applies to every file in the request alike.
           encoding:
-            file:
+            files:
               contentType: application/octet-stream
 
     MergeUpload:
@@ -1683,13 +1700,25 @@ components:
 
     ConvertedToTarget:
       description: |
-        The converted file.
+        The converted file - or files.
 
-        The media type is the target's own - `application/pdf` for `pdf`,
-        `text/csv` for `csv`, and so on. **The image targets are the exception**:
-        `png` and `jpg` always answer with `application/zip`, because there is
-        one image per page and a ZIP is the only way to put several files in one
-        response.
+        **Exactly one file uploaded:** the media type is the target's own -
+        `application/pdf` for `pdf`, `text/csv` for `csv`, and so on. The image
+        targets are the exception: `png` and `jpg` always answer with
+        `application/zip`, because there is one image per page and a ZIP is
+        the only way to put several files in one response.
+
+        **Two or more files uploaded:** always `application/zip`, regardless
+        of target, holding one entry per input file named
+        `<NN>-<original name>.<target extension>` (`01-report.pdf`,
+        `02-invoice.pdf`, ...), or a `<NN>-<original name>/` folder of images
+        for an image target. A file that failed to convert contributes no
+        entry of its own; instead, if any file in the batch failed, the
+        archive additionally holds `errors.json` - an array of
+        `{ file, code, message }`, in upload order, naming every failure. A
+        batch where every file failed still answers `200` with a ZIP holding
+        only `errors.json`, because the failures are per file, not a fact
+        about the request as a whole.
       headers:
         X-Request-Id:
           schema:
