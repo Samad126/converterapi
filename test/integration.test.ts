@@ -542,12 +542,136 @@ describe('POST /convert/<target> - legacy/variant Office extensions', () => {
     assert.equal(response.contentType, 'application/pdf');
   });
 
+  it('upgrades a legacy .doc to a real .docx', async () => {
+    const doc = await buildLegacyFixture(SAMPLE_DOCX, '.docx', '.doc', 'MS Word 97');
+    const response = await upload(server.baseUrl, 'letter.doc', doc, { target: 'docx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'docx is not a zip package');
+  });
+
+  it('upgrades a legacy .xls to a real .xlsx', async () => {
+    const xls = await buildLegacyFixture(SAMPLE_CSV, '.csv', '.xls', 'MS Excel 97');
+    const response = await upload(server.baseUrl, 'sheet.xls', xls, { target: 'xlsx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'xlsx is not a zip package');
+  });
+
+  it('upgrades a legacy .ppt to a real .pptx', async () => {
+    const pptx = await buildPptxFixture(['one']);
+    const ppt = await buildLegacyFixture(pptx, '.pptx', '.ppt', 'MS PowerPoint 97');
+    const response = await upload(server.baseUrl, 'deck.ppt', ppt, { target: 'pptx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'pptx is not a zip package');
+  });
+
   it('rejects an unsupported target for a legacy extension, listing what it can become', async () => {
     const dot = await buildLegacyFixture(SAMPLE_DOCX, '.docx', '.dot', 'MS Word 97 Vorlage');
     const response = await upload(server.baseUrl, 'template.dot', dot, { target: 'tables' });
     assert.equal(response.status, 415);
     const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
     assert.match(error.message, /PDF/);
+  });
+});
+
+describe('POST /convert/<target> - rounding out the per-family exports', () => {
+  // Every pair here uses a filter that was already proven to work for some
+  // OTHER source in the same family (see formats.ts's own comments on each
+  // of these sources) - these tests are the real-file proof that the
+  // filter behaves identically for the source that had been left off.
+
+  it('converts an ODT to TXT, HTML, RTF and EPUB', async () => {
+    const odt = await buildLegacyFixture(SAMPLE_DOCX, '.docx', '.odt', 'writer8');
+
+    const txt = await upload(server.baseUrl, 'letter.odt', odt, { target: 'txt' });
+    assert.equal(txt.status, 200);
+    assert.match(txt.contentType ?? '', /^text\/plain/);
+
+    const html = await upload(server.baseUrl, 'letter.odt', odt, { target: 'html' });
+    assert.equal(html.status, 200);
+    assert.match(html.contentType ?? '', /^text\/html/);
+
+    const rtf = await upload(server.baseUrl, 'letter.odt', odt, { target: 'rtf' });
+    assert.equal(rtf.status, 200);
+    assert.equal(rtf.contentType, 'application/rtf');
+
+    const epub = await upload(server.baseUrl, 'letter.odt', odt, { target: 'epub' });
+    assert.equal(epub.status, 200);
+    assert.equal(epub.contentType, 'application/epub+zip');
+  });
+
+  it('converts an ODS to HTML and CSV', async () => {
+    const ods = await buildLegacyFixture(SAMPLE_CSV, '.csv', '.ods', 'calc8');
+
+    const html = await upload(server.baseUrl, 'sheet.ods', ods, { target: 'html' });
+    assert.equal(html.status, 200);
+    assert.match(html.contentType ?? '', /^text\/html/);
+
+    const csv = await upload(server.baseUrl, 'sheet.ods', ods, { target: 'csv' });
+    assert.equal(csv.status, 200);
+    assert.match(csv.contentType ?? '', /^text\/csv/);
+    assert.match(csv.body.toString('utf8'), /widget/);
+  });
+
+  it('converts a CSV to HTML', async () => {
+    const response = await upload(server.baseUrl, 'sheet.csv', SAMPLE_CSV, { target: 'html' });
+    assert.equal(response.status, 200);
+    assert.match(response.contentType ?? '', /^text\/html/);
+  });
+
+  it('converts a plain text file to HTML, RTF and EPUB', async () => {
+    const html = await upload(server.baseUrl, 'notes.txt', SAMPLE_TXT, { target: 'html' });
+    assert.equal(html.status, 200);
+    assert.match(html.contentType ?? '', /^text\/html/);
+
+    const rtf = await upload(server.baseUrl, 'notes.txt', SAMPLE_TXT, { target: 'rtf' });
+    assert.equal(rtf.status, 200);
+    assert.equal(rtf.contentType, 'application/rtf');
+
+    const epub = await upload(server.baseUrl, 'notes.txt', SAMPLE_TXT, { target: 'epub' });
+    assert.equal(epub.status, 200);
+    assert.equal(epub.contentType, 'application/epub+zip');
+  });
+
+  it('converts an HTML file to TXT, RTF and EPUB', async () => {
+    const html = Buffer.from('<html><body><p>A web page.</p></body></html>', 'utf8');
+
+    const txt = await upload(server.baseUrl, 'page.html', html, { target: 'txt' });
+    assert.equal(txt.status, 200);
+    assert.match(txt.contentType ?? '', /^text\/plain/);
+
+    const rtf = await upload(server.baseUrl, 'page.html', html, { target: 'rtf' });
+    assert.equal(rtf.status, 200);
+    assert.equal(rtf.contentType, 'application/rtf');
+
+    const epub = await upload(server.baseUrl, 'page.html', html, { target: 'epub' });
+    assert.equal(epub.status, 200);
+    assert.equal(epub.contentType, 'application/epub+zip');
+  });
+
+  it('converts an RTF to TXT, HTML and EPUB', async () => {
+    const txt = await upload(server.baseUrl, 'legacy.rtf', SAMPLE_RTF, { target: 'txt' });
+    assert.equal(txt.status, 200);
+    assert.match(txt.contentType ?? '', /^text\/plain/);
+
+    const html = await upload(server.baseUrl, 'legacy.rtf', SAMPLE_RTF, { target: 'html' });
+    assert.equal(html.status, 200);
+    assert.match(html.contentType ?? '', /^text\/html/);
+
+    const epub = await upload(server.baseUrl, 'legacy.rtf', SAMPLE_RTF, { target: 'epub' });
+    assert.equal(epub.status, 200);
+    assert.equal(epub.contentType, 'application/epub+zip');
   });
 });
 

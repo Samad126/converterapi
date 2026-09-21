@@ -1071,14 +1071,19 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // so the table extractor reads it unchanged. `.doc` deliberately does NOT
     // get this target: same family, same audience, but a binary container that
     // has to go through LibreOffice rather than through a ZIP reader.
-    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub', 'tables'],
+    targets: ['pdf', 'docx', 'odt', 'txt', 'html', 'rtf', 'epub', 'tables'],
   },
   '.doc': {
     extension: '.doc',
     family: 'writer',
     mediaType: 'application/msword',
     importFilter: 'MS Word 97',
-    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+    // `docx` upgrades a legacy binary document to the modern OOXML package
+    // through the same `writer` filter every other Word source already
+    // uses - verified by hand (`soffice --convert-to docx:"MS Word 2007
+    // XML"` against a real `.doc`), not a new filter, just an existing one
+    // this source had not been given yet.
+    targets: ['pdf', 'docx', 'odt', 'txt', 'html', 'rtf', 'epub'],
   },
   '.dot': {
     extension: '.dot',
@@ -1087,7 +1092,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     importFilter: 'MS Word 97 Vorlage',
     // A Word template: the same binary container as `.doc`, so it gets the
     // same target list - no `tables`, for the same reason `.doc` has none.
-    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+    targets: ['pdf', 'docx', 'odt', 'txt', 'html', 'rtf', 'epub'],
   },
   '.dotx': {
     extension: '.dotx',
@@ -1098,25 +1103,29 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // OOXML like `.docx`, but `tables` stays off: nothing has verified the
     // extractor against a real template's `word/document.xml`, and adding it
     // speculatively is exactly what this codebase's own rules warn against.
-    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+    targets: ['pdf', 'docx', 'odt', 'txt', 'html', 'rtf', 'epub'],
   },
   '.odt': {
     extension: '.odt',
     family: 'writer',
     mediaType: 'application/vnd.oasis.opendocument.text',
     importFilter: 'writer8',
-    // The reverse direction from the matrix: a LibreOffice-native document back
-    // into the Microsoft formats. Deliberately just these two - the table does
-    // not promise ODT -> TXT/HTML/RTF, and a target we advertise is a target we
-    // have to keep working.
-    targets: ['pdf', 'docx'],
+    // Every other Writer export this family offers, not just the two that
+    // used to be here - `txt`/`html`/`rtf`/`epub` use the exact same
+    // per-family filters every other `writer` source already relies on
+    // (verified by hand against a real ODT for each one), so withholding
+    // them from ODT specifically was an omission, not a deliberate limit.
+    targets: ['pdf', 'docx', 'txt', 'html', 'rtf', 'epub'],
   },
   '.ods': {
     extension: '.ods',
     family: 'calc',
     mediaType: 'application/vnd.oasis.opendocument.spreadsheet',
     importFilter: 'calc8',
-    targets: ['pdf', 'xlsx'],
+    // `html`/`csv` use the same `calc` filters `.xlsx`/`.xls`/`.xlsm` already
+    // use - verified by hand against a real ODS - so ODS lacking them was
+    // the same kind of omission `.odt` had for `txt`/`html`/`rtf`/`epub`.
+    targets: ['pdf', 'xlsx', 'html', 'csv'],
   },
   '.odg': {
     extension: '.odg',
@@ -1154,14 +1163,18 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'calc',
     mediaType: 'application/vnd.ms-excel',
     importFilter: 'MS Excel 97',
-    targets: ['pdf', 'ods', 'csv', 'html'],
+    // `xlsx` upgrades a legacy binary workbook to the modern OOXML package
+    // through the same `calc` filter every other Excel source already
+    // uses - verified by hand against a real `.xls`, the same standard
+    // `.doc` -> `docx` above was held to.
+    targets: ['pdf', 'xlsx', 'ods', 'csv', 'html'],
   },
   '.xlsm': {
     extension: '.xlsm',
     family: 'calc',
     mediaType: 'application/vnd.ms-excel.sheet.macroEnabled.12',
     importFilter: 'Calc MS Excel 2007 XML',
-    targets: ['pdf', 'ods', 'csv', 'html'],
+    targets: ['pdf', 'xlsx', 'ods', 'csv', 'html'],
   },
   '.pptx': {
     extension: '.pptx',
@@ -1175,81 +1188,84 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'impress',
     mediaType: 'application/vnd.ms-powerpoint',
     importFilter: 'MS PowerPoint 97',
-    targets: ['pdf', 'odp', 'png', 'jpg'],
+    // `pptx` upgrades a legacy binary deck to the modern OOXML package
+    // through the same `impress` filter every other PowerPoint source
+    // already uses - verified by hand against a real `.ppt`.
+    targets: ['pdf', 'pptx', 'odp', 'png', 'jpg'],
   },
   '.pptm': {
     extension: '.pptm',
     family: 'impress',
     mediaType: 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
     importFilter: 'Impress MS PowerPoint 2007 XML',
-    targets: ['pdf', 'odp', 'png', 'jpg'],
+    targets: ['pdf', 'pptx', 'odp', 'png', 'jpg'],
   },
   '.pps': {
     extension: '.pps',
     family: 'impress',
     mediaType: 'application/vnd.ms-powerpoint',
     importFilter: 'MS PowerPoint 97 AutoPlay',
-    targets: ['pdf', 'odp', 'png', 'jpg'],
+    targets: ['pdf', 'pptx', 'odp', 'png', 'jpg'],
   },
   '.ppsx': {
     extension: '.ppsx',
     family: 'impress',
     mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
     importFilter: 'Impress Office Open XML AutoPlay',
-    targets: ['pdf', 'odp', 'png', 'jpg'],
+    targets: ['pdf', 'pptx', 'odp', 'png', 'jpg'],
   },
   '.pot': {
     extension: '.pot',
     family: 'impress',
     mediaType: 'application/vnd.ms-powerpoint',
     importFilter: 'MS PowerPoint 97 Vorlage',
-    targets: ['pdf', 'odp', 'png', 'jpg'],
+    targets: ['pdf', 'pptx', 'odp', 'png', 'jpg'],
   },
   '.potx': {
     extension: '.potx',
     family: 'impress',
     mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.template',
     importFilter: 'Impress MS PowerPoint 2007 XML Template',
-    targets: ['pdf', 'odp', 'png', 'jpg'],
+    targets: ['pdf', 'pptx', 'odp', 'png', 'jpg'],
   },
   '.csv': {
     extension: '.csv',
     family: 'calc',
     mediaType: 'text/csv',
     importFilter: 'Text - txt - csv (StarCalc)',
-    // `xlsx`/`ods`/`pdf` via LibreOffice (unchanged); `DATA_TARGETS` via
-    // `data.service.ts` - the same family-less source can reach targets
+    // `xlsx`/`ods`/`pdf`/`html` via LibreOffice (unchanged); `DATA_TARGETS`
+    // via `data.service.ts` - the same family-less source can reach targets
     // through two different engines, exactly as `.pdf` reaches `pdfa` via
     // Draw and `docx` via `pdf_engine.py`.
-    targets: ['xlsx', 'ods', 'pdf', ...DATA_TARGETS],
+    targets: ['xlsx', 'ods', 'pdf', 'html', ...DATA_TARGETS],
   },
   '.txt': {
     extension: '.txt',
     family: 'writer',
     mediaType: 'text/plain',
     importFilter: 'Text',
-    targets: ['pdf', 'docx', 'odt'],
+    targets: ['pdf', 'docx', 'odt', 'html', 'rtf', 'epub'],
   },
   '.html': {
     extension: '.html',
     family: 'writer',
     mediaType: 'text/html',
     importFilter: 'HTML (StarWriter)',
-    targets: ['pdf', 'docx', 'odt'],
+    targets: ['pdf', 'docx', 'odt', 'txt', 'rtf', 'epub'],
   },
   '.htm': {
     extension: '.htm',
     family: 'writer',
     mediaType: 'text/html',
     importFilter: 'HTML (StarWriter)',
-    targets: ['pdf', 'docx', 'odt'],
+    targets: ['pdf', 'docx', 'odt', 'txt', 'rtf', 'epub'],
   },
   '.rtf': {
     extension: '.rtf',
     family: 'writer',
     mediaType: 'application/rtf',
     importFilter: 'Rich Text Format',
-    targets: ['docx', 'pdf', 'odt'],
+    targets: ['docx', 'pdf', 'odt', 'txt', 'html', 'epub'],
   },
   '.png': {
     extension: '.png',

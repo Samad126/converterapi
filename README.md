@@ -57,20 +57,19 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | From | To |
 |---|---|
 | `.docx` `.docm` | PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables) |
-| `.doc` | PDF, ODT, TXT, HTML, RTF, EPUB |
-| `.dot` `.dotx` | PDF, ODT, TXT, HTML, RTF, EPUB |
+| `.doc` `.dot` `.dotx` | PDF, DOCX, ODT, TXT, HTML, RTF, EPUB |
 | `.xlsx` | PDF, ODS, CSV, HTML |
-| `.xls` `.xlsm` | PDF, ODS, CSV, HTML |
+| `.xls` `.xlsm` | PDF, XLSX, ODS, CSV, HTML |
 | `.pptx` | PDF, ODP, PNG/JPG (one image per slide) |
-| `.ppt` `.pptm` `.pps` `.ppsx` `.pot` `.potx` | PDF, ODP, PNG/JPG (one image per slide) |
-| `.odt` | PDF, DOCX |
+| `.ppt` `.pptm` `.pps` `.ppsx` `.pot` `.potx` | PDF, PPTX, ODP, PNG/JPG (one image per slide) |
+| `.odt` | PDF, DOCX, TXT, HTML, RTF, EPUB |
 | `.odg` | PDF |
-| `.ods` | PDF, XLSX |
+| `.ods` | PDF, XLSX, HTML, CSV |
 | `.odp` | PDF, PPTX, PNG/JPG (one image per slide) |
-| `.csv` | XLSX, ODS, PDF, plus TSV/JSON/YAML/JSONL (see below) |
-| `.txt` | PDF, DOCX, ODT |
-| `.html` `.htm` | PDF, DOCX, ODT |
-| `.rtf` | DOCX, PDF, ODT |
+| `.csv` | XLSX, ODS, PDF, HTML, plus TSV/JSON/YAML/JSONL (see below) |
+| `.txt` | PDF, DOCX, ODT, HTML, RTF, EPUB |
+| `.html` `.htm` | PDF, DOCX, ODT, TXT, RTF, EPUB |
+| `.rtf` | DOCX, PDF, ODT, TXT, HTML, EPUB |
 | `.png` `.jpg` `.jpeg` | PDF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/PNG (image)/JPG (image) (see below) |
 | `.psd` | PNG (one image per layer) |
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
