@@ -93,6 +93,16 @@ export const SOFFICE_BIN = process.env.SOFFICE_BIN ?? 'soffice';
 export const PANDOC_BIN = process.env.PANDOC_BIN ?? 'pandoc';
 
 /**
+ * The image-transcode engine (`.bmp`/`.gif`/`.tiff`/`.webp`/`.avif`/`.ico`,
+ * plus making `.png`/`.jpg`/`.jpeg` real sources) - a fifth conversion
+ * engine, running `ffmpeg` as a subprocess. Unlike `soffice`, this is a flat
+ * format-to-format tool with no document family to key a filter on, which
+ * is why it gets its own `mode: 'transcode'` rather than reusing `'direct'`.
+ * See `services/ffmpeg.service.ts`.
+ */
+export const FFMPEG_BIN = process.env.FFMPEG_BIN ?? 'ffmpeg';
+
+/**
  * Rasteriser for the PNG/JPG targets (Debian package: poppler-utils).
  *
  * A separate binary because LibreOffice cannot do this job: its command-line

@@ -67,7 +67,13 @@ export type TargetId =
   | 'tar'
   | 'tar.gz'
   | 'tar.bz2'
-  | '7z';
+  | '7z'
+  | 'bmp'
+  | 'gif'
+  | 'tiff'
+  | 'webp'
+  | 'avif'
+  | 'ico';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -117,7 +123,37 @@ export type AllowedExtension =
   | '.bz2'
   | '.xz'
   | '.7z'
-  | '.iso';
+  | '.iso'
+  | '.bmp'
+  | '.gif'
+  | '.tiff'
+  | '.webp'
+  | '.avif'
+  | '.ico';
+
+/**
+ * There is deliberately no `image` target reaching the `png`/`jpg` ids.
+ * Those two already mean something fixed and load-bearing: "one image PER
+ * PAGE of a presentation or PDF, always answered as a ZIP" (`mode:
+ * 'raster'`, `multiple: true` - see `TargetFormat.mode`'s own comment). A
+ * plain image source converting to a single PNG/JPEG file is a genuinely
+ * different operation - one file in, one file out, never an archive - and
+ * `multiple` is a property of the TARGET ID, fixed across every source that
+ * reaches it, not something a pair can override. Reusing `png`/`jpg` for
+ * this would mean either breaking that promise for existing raster
+ * consumers or wrapping a single transcoded image in a one-entry ZIP, which
+ * is a worse response for the common case a person asking to "convert my
+ * BMP to PNG" actually wants.
+ *
+ * The codebase's own precedent for exactly this shape of collision is
+ * `tables` vs `xlsx` and `layers` vs `png`: a differently-shaped operation
+ * gets its own name rather than a second meaning bolted onto an existing
+ * one. Minting a same-shaped id like a hypothetical `png-image`/`jpg-image`
+ * would follow that precedent but adds two non-obvious URL segments for a
+ * need nobody has asked for yet - so for this pass, image-to-PNG/JPEG
+ * specifically is left out. `bmp`/`gif`/`tiff`/`webp`/`avif`/`ico` are not
+ * this problem: none of them collides with an existing id.
+ */
 
 /**
  * RAR (`.rar`) is deliberately not an accepted extension. `7z` can read it
@@ -179,6 +215,15 @@ export const ARCHIVE_EXTENSIONS: readonly AllowedExtension[] = [
   '.iso',
 ];
 
+/**
+ * The ffmpeg-transcode target ids - see `ffmpeg.service.ts` and the note
+ * above `AllowedExtension` on why `png`/`jpg` are not among them.
+ *
+ * One list, referenced by every image source, so that a new transcode
+ * target is one line here rather than a change to seven different sources.
+ */
+const TRANSCODE_TARGETS: readonly TargetId[] = ['bmp', 'gif', 'tiff', 'webp', 'avif', 'ico'];
+
 export interface TargetFormat {
   id: TargetId;
   /** Extension of a produced file, including the dot. */
@@ -207,6 +252,11 @@ export interface TargetFormat {
    *     is NOT the same shape as `extract` - it genuinely unpacks untrusted
    *     bytes to disk, which `extract` never does. `archiveWriter` names
    *     which writer `conversion.service.ts` calls for it.
+   *   - `transcode` - `ffmpeg`, run as a subprocess: one image format
+   *     straight to another, with no document family to key a filter on -
+   *     unlike `soffice`'s `direct` mode, `ffmpeg` is a flat format-to-format
+   *     tool, so there is nothing for a per-family filter table to express.
+   *     See `ffmpeg.service.ts`.
    *
    * `mode` describes the LIBREOFFICE-OR-NOT route a target normally takes.
    * `engineFrom`, below, is orthogonal to it: `docx`/`pptx`/`xlsx` are
@@ -225,7 +275,7 @@ export interface TargetFormat {
    * `tables` and `layers` are both extracts and one answers with a single
    * workbook while the other answers with an archive.
    */
-  mode: 'direct' | 'raster' | 'extract' | 'archive';
+  mode: 'direct' | 'raster' | 'extract' | 'archive' | 'transcode';
   /**
    * `mode: 'archive'` only: which writer `archive.service.ts` calls.
    * `'zip'` goes through `zip.ts`'s own `zipDeflated`, not a `7z` subprocess
@@ -240,7 +290,8 @@ export interface TargetFormat {
    * single-page source so that the response type does not depend on how many
    * slides the upload happened to have), a direct target is always `false`,
    * an archive target is always `false` too (the response IS the one archive
-   * file the client asked for, not a wrapper around several), and the two
+   * file the client asked for, not a wrapper around several), a transcode
+   * target is always `false` (one image in, one image out), and the two
    * extract targets differ from each other in exactly this respect.
    * `validateMatrix` pins the two fixed cases so a target cannot contradict
    * itself here.
@@ -668,6 +719,73 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: false,
     filters: {},
   },
+  bmp: {
+    id: 'bmp',
+    extension: '.bmp',
+    mediaType: 'image/bmp',
+    label: 'BMP',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  gif: {
+    id: 'gif',
+    extension: '.gif',
+    mediaType: 'image/gif',
+    label: 'GIF',
+    // A still image, always: `ffmpeg.service.ts` passes `-frames:v 1`, so an
+    // animated GIF *source* becomes its first frame here, same as it does
+    // for every other transcode target - this is not an animation pipeline.
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  tiff: {
+    id: 'tiff',
+    extension: '.tiff',
+    mediaType: 'image/tiff',
+    label: 'TIFF',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  webp: {
+    id: 'webp',
+    extension: '.webp',
+    mediaType: 'image/webp',
+    label: 'WEBP',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  avif: {
+    id: 'avif',
+    extension: '.avif',
+    mediaType: 'image/avif',
+    label: 'AVIF',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  ico: {
+    id: 'ico',
+    extension: '.ico',
+    mediaType: 'image/x-icon',
+    label: 'ICO',
+    /**
+     * The one transcode target with a real, format-level limitation worth
+     * stating here rather than leaving a person to discover it from a
+     * generic `E_CONVERT_FAILED`: ICO cannot hold an image over 256x256 -
+     * verified by hand (`ffmpeg` refuses with "Unsupported dimensions
+     * ... (dimensions cannot exceed 256x256)" and a non-zero exit for
+     * anything larger). This service does not silently downscale to make a
+     * request succeed - it does not do that for any other target either -
+     * so a large image asking for `ico` fails honestly. See the README.
+     */
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
 };
 
 export interface SourceFormat {
@@ -909,21 +1027,25 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'draw',
     mediaType: 'image/png',
     importFilter: 'draw_png_Import',
-    targets: ['pdf'],
+    // `pdf` via the Draw family (soffice), the rest via `ffmpeg` - two
+    // engines, one source, exactly like `.pdf` itself reaches `pdfa`/`png`/
+    // `jpg` through Draw and `docx`/`pptx`/`xlsx`/`markdown` through a
+    // second engine entirely.
+    targets: ['pdf', ...TRANSCODE_TARGETS],
   },
   '.jpg': {
     extension: '.jpg',
     family: 'draw',
     mediaType: 'image/jpeg',
     importFilter: 'draw_jpg_Import',
-    targets: ['pdf'],
+    targets: ['pdf', ...TRANSCODE_TARGETS],
   },
   '.jpeg': {
     extension: '.jpeg',
     family: 'draw',
     mediaType: 'image/jpeg',
     importFilter: 'draw_jpg_Import',
-    targets: ['pdf'],
+    targets: ['pdf', ...TRANSCODE_TARGETS],
   },
   '.psd': {
     extension: '.psd',
@@ -1062,6 +1184,42 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     mediaType: 'application/x-iso9660-image',
     targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
   },
+  '.bmp': {
+    extension: '.bmp',
+    // No `family`: `ffmpeg`, not LibreOffice, reads every source in this
+    // group - see `ffmpeg.service.ts`. Each one's own target list is every
+    // OTHER transcode target, filtered explicitly rather than left to
+    // `validateMatrix`'s self-target check to catch: the check exists as a
+    // backstop for a mistake, not as the intended way to read what a format
+    // becomes.
+    mediaType: 'image/bmp',
+    targets: TRANSCODE_TARGETS.filter((id) => id !== 'bmp'),
+  },
+  '.gif': {
+    extension: '.gif',
+    mediaType: 'image/gif',
+    targets: TRANSCODE_TARGETS.filter((id) => id !== 'gif'),
+  },
+  '.tiff': {
+    extension: '.tiff',
+    mediaType: 'image/tiff',
+    targets: TRANSCODE_TARGETS.filter((id) => id !== 'tiff'),
+  },
+  '.webp': {
+    extension: '.webp',
+    mediaType: 'image/webp',
+    targets: TRANSCODE_TARGETS.filter((id) => id !== 'webp'),
+  },
+  '.avif': {
+    extension: '.avif',
+    mediaType: 'image/avif',
+    targets: TRANSCODE_TARGETS.filter((id) => id !== 'avif'),
+  },
+  '.ico': {
+    extension: '.ico',
+    mediaType: 'image/x-icon',
+    targets: TRANSCODE_TARGETS.filter((id) => id !== 'ico'),
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -1111,7 +1269,7 @@ export interface ResolvedConversion {
    * back to `target.mode`, so it never has to ask "but which route did THIS
    * one take" any other way.
    */
-  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc' | 'archive';
+  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc' | 'archive' | 'ffmpeg';
 }
 
 /**
@@ -1154,6 +1312,14 @@ export function resolveConversion(
     // and writes every pair this mode covers, so there is no filter to look
     // up and no family to require.
     return { source, target, convertTo: '', engine: 'archive' };
+  }
+
+  if (target.mode === 'transcode') {
+    // `ffmpeg` reads and writes every pair this mode covers directly - no
+    // filter, and no family requirement either: a source that ALSO has a
+    // family (`.png`/`.jpg`/`.jpeg`, for their `pdf` target) still reaches a
+    // transcode target this way, unaffected by whatever family it has.
+    return { source, target, convertTo: '', engine: 'ffmpeg' };
   }
 
   // Everything below asks LibreOffice to do the work, so a source it cannot
@@ -1287,6 +1453,9 @@ export function validateMatrix(): void {
     if (target.mode !== 'archive' && target.archiveWriter) {
       problems.push(`target "${id}" declares archiveWriter but is not an archive target`);
     }
+    if (target.mode === 'transcode' && target.multiple) {
+      problems.push(`transcode target "${id}" declares itself a multi-file response`);
+    }
 
     if (target.mode === 'extract') {
       // An extract target names its own sources, so it is the only target
@@ -1372,9 +1541,11 @@ export function validateMatrix(): void {
         (TARGETS[targetId].engineFrom?.pdf?.includes(ext as AllowedExtension) ?? false) ||
         (TARGETS[targetId].engineFrom?.pandoc?.includes(ext as AllowedExtension) ?? false);
       const isArchiveTarget = TARGETS[targetId].mode === 'archive';
+      const isTranscodeTarget = TARGETS[targetId].mode === 'transcode';
       if (
         TARGETS[targetId].mode !== 'extract' &&
         !isArchiveTarget &&
+        !isTranscodeTarget &&
         !reachesViaEngine &&
         !source.family
       ) {

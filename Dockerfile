@@ -117,11 +117,23 @@ FROM node:22-bookworm-slim AS runtime
 # it, and there is no legal way to author a real `.rar` fixture to verify
 # reading against - see the note on `.rar` in formats.ts.
 #
+# ffmpeg is an EIGHTH, unrelated engine, for the image-transcode sources
+# (.bmp/.gif/.tiff/.webp/.avif/.ico, plus making .png/.jpg/.jpeg real
+# sources) reaching bmp/gif/tiff/webp/avif/ico. Unlike soffice this is a flat
+# format-to-format tool with no document family to key a filter on - see
+# `ffmpeg.service.ts`. `-frames:v 1 -update 1` is mandatory on every call,
+# not cosmetic: without it, a GIF/WEBP source (decoded as a tiny video, not
+# a still image) trips ffmpeg's image2 muxer into "Cannot write more than
+# one file with the same name" and the conversion fails outright - verified
+# by hand. ICO cannot hold an image over 256x256 (a real format limit, also
+# verified by hand); this service does not silently downscale to make that
+# succeed, same as every other target.
+#
 # The service refuses to boot without any of this. Preflight checks soffice,
-# `pdftoppm`, `pandoc`, `7z` and the fonts, and then converts one real
-# document per family (plus one pandoc case and one archive case) before it
-# listens - so a missing module fails loudly at startup rather than on some
-# user's first spreadsheet, days later.
+# `pdftoppm`, `pandoc`, `7z`, `ffmpeg` and the fonts, and then converts one
+# real document per family (plus one pandoc case, one archive case and one
+# ffmpeg case) before it listens - so a missing module fails loudly at
+# startup rather than on some user's first spreadsheet, days later.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer \
@@ -141,6 +153,7 @@ RUN apt-get update \
       qpdf \
       pandoc \
       p7zip-full \
+      ffmpeg \
       tesseract-ocr \
       tesseract-ocr-eng \
       tesseract-ocr-aze \

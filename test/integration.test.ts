@@ -19,6 +19,7 @@ import {
   buildDeclaredSizeBombFixture,
   buildEncryptedZipFixture,
   buildEntryCountBombFixture,
+  buildImageFixture,
   buildIsoFixture,
   buildLegacyFixture,
   buildPptxFixture,
@@ -178,9 +179,9 @@ describe('POST /convert/pdf - rejections', () => {
   });
 
   it('rejects an unsupported extension with 415', async () => {
-    // .gif is not in the matrix - and note that .png IS, so this test has to
+    // .exe is not in the matrix - and note that .png IS, so this test has to
     // name something genuinely outside it to stay meaningful.
-    const response = await upload(server.baseUrl, 'animation.gif', SAMPLE_DOCX);
+    const response = await upload(server.baseUrl, 'program.exe', SAMPLE_DOCX);
     const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED');
     assert.match(error.message, /^This file type cannot be converted\. Supported types: /);
     // The message has to say what WOULD work, not just that this did not.
@@ -762,6 +763,110 @@ describe('POST /convert/<target> - archive engine (7z)', () => {
     const before_ = await listWorkspaces();
     const zip = await buildArchiveFixture('zip', { 'a.txt': 'hello' });
     await upload(server.baseUrl, 'archive.zip', zip, { target: 'tar' });
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
+describe('POST /convert/<target> - image transcode engine (ffmpeg)', () => {
+  it('converts a real PNG to WEBP, a real RIFF/WEBP container', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'photo.png', png, { target: 'webp' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/webp');
+    assert.equal(response.body.subarray(0, 4).toString('ascii'), 'RIFF');
+    assert.equal(response.body.subarray(8, 12).toString('ascii'), 'WEBP');
+  });
+
+  it('converts a real PNG to BMP', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'photo.png', png, { target: 'bmp' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/bmp');
+    assert.equal(response.body.subarray(0, 2).toString('ascii'), 'BM');
+  });
+
+  it('converts a real PNG to GIF', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'photo.png', png, { target: 'gif' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/gif');
+    assert.equal(response.body.subarray(0, 6).toString('ascii'), 'GIF89a');
+  });
+
+  it('converts a real JPEG to TIFF', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const jpeg = await buildImageFixture(png, 'jpg');
+    const response = await upload(server.baseUrl, 'photo.jpg', jpeg, { target: 'tiff' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/tiff');
+    // Little-endian TIFF magic: "II" followed by 42.
+    assert.equal(response.body.subarray(0, 4).toString('latin1'), 'II*\0');
+  });
+
+  it('reads a real WEBP source and converts it to AVIF', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const webp = await buildImageFixture(png, 'webp');
+    const response = await upload(server.baseUrl, 'photo.webp', webp, { target: 'avif' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/avif');
+  });
+
+  it('reads a real GIF source (decoded as a tiny video) and still produces one still image', async () => {
+    // The whole reason `-frames:v 1 -update 1` is mandatory rather than
+    // cosmetic - see ffmpeg.service.ts's own header comment: without it, a
+    // GIF source (which ffmpeg decodes as a one-frame video, not a still
+    // image) trips "Cannot write more than one file with the same name" and
+    // the conversion fails outright, verified by hand before this flag was
+    // added.
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const gif = await buildImageFixture(png, 'gif');
+    const response = await upload(server.baseUrl, 'photo.gif', gif, { target: 'bmp' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/bmp');
+  });
+
+  it('refuses an image over 256x256 asking for ICO, honestly rather than silently downscaling', async () => {
+    // A real format limitation, verified by hand: ffmpeg refuses with
+    // "Unsupported dimensions ... (dimensions cannot exceed 256x256)" for
+    // anything larger, and this service does not auto-resize to make a
+    // request succeed for any other target either.
+    const png = buildSolidPng(300, 300, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'big.png', png, { target: 'ico' });
+    assert.equal(response.status, 500);
+    expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+  });
+
+  it('a small image converts to ICO successfully', async () => {
+    const png = buildSolidPng(32, 32, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'icon.png', png, { target: 'ico' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/x-icon');
+  });
+
+  it('does not offer an image source the png/jpg targets - those ids mean paginated raster output', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const bmp = await buildImageFixture(png, 'bmp');
+
+    const asPng = await upload(server.baseUrl, 'photo.bmp', bmp, { target: 'png' });
+    assert.equal(asPng.status, 415);
+    expectJsonEnvelope(asPng, 415, 'E_UNSUPPORTED_TARGET');
+
+    const asJpg = await upload(server.baseUrl, 'photo.bmp', bmp, { target: 'jpg' });
+    assert.equal(asJpg.status, 415);
+    expectJsonEnvelope(asJpg, 415, 'E_UNSUPPORTED_TARGET');
+  });
+
+  it('still reaches pdf from a plain image upload, unaffected by the new transcode targets', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'photo.png', png, { target: 'pdf' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+  });
+
+  it('deletes the workspace after a transcode conversion', async () => {
+    const before_ = await listWorkspaces();
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    await upload(server.baseUrl, 'photo.png', png, { target: 'webp' });
     assert.deepEqual(await listWorkspaces(), before_);
   });
 });

@@ -345,6 +345,29 @@ export async function buildArchiveFixture(
   }
 }
 
+/**
+ * A real image in another format, built with `ffmpeg` itself from an
+ * already-real PNG - the same trade `buildPptxFixture` makes for `.pptx`:
+ * hand-rolling a real `.webp`/`.avif`/`.tiff` encoder is not a reasonable
+ * ask for a test fixture, so the fixture is generated with the actual
+ * engine the service uses, from a source (`buildSolidPng`) that is not.
+ */
+export async function buildImageFixture(
+  pngBytes: Buffer,
+  format: 'bmp' | 'gif' | 'tiff' | 'webp' | 'avif' | 'ico' | 'jpg',
+): Promise<Buffer> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-image-'));
+  try {
+    const srcPath = join(dir, 'in.png');
+    await fsp.writeFile(srcPath, pngBytes);
+    const outPath = join(dir, `out.${format}`);
+    await runTool('ffmpeg', ['-y', '-i', srcPath, '-frames:v', '1', '-update', '1', outPath], dir);
+    return await fsp.readFile(outPath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 /** A real ISO 9660 image, built with `genisoimage`. */
 export async function buildIsoFixture(files: Record<string, string>): Promise<Buffer> {
   const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-iso-'));

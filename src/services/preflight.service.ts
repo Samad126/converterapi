@@ -20,6 +20,7 @@ import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  FFMPEG_BIN,
   PANDOC_BIN,
   PDFTOPPM_BIN,
   PDF_ENGINE_SCRIPT,
@@ -34,6 +35,7 @@ import { PreflightError } from '../errors.ts';
 import { archivesFiles, resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
 import { MANIFEST_FILENAME } from '../lib/psd-layers.ts';
 import {
+  buildSolidPng,
   calcProbe,
   impressProbe,
   markdownProbe,
@@ -54,6 +56,7 @@ export interface PreflightReport {
   rasterizerVersion: string;
   pandocVersion: string;
   sevenZipVersion: string;
+  ffmpegVersion: string;
   fonts: Array<{ requested: string; resolved: string }>;
   /** False means a scanned PDF's `docx` will convert without OCR - see `checkTesseractPresent`. */
   ocrAvailable: boolean;
@@ -68,6 +71,7 @@ export async function preflight(): Promise<PreflightReport> {
   assertQpdfPresent();
   const pandocVersion = assertPandocPresent();
   const sevenZipVersion = assertSevenZipPresent();
+  const ffmpegVersion = assertFfmpegPresent();
   const ocrAvailable = checkTesseractPresent();
   if (!ocrAvailable) {
     console.warn(
@@ -75,7 +79,15 @@ export async function preflight(): Promise<PreflightReport> {
         'convert without OCR text. Install tesseract-ocr to enable it - see the Dockerfile.',
     );
   }
-  return { sofficeVersion, rasterizerVersion, pandocVersion, sevenZipVersion, fonts, ocrAvailable };
+  return {
+    sofficeVersion,
+    rasterizerVersion,
+    pandocVersion,
+    sevenZipVersion,
+    ffmpegVersion,
+    fonts,
+    ocrAvailable,
+  };
 }
 
 function assertNotRoot(): void {
@@ -332,6 +344,43 @@ function assertSevenZipPresent(): string {
 }
 
 /**
+ * `ffmpeg`, needed by the image-transcode sources (`.bmp`/`.gif`/`.tiff`/
+ * `.webp`/`.avif`/`.ico`, plus `.png`/`.jpg`/`.jpeg` as real sources)
+ * reaching `bmp`/`gif`/`tiff`/`webp`/`avif`/`ico`.
+ *
+ * Checked the same way pandoc/7z are: can it even be run, before any
+ * request depends on it. `warmUp()`'s `.png -> webp` case is what proves it
+ * actually decodes and re-encodes a real image - not just that the binary
+ * exists.
+ */
+function assertFfmpegPresent(): string {
+  const result = spawnSync(FFMPEG_BIN, ['-version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${FFMPEG_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It transcodes the image sources (.bmp/.gif/.tiff/.webp/.avif/.ico,',
+        'plus .png/.jpg/.jpeg) to bmp/gif/tiff/webp/avif/ico - none of these',
+        'is a document LibreOffice, pandoc or pdf_engine.py open.',
+        '  Debian/Ubuntu:  apt-get install -y ffmpeg',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        'Set FFMPEG_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${FFMPEG_BIN} -version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
  * tesseract, used by `ocrmypdf` for a scanned PDF (no extractable text at
  * all) asking for `docx`.
  *
@@ -493,6 +542,14 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   // single-file check below does not assert on, so this is the one archive
   // pairing that fits the existing OOXML-signature check without a new one.
   { extension: '.tar', target: 'zip', document: tarProbe },
+  // ffmpeg is a SIXTH conversion engine, checked the same way pandoc/7z are:
+  // `assertFfmpegPresent` proves the binary runs, this proves it actually
+  // decodes a real PNG and re-encodes a real WEBP - not just that the CLI
+  // exists. `webp` rather than `bmp`/`gif`/`tiff` because it is the one
+  // transcode target this build's libwebp needs to be linked in for, which
+  // `-version`'s own banner does not confirm the way running a real
+  // encode does.
+  { extension: '.png', target: 'webp', document: () => buildSolidPng(4, 4, [200, 40, 40]) },
 ];
 
 export interface WarmUpReport {
@@ -540,13 +597,10 @@ export async function warmUp(): Promise<WarmUpReport> {
       // puts however many tables it finds into ONE workbook, while a PDF's
       // `docx`/`pptx`/`xlsx` (an engine pair) produce whichever OOXML
       // package their id names, which is not a workbook unless that id is
-      // `xlsx`. Checking the wrong shape here would pass a pipeline that had
-      // quietly started unwrapping differently from what `GET /formats`
-      // promises. Every engine warm-up case below targets `docx` (a ZIP-
-      // based OOXML package, same as `tables`' own workbook), so the
-      // ZIP-signature check just below holds for both engines equally - a
-      // future warm-up case for a non-ZIP pandoc target (`txt`/`html`/`rtf`)
-      // would need its own check, not this one.
+      // `xlsx`, and `.png -> webp` (the ffmpeg case) produces neither - a
+      // RIFF/WEBP container, not a ZIP-based one at all. Checking the wrong
+      // shape here would pass a pipeline that had quietly started unwrapping
+      // differently from what `GET /formats` promises.
       if (
         (conversion.target.mode === 'extract' || conversion.engine !== 'soffice') &&
         !archivesFiles(conversion.target)
@@ -574,16 +628,29 @@ export async function warmUp(): Promise<WarmUpReport> {
             );
           }
         }
-        // Every single-file target here writes a ZIP-based OOXML package
-        // (.docx/.pptx/.xlsx all are), so the local-file-header signature is
-        // a cheap, target-agnostic proof that the pipeline - `tables`'s own
-        // writer, or pdf_engine.py for a `viaEngine` pair - wrote a real
-        // package and not, say, an empty file or a stack trace.
-        const zipSignature = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-        if (!result.files[0]!.data.subarray(0, 4).equals(zipSignature)) {
-          throw new PreflightError(
-            `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a file that is not a ZIP-based package.`,
-          );
+        // The container signature to check is a fact about the TARGET, not
+        // the engine - `docx`/`pptx`/`xlsx`/`tables` are all ZIP-based OOXML
+        // packages, `webp` (the ffmpeg case's target) is a RIFF/WEBP
+        // container instead. Either way it is a cheap, format-specific proof
+        // that the pipeline wrote a real file and not, say, an empty one or
+        // a stack trace.
+        const bytes = result.files[0]!.data;
+        if (warmUpCase.target === 'webp') {
+          const isRiffWebp =
+            bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+            bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+          if (!isRiffWebp) {
+            throw new PreflightError(
+              `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a file that is not a RIFF/WEBP container.`,
+            );
+          }
+        } else {
+          const zipSignature = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+          if (!bytes.subarray(0, 4).equals(zipSignature)) {
+            throw new PreflightError(
+              `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced a file that is not a ZIP-based package.`,
+            );
+          }
         }
       }
 
@@ -663,19 +730,27 @@ export async function warmUp(): Promise<WarmUpReport> {
                   'binary runs, so this is a fault in listing, unpacking or repacking this',
                   'specific archive pair, not a missing package.',
                 ]
-              : conversion.target.mode === 'extract'
+              : conversion.engine === 'ffmpeg'
                 ? [
-                    'The service can start, but it cannot serve this conversion. Nothing',
-                    'outside this process is involved in it - no LibreOffice, no',
-                    'rasteriser - so this is a fault in the extractor or in the workbook',
-                    'writer, not a missing package.',
+                    'The service can start, but it cannot serve this conversion. This runs',
+                    '`ffmpeg`, not LibreOffice - `assertFfmpegPresent` already proved the',
+                    'binary runs, so this is a fault in this specific decoder/encoder pair -',
+                    'often a codec this ffmpeg build was not compiled with - not a missing',
+                    'package outright.',
                   ]
-                : [
-                    'The service can start, but it cannot serve this conversion - which is',
-                    'how a container built with only part of LibreOffice behaves. Check that',
-                    'every module is installed:',
-                    '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
-                  ];
+                : conversion.target.mode === 'extract'
+                  ? [
+                      'The service can start, but it cannot serve this conversion. Nothing',
+                      'outside this process is involved in it - no LibreOffice, no',
+                      'rasteriser - so this is a fault in the extractor or in the workbook',
+                      'writer, not a missing package.',
+                    ]
+                  : [
+                      'The service can start, but it cannot serve this conversion - which is',
+                      'how a container built with only part of LibreOffice behaves. Check that',
+                      'every module is installed:',
+                      '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
+                    ];
 
       throw new PreflightError(
         [

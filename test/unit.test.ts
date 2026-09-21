@@ -65,7 +65,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 47);
+    assert.equal(ALLOWED_EXTENSIONS.length, 53);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
@@ -127,6 +127,15 @@ describe('conversion matrix', () => {
           // `7z`, not LibreOffice, reads and writes every archive pair - no
           // filter, no family, same as `extract` above but its own engine.
           assert.equal(resolved.engine, 'archive', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          continue;
+        }
+
+        if (TARGETS[target].mode === 'transcode') {
+          // `ffmpeg`, not LibreOffice, reads and writes every transcode
+          // pair - no filter, and a family (`.png`/`.jpg`/`.jpeg` also have
+          // one, for their `pdf` target) is irrelevant to this route.
+          assert.equal(resolved.engine, 'ffmpeg', `${extension} -> ${target} used the wrong engine`);
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
         }

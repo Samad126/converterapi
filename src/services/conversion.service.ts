@@ -57,6 +57,7 @@ import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
 import { zipDeflated } from '../lib/zip.ts';
 import { collectTreeFiles, createArchive, extractArchiveTree } from './archive.service.ts';
+import { runFfmpeg } from './ffmpeg.service.ts';
 import { PANDOC_WRITERS, runPandoc } from './pandoc.service.ts';
 import {
   PDF_ENGINE_NO_TABLES_EXIT_CODE,
@@ -159,6 +160,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
         return runExtractPipeline({ inputPath, target, signal, deadline });
       case 'archive':
         return runArchivePipeline({ inputPath, outDir, workspace, target, signal, deadline });
+      case 'ffmpeg':
+        return runFfmpegPipeline({ inputPath, outDir, workspace, target, signal, deadline });
       case 'soffice':
         return target.mode === 'raster'
           ? runRasterPipeline({
@@ -649,6 +652,7 @@ async function runPandocPipeline(run: {
 
   const outcome = await runPandoc({ inputPath, outputPath, writer, workspace, deadline, signal });
   throwForOutcome(outcome);
+  throwForNonZeroExit(outcome, `pandoc -t ${writer}`);
 
   const produced = await collectProducedFiles(outDir, target.extension);
   const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
@@ -725,6 +729,48 @@ async function runArchivePipeline(run: {
 }
 
 // ---------------------------------------------------------------------------
+// engine: an image source asking for another image format, answered by
+// ffmpeg
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `ffmpeg` for a source/target pair `formats.ts` marks `mode:
+ * 'transcode'`. Shaped like `runPandocPipeline` - one process, one output
+ * file expected in `outDir` - because the failure modes are the same:
+ * a wedged process, a client that left, an empty file left behind by a
+ * crash.
+ */
+async function runFfmpegPipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+  await fsp.mkdir(outDir, { recursive: true });
+
+  const outcome = await runFfmpeg({ inputPath, outputPath, workspace, deadline, signal });
+  throwForOutcome(outcome);
+  throwForNonZeroExit(outcome, 'ffmpeg');
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(
+      `ffmpeg produced no ${target.extension} file ` +
+        `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
+    );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
 // Shared
 // ---------------------------------------------------------------------------
 
@@ -740,6 +786,34 @@ function throwForOutcome(
 ): asserts outcome is Extract<ProcessOutcome, { kind: 'exited' }> {
   if (outcome.kind === 'timeout') throw Errors.timeout();
   if (outcome.kind === 'aborted') throw new ClientGoneError();
+}
+
+/**
+ * `throwForOutcome` deliberately does NOT check `exitCode` - because
+ * `soffice --convert-to` exits 0 even when it produced nothing (see this
+ * file's own header comment), so `runDirectPipeline`/`runEnginePipeline`
+ * correctly determine success from whether a file was actually produced,
+ * not from the exit code.
+ *
+ * `pandoc` and `ffmpeg` are not like that: a non-zero exit is a real,
+ * meaningful failure for both, and - specifically for ffmpeg - a failed run
+ * can still leave a small PARTIAL file behind at the output path (verified
+ * by hand: an image over ICO's 256x256 limit leaves a 4-byte stub there
+ * even though the encode failed), which `collectProducedFiles` would
+ * otherwise happily pick up as "the file was produced" and answer with a
+ * corrupt result instead of an error. Called right after `throwForOutcome`
+ * by both of those pipelines, never by the soffice-backed ones.
+ */
+function throwForNonZeroExit(
+  outcome: Extract<ProcessOutcome, { kind: 'exited' }>,
+  engineLabel: string,
+): void {
+  if (outcome.exitCode !== 0) {
+    throw Errors.convertFailed(
+      `${engineLabel} exited ${outcome.exitCode} (signal=${outcome.signal ?? 'none'}): ` +
+        `${outcome.stderr || '(no stderr)'}`,
+    );
+  }
 }
 
 /**

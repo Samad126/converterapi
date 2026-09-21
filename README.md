@@ -70,7 +70,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.txt` | PDF, DOCX, ODT |
 | `.html` `.htm` | PDF, DOCX, ODT |
 | `.rtf` | DOCX, PDF, ODT |
-| `.png` `.jpg` `.jpeg` | PDF |
+| `.png` `.jpg` `.jpeg` | PDF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO (see below) |
 | `.psd` | PNG (one image per layer) |
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
 | `.rst` `.tex` `.textile` `.org` `.opml` `.muse` `.ipynb` | DOCX, HTML, ODT, RTF, TXT, Markdown |
@@ -78,6 +78,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.zip` | TAR, TAR.GZ, TAR.BZ2, 7Z |
 | `.tar` `.tgz` `.tbz2` `.txz` `.gz` `.bz2` `.xz` `.iso` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (minus whichever is its own format) |
 | `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2 |
+| `.bmp` `.gif` `.tiff` `.webp` `.avif` `.ico` | BMP/GIF/TIFF/WEBP/AVIF/ICO (minus whichever is its own format) |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
 `.xlsm` are legacy or variant extensions LibreOffice already opens through
@@ -218,6 +219,64 @@ raster/layers targets' multi-file responses). `7z` writes everything
 `zip.ts` does not: `tar`, `7z`, and (in two steps, since one `7z a` call
 cannot write a compound format directly - verified by hand) `tar.gz`/
 `tar.bz2`.
+
+### Image sources: `ffmpeg`, and the PNG/JPG target that is deliberately missing
+
+`.bmp`, `.gif`, `.tiff`, `.webp`, `.avif` and `.ico` convert to
+`bmp`/`gif`/`tiff`/`webp`/`avif`/`ico` through
+[`ffmpeg.service.ts`](src/services/ffmpeg.service.ts), a fifth non-LibreOffice
+engine. `.png`, `.jpg` and `.jpeg` - already sources, but previously reaching
+only `pdf` - now reach all six of these too.
+
+**There is no `image -> png` or `image -> jpg` target, and that is
+deliberate, not a gap.** Those two ids already mean something fixed and
+load-bearing: "one image PER PAGE of a presentation or PDF, always answered
+as a ZIP" (`mode: 'raster'`, `multiple: true`). `multiple` is a property of
+the TARGET ID, fixed across every source that reaches it, not something one
+pair can override - so a plain image converting to a single PNG file (one
+file in, one file out, never an archive) cannot reuse `png`/`jpg` without
+either breaking that promise for existing raster consumers or wrapping a
+single transcoded image in a one-entry ZIP, which is a worse response for
+the ordinary case. This codebase's own precedent for exactly this shape of
+collision is `tables` vs `xlsx` and `layers` vs `png`: a differently-shaped
+operation gets its own name rather than a second meaning bolted onto an
+existing one. Minting new ids (something like `png-image`/`jpg-image`) would
+follow that precedent but adds two non-obvious URL segments for a need
+nobody has asked for yet, so for now it stays out - see the comment above
+`AllowedExtension` in `formats.ts` for the fuller reasoning.
+
+**`-frames:v 1 -update 1` is mandatory on every `ffmpeg` call, not
+cosmetic.** Without it, a GIF or WEBP source - which ffmpeg decodes as a
+one-frame *video*, not a still image, even when it has only one visible
+frame - trips the `image2` muxer into `Cannot write more than one file with
+the same name` and the whole conversion fails. `-frames:v 1` caps the output
+at one frame regardless of how many the source has (so an animated GIF/WEBP
+becomes its first frame, rather than a failed conversion), and `-update 1`
+tells the muxer this is a single still image rather than a sequence at all.
+Verified by hand against a real GIF before this was added - see
+`ffmpeg.service.ts`'s own header comment.
+
+**A non-zero `ffmpeg` exit is checked explicitly, unlike `soffice`'s.**
+`soffice --convert-to` always exits 0 regardless of success, so every
+`soffice`-backed pipeline here determines success from whether a file was
+actually produced - but `ffmpeg`'s exit code is genuinely meaningful, and a
+failed run can still leave a small partial file behind at the output path
+(verified by hand: an image over ICO's size limit, below, leaves a 4-byte
+stub there even though the encode failed). Reusing the `soffice`-shaped
+"ignore the exit code, check for a file" logic here silently turned a real
+`ffmpeg` failure into a corrupt 200 response during this feature's own
+testing - caught by the ICO-oversize test below, not by inspection - which
+is exactly why `pandoc`'s pipeline was audited and given the same explicit
+exit-code check at the same time: pandoc's exit code is just as meaningful,
+and the same class of bug was silently possible there too.
+
+**ICO cannot hold an image over 256x256** - a real limitation of the format,
+verified by hand (`ffmpeg` refuses with `Unsupported dimensions ...
+(dimensions cannot exceed 256x256)` and a non-zero exit for anything
+larger). This service does not silently downscale an image to make a
+request succeed - it does not do that for any other target either - so a
+large image asking for `ico` fails honestly with `E_CONVERT_FAILED` rather
+than being auto-resized.
 
 A request for a target that exists but is not reachable from your source is a
 `415` whose message lists what that source *can* become. A target that does not
@@ -428,7 +487,7 @@ npm start          # http://localhost:3001
 The service **refuses to boot** if LibreOffice is missing, if the rasteriser is
 missing, if the metric-compatible fonts are not installed, if the PDF
 engine's Python dependencies are not importable, if `qpdf` is missing, if
-`pandoc` is missing, or if `7z` is missing — see
+`pandoc` is missing, if `7z` is missing, or if `ffmpeg` is missing — see
 [Fonts](#fonts-and-why-they-are-not-optional). A missing `tesseract` is the
 one exception: it is logged as a warning at boot, not a boot refusal, because
 OCR is a best-effort enhancement to a target that already works without it —
@@ -439,7 +498,7 @@ On a bare Debian/Ubuntu box:
 sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
   poppler-utils \
   fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig \
-  python3 python3-pip qpdf pandoc p7zip-full \
+  python3 python3-pip qpdf pandoc p7zip-full ffmpeg \
   tesseract-ocr tesseract-ocr-eng tesseract-ocr-aze tesseract-ocr-tur tesseract-ocr-rus
 sudo fc-cache -f
 pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl python-docx ocrmypdf
@@ -2013,7 +2072,7 @@ The test suite is `node:test` — no test framework dependency.
 
 | File | Covers |
 |---|---|
-| [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, legacy Office extensions, pandoc's markup sources, the archive engine (including malicious-archive rejection), oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
+| [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, legacy Office extensions, pandoc's markup sources, the archive engine (including malicious-archive rejection), the image-transcode engine (including the ICO size limit and the GIF-as-video edge case), oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
 | [`test/archive.test.ts`](test/archive.test.ts) | `validateEntries`'s pre-extraction arithmetic directly: the entry-count and declared-size caps, path-traversal and symlink rejection, encrypted-entry detection — the same hand-built-list-not-real-multi-hundred-MB-file shape `test/tables.test.ts` uses for `readZipEntry`'s own bomb defence. |
 | [`test/unit.test.ts`](test/unit.test.ts) | Matrix self-consistency, prototype-safe lookups, the ZIP writer and its zip-slip guard, the probe-document builders, queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
 | [`test/timeout.test.ts`](test/timeout.test.ts) | The 90s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
@@ -2021,10 +2080,10 @@ The test suite is `node:test` — no test framework dependency.
 | [`test/openapi.test.ts`](test/openapi.test.ts) | That [`openapi.yaml`](openapi.yaml) still describes this service: codes, exact messages, upload limit, and the responses the endpoints really return. |
 | [`test/fixtures.ts`](test/fixtures.ts) | Binary fixtures built in code — including hand-built OLE/CFB containers, since there is no way to produce a password-protected document without a copy of Word or a checked-in blob. |
 
-The suite needs a working `soffice`, `pdftoppm`, `pandoc` and `7z`, plus
-`genisoimage` for the one `.iso` fixture, but **not** the fonts: the tests
-exercise the HTTP contract, which holds either way, so they run through
-`createApp()` rather than `startServer()` and skip preflight.
+The suite needs a working `soffice`, `pdftoppm`, `pandoc`, `7z` and `ffmpeg`,
+plus `genisoimage` for the one `.iso` fixture, but **not** the fonts: the
+tests exercise the HTTP contract, which holds either way, so they run
+through `createApp()` rather than `startServer()` and skip preflight.
 
 Documents used as test input are built in code rather than checked in — a
 `.docx` from four OOXML parts, an `.odp` from four ODF parts, a PNG from raw

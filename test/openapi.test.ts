@@ -300,7 +300,7 @@ describe('documented responses match reality', () => {
       label: 'unsupported extension',
       status: 415,
       code: 'E_UNSUPPORTED',
-      run: () => upload(server.baseUrl, 'animation.gif', SAMPLE_DOCX),
+      run: () => upload(server.baseUrl, 'program.exe', SAMPLE_DOCX),
     },
     {
       label: 'oversized',
