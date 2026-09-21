@@ -76,7 +76,11 @@ export type TargetId =
   | 'ico'
   | 'png-image'
   | 'jpg-image'
-  | 'cbz';
+  | 'cbz'
+  | 'srt'
+  | 'vtt'
+  | 'ass'
+  | 'ssa';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -133,7 +137,11 @@ export type AllowedExtension =
   | '.webp'
   | '.avif'
   | '.ico'
-  | '.cbz';
+  | '.cbz'
+  | '.srt'
+  | '.vtt'
+  | '.ass'
+  | '.ssa';
 
 /**
  * `png-image`/`jpg-image` reach a single transcoded PNG/JPEG file - and are
@@ -242,6 +250,36 @@ const TRANSCODE_TARGETS: readonly TargetId[] = [
   'png-image',
   'jpg-image',
 ];
+
+/**
+ * The subtitle-transcode target ids - `ffmpeg` again, but a second, SEPARATE
+ * flat list from `TRANSCODE_TARGETS` rather than an extension of it: mixing
+ * the two would let an image source claim `srt` as a target (and vice
+ * versa), which is nonsense `resolveConversion` would happily accept since
+ * `mode: 'transcode'` alone decides the engine. Kept apart the same way
+ * `formats-media.ts` keeps audio and video apart, just expressed as two
+ * lists in this file instead of a second file, because - unlike media -
+ * this reuses the ordinary synchronous `/convert/{target}` engine
+ * (`runFfmpeg`/`runFfmpegPipeline`) rather than needing a matrix of its own:
+ * a subtitle file is tiny text, converts in well under a second, and has
+ * none of the "this could run for minutes" reasoning that sent audio/video
+ * to the async job endpoint.
+ *
+ * Deliberately four formats, not six. Every one of `srt`/`vtt`/`ass`/`ssa`
+ * was verified by hand, both reading and writing, with the exact zero-flag
+ * `ffmpeg -y -i in out` command `runFfmpeg` issues (the `-frames:v 1
+ * -update 1` it always adds is a no-op here - verified too - since a
+ * subtitle-only input has no video stream for those flags to act on).
+ * MicroDVD (`.sub`) and MPL2 (`.mpl`) were tried and left out: this ffmpeg
+ * build has no MUXER for either at all (`ffmpeg -muxers` lists both as
+ * decode-only), so there is no way to ever produce one, and MicroDVD's own
+ * demuxer additionally refuses to even READ a file without an explicit
+ * `-framerate` flag (its timestamps are frame counts, not clock time) -
+ * a per-pair flag this generic, flag-free engine has nowhere to carry.
+ * Adding either would mean a second ffmpeg invocation shape just for them,
+ * which is a different feature, not a line in this list.
+ */
+const SUBTITLE_TRANSCODE_TARGETS: readonly TargetId[] = ['srt', 'vtt', 'ass', 'ssa'];
 
 export interface TargetFormat {
   id: TargetId;
@@ -754,6 +792,42 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
      */
     mode: 'archive',
     archiveWriter: 'zip',
+    multiple: false,
+    filters: {},
+  },
+  srt: {
+    id: 'srt',
+    extension: '.srt',
+    mediaType: 'application/x-subrip',
+    label: 'SRT',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  vtt: {
+    id: 'vtt',
+    extension: '.vtt',
+    mediaType: 'text/vtt',
+    label: 'VTT',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  ass: {
+    id: 'ass',
+    extension: '.ass',
+    mediaType: 'text/x-ass',
+    label: 'ASS',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  ssa: {
+    id: 'ssa',
+    extension: '.ssa',
+    mediaType: 'text/x-ssa',
+    label: 'SSA',
+    mode: 'transcode',
     multiple: false,
     filters: {},
   },
@@ -1293,6 +1367,28 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     extension: '.ico',
     mediaType: 'image/x-icon',
     targets: TRANSCODE_TARGETS.filter((id) => id !== 'ico'),
+  },
+  '.srt': {
+    extension: '.srt',
+    // No `family`: `ffmpeg`, not LibreOffice, reads every source in this
+    // group - see the note above `SUBTITLE_TRANSCODE_TARGETS`.
+    mediaType: 'application/x-subrip',
+    targets: SUBTITLE_TRANSCODE_TARGETS.filter((id) => id !== 'srt'),
+  },
+  '.vtt': {
+    extension: '.vtt',
+    mediaType: 'text/vtt',
+    targets: SUBTITLE_TRANSCODE_TARGETS.filter((id) => id !== 'vtt'),
+  },
+  '.ass': {
+    extension: '.ass',
+    mediaType: 'text/x-ass',
+    targets: SUBTITLE_TRANSCODE_TARGETS.filter((id) => id !== 'ass'),
+  },
+  '.ssa': {
+    extension: '.ssa',
+    mediaType: 'text/x-ssa',
+    targets: SUBTITLE_TRANSCODE_TARGETS.filter((id) => id !== 'ssa'),
   },
 };
 

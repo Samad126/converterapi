@@ -917,6 +917,88 @@ describe('POST /convert/<target> - image transcode engine (ffmpeg)', () => {
   });
 });
 
+describe('POST /convert/<target> - subtitle transcode engine (ffmpeg)', () => {
+  const srtFixture = Buffer.from(
+    '1\n00:00:01,000 --> 00:00:03,000\nHello world\n\n2\n00:00:04,000 --> 00:00:06,000\nSecond line\n',
+    'utf8',
+  );
+  const vttFixture = Buffer.from(
+    'WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello world\n\n00:00:04.000 --> 00:00:06.000\nSecond line\n',
+    'utf8',
+  );
+  const assFixture = Buffer.from(
+    '[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello world\nDialogue: 0,0:00:04.00,0:00:06.00,Default,,0,0,0,,Second line\n',
+    'utf8',
+  );
+
+  it('converts a real SRT to a real WEBVTT', async () => {
+    const response = await upload(server.baseUrl, 'captions.srt', srtFixture, { target: 'vtt' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'text/vtt');
+    assert.match(response.body.toString('utf8'), /^WEBVTT/);
+    assert.match(response.body.toString('utf8'), /Hello world/);
+  });
+
+  it('converts a real WEBVTT to a real SRT', async () => {
+    const response = await upload(server.baseUrl, 'captions.vtt', vttFixture, { target: 'srt' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/x-subrip');
+    assert.match(response.body.toString('utf8'), /-->/);
+    assert.match(response.body.toString('utf8'), /Second line/);
+  });
+
+  it('converts a real ASS to a real SRT and a real VTT', async () => {
+    const toSrt = await upload(server.baseUrl, 'captions.ass', assFixture, { target: 'srt' });
+    assert.equal(toSrt.status, 200);
+    assert.equal(toSrt.contentType, 'application/x-subrip');
+    assert.match(toSrt.body.toString('utf8'), /Hello world/);
+
+    const toVtt = await upload(server.baseUrl, 'captions.ass', assFixture, { target: 'vtt' });
+    assert.equal(toVtt.status, 200);
+    assert.equal(toVtt.contentType, 'text/vtt');
+  });
+
+  it('converts a real SRT to a real SSA', async () => {
+    const response = await upload(server.baseUrl, 'captions.srt', srtFixture, { target: 'ssa' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'text/x-ssa');
+    assert.match(response.body.toString('utf8'), /\[Script Info\]/);
+  });
+
+  it('reads a real SSA source back into SRT', async () => {
+    const ssaResponse = await upload(server.baseUrl, 'captions.srt', srtFixture, { target: 'ssa' });
+    const response = await upload(server.baseUrl, 'captions.ssa', ssaResponse.body, { target: 'srt' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/x-subrip');
+    assert.match(response.body.toString('utf8'), /Hello world/);
+  });
+
+  it('does not offer a subtitle source its own format as a target', async () => {
+    const response = await upload(server.baseUrl, 'captions.srt', srtFixture, { target: 'srt' });
+    assert.equal(response.status, 415);
+    expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+  });
+
+  it('rejects .sub and .mpl uploads as unsupported extensions', async () => {
+    // MicroDVD (.sub) and MPL2 (.mpl) were deliberately left out of the
+    // matrix - see formats.ts's SUBTITLE_TRANSCODE_TARGETS comment: this
+    // ffmpeg build has no muxer for either, so there is no way to produce
+    // one, and MicroDVD additionally needs a per-pair -framerate flag this
+    // engine never sends.
+    const subResponse = await upload(server.baseUrl, 'captions.sub', Buffer.from('{1}{75}hi'), {
+      target: 'srt',
+    });
+    assert.equal(subResponse.status, 415);
+    expectJsonEnvelope(subResponse, 415, 'E_UNSUPPORTED');
+
+    const mplResponse = await upload(server.baseUrl, 'captions.mpl', Buffer.from('[0][50]hi'), {
+      target: 'srt',
+    });
+    assert.equal(mplResponse.status, 415);
+    expectJsonEnvelope(mplResponse, 415, 'E_UNSUPPORTED');
+  });
+});
+
 describe('POST /convert/tables', () => {
   /** Read one part back out of the workbook the server sent. */
   function workbookPart(body: Buffer, name: string): string {

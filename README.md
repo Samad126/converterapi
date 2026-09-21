@@ -81,6 +81,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2, CBZ |
 | `.cbz` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (a CBZ is a plain ZIP of page images under a comic-reader extension, so it rides the same archive engine) |
 | `.bmp` `.gif` `.tiff` `.webp` `.avif` `.ico` | BMP/GIF/TIFF/WEBP/AVIF/ICO (minus whichever is its own format) |
+| `.srt` `.vtt` `.ass` `.ssa` | SRT/VTT/ASS/SSA (minus whichever is its own format) |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
 `.xlsm` are legacy or variant extensions LibreOffice already opens through
