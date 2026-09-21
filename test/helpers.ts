@@ -250,6 +250,64 @@ export async function buildPptxFixture(slides: readonly string[]): Promise<Buffe
 }
 
 /**
+ * A real fixture in a legacy/variant Office extension, produced once per test
+ * run by running the same `soffice --convert-to` this service itself runs.
+ *
+ * Phase 1's new extensions (`.ppt`, `.dot`, `.xls`, `.odg`, and their
+ * siblings) are old or rarely-hand-built container formats - there is no
+ * sane way to hand-write a minimal one the way `buildMinimalOdp`/
+ * `buildMinimalDocx` do for their formats. Generating them with soffice from
+ * an already-verified probe is the same trade `buildPptxFixture` makes, for
+ * the same reason: it is the one fixture in the suite that depends on a
+ * working soffice, which every test here already requires.
+ */
+const legacyFixtureCache = new Map<string, Buffer>();
+
+export async function buildLegacyFixture(
+  sourceBytes: Buffer,
+  sourceExtension: string,
+  targetExtension: string,
+  filter: string,
+): Promise<Buffer> {
+  const cacheKey = `${sourceExtension}|${targetExtension}|${filter}|${sourceBytes.length}`;
+  const cached = legacyFixtureCache.get(cacheKey);
+  if (cached) return cached;
+
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-legacy-'));
+  try {
+    const source = join(dir, `probe${sourceExtension}`);
+    await fsp.writeFile(source, sourceBytes);
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        'soffice',
+        [
+          '--headless',
+          '--norestore',
+          '--invisible',
+          '--nolockcheck',
+          '--nodefault',
+          '--nofirststartwizard',
+          `-env:UserInstallation=${pathToFileURL(join(dir, 'profile')).href}`,
+          '--convert-to',
+          `${targetExtension.slice(1)}:${filter}`,
+          '--outdir',
+          dir,
+          source,
+        ],
+        { timeout: 120_000, env: { ...process.env, HOME: dir, TMPDIR: dir } },
+        (error) => (error ? reject(error) : resolve()),
+      );
+    });
+
+    const produced = await fsp.readFile(join(dir, `probe${targetExtension}`));
+    legacyFixtureCache.set(cacheKey, produced);
+    return produced;
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
  * Read the entry names out of a ZIP, via its central directory.
  *
  * The raster targets answer with an archive, and "did we get one image per

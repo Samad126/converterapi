@@ -9,8 +9,13 @@ info:
 
     ## The contract
 
-    This API is consumed by a **shipped Android client**, so the following
-    properties are part of the contract and are not free to change.
+    This API is consumed by two clients: a **shipped Android app** and a
+    browser-based **converter web app**. The Android app is why the following
+    properties are part of the contract and are not free to change - a mobile
+    client cannot be patched the moment the server changes, the way the web
+    app can be redeployed alongside it. The web app relies on the JSON error
+    envelope and the status-before-body rule the same way, but carries no
+    separate abort timer or media-type check of its own worth pinning here.
 
     > **Breaking change: `POST /convert` without a target no longer exists.**
     > Clients must post to `/convert/pdf`. A client still using the bare path
@@ -1987,7 +1992,7 @@ components:
           example:
             error:
               code: E_UNSUPPORTED
-              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .odt, .ods, .odp, .xlsx, .pptx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf.'
+              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf.'
 
     UnsupportedTarget:
       description: |

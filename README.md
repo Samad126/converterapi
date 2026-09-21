@@ -3,7 +3,10 @@
 A Node.js service that converts documents, spreadsheets, presentations and
 images between formats using LibreOffice headless. It began as the backend for
 an Android app that uploads a Word document and receives a PDF, and that
-contract still holds exactly.
+contract still holds exactly. A browser-based converter web app now talks to
+the same API — see [`CORS_ORIGIN`](#configuration) — but nothing about the
+API changed to accommodate it: it is a second consumer of the one contract
+below, not a second contract.
 
 No database, no state. The interesting parts are the things that are easy to get
 subtly wrong: **font metrics** (which decide pagination), **per-process
@@ -54,9 +57,13 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 |---|---|
 | `.docx` `.docm` | PDF, ODT, TXT, HTML, RTF, EPUB, XLSX (tables) |
 | `.doc` | PDF, ODT, TXT, HTML, RTF, EPUB |
+| `.dot` `.dotx` | PDF, ODT, TXT, HTML, RTF, EPUB |
 | `.xlsx` | PDF, ODS, CSV, HTML |
+| `.xls` `.xlsm` | PDF, ODS, CSV, HTML |
 | `.pptx` | PDF, ODP, PNG/JPG (one image per slide) |
+| `.ppt` `.pptm` `.pps` `.ppsx` `.pot` `.potx` | PDF, ODP, PNG/JPG (one image per slide) |
 | `.odt` | PDF, DOCX |
+| `.odg` | PDF |
 | `.ods` | PDF, XLSX |
 | `.odp` | PDF, PPTX, PNG/JPG (one image per slide) |
 | `.csv` | XLSX, ODS, PDF |
@@ -66,6 +73,19 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.png` `.jpg` `.jpeg` | PDF |
 | `.psd` | PNG (one image per layer) |
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
+
+`.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
+`.xlsm` are legacy or variant extensions LibreOffice already opens through
+the same Impress/Writer/Calc filters `.pptx`/`.docx`/`.xlsx` use — adding them
+was a matrix entry, not a new engine. `.dotx` deliberately does **not** get
+`tables`: nothing has verified the extractor against a real template's
+`word/document.xml`, so it stays off rather than being added speculatively.
+`.odg` (an OpenDocument drawing) gets only `pdf` — the raster targets are
+reserved for sources with actual pages (a presentation, or a PDF), which a
+single-canvas drawing is not. Microsoft Publisher (`.pub`) was evaluated and
+deliberately left out: LibreOffice's Publisher import is historically weak
+and there was no way to construct or verify a real `.pub` fixture, so it
+stays out until someone can actually test it.
 
 Every filter name in that table was verified by running the real conversion
 against LibreOffice 24.2. That is not ceremony: **a wrong filter name is not an
@@ -857,10 +877,12 @@ and every target each one can become.
 curl -sS https://converterapi.example.com/formats | jq '.sources[] | select(.extension==".docx")'
 ```
 
-It exists so a client does not have to hard-code the table. The shipped client
-is an **APK**, so without this, teaching it a new output format would mean
-shipping a new APK — and a client that hard-codes the matrix will silently
-disagree with the server the first time the server grows.
+It exists so a client does not have to hard-code the table. The Android client
+is a shipped **APK**, so without this, teaching it a new output format would
+mean shipping a new APK; the web app could in principle redeploy on every
+change, but reading the matrix from here means it does not have to either. A
+client that hard-codes the matrix will silently disagree with the server the
+first time the server grows.
 
 ### GET /health
 
@@ -908,7 +930,12 @@ only be reached by asking for a format, which the original client never did.
 
 ### Wire-compatibility constraints
 
-A shipped Android client depends on each of these. They are not style choices.
+A shipped Android client depends on each of these, and they are not style
+choices. The web app is a second consumer of the same contract — it reads the
+JSON error envelope and the status-before-body rule the same way (1-3 below)
+— but it is not the reason these were frozen, and it carries no separate
+abort timer or media-type check of its own worth pinning here (4-5 are
+Android-specific numbers, not a promise made to the web app).
 
 > **Breaking change: the bare `/convert` path was removed.** The target segment
 > is now required, so a client built against `/convert` receives a `404`. Its
@@ -955,9 +982,12 @@ open http://localhost:3001/docs
 ```
 
 The document covers every status the service can return, each with the **exact
-sentence the user will see** — so it doubles as the source for the client's
-dialog copy. It describes only the endpoints the Android client uses; the docs
-routes above are infrastructure and are deliberately not self-described.
+sentence the user will see** — so it doubles as the source for both clients'
+dialog copy. It describes every endpoint either client uses — the original
+`/convert/{target}` and page-level PDF operations the Android app relies on,
+plus the sign/redact/edit/compare/form-filling routes that only the web app
+calls; the docs routes above are infrastructure and are deliberately not
+self-described.
 
 Set `ENABLE_DOCS=0` to turn all three off.
 

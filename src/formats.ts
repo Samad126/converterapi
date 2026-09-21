@@ -35,6 +35,14 @@
  */
 export type DocumentFamily = 'writer' | 'calc' | 'impress' | 'draw';
 
+/**
+ * Microsoft Publisher (`.pub`) is deliberately not an accepted extension.
+ * LibreOffice's Publisher import is historically weak and there is no way to
+ * construct or verify a real `.pub` fixture in this environment - per the
+ * project's "no filter is trusted until run against a real file" rule, it
+ * stays out until someone can actually test it, not "add it and hope".
+ */
+
 /** Every format this service can produce, named by the URL segment that selects it. */
 export type TargetId =
   | 'pdf'
@@ -61,11 +69,22 @@ export type AllowedExtension =
   | '.docx'
   | '.docm'
   | '.doc'
+  | '.dot'
+  | '.dotx'
   | '.odt'
+  | '.odg'
   | '.ods'
   | '.odp'
   | '.xlsx'
+  | '.xls'
+  | '.xlsm'
   | '.pptx'
+  | '.ppt'
+  | '.pptm'
+  | '.pps'
+  | '.ppsx'
+  | '.pot'
+  | '.potx'
   | '.csv'
   | '.txt'
   | '.html'
@@ -537,6 +556,26 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     importFilter: 'MS Word 97',
     targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
   },
+  '.dot': {
+    extension: '.dot',
+    family: 'writer',
+    mediaType: 'application/msword',
+    importFilter: 'MS Word 97 Vorlage',
+    // A Word template: the same binary container as `.doc`, so it gets the
+    // same target list - no `tables`, for the same reason `.doc` has none.
+    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+  },
+  '.dotx': {
+    extension: '.dotx',
+    family: 'writer',
+    mediaType:
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+    importFilter: 'MS Word 2007 XML Template',
+    // OOXML like `.docx`, but `tables` stays off: nothing has verified the
+    // extractor against a real template's `word/document.xml`, and adding it
+    // speculatively is exactly what this codebase's own rules warn against.
+    targets: ['pdf', 'odt', 'txt', 'html', 'rtf', 'epub'],
+  },
   '.odt': {
     extension: '.odt',
     family: 'writer',
@@ -554,6 +593,17 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     mediaType: 'application/vnd.oasis.opendocument.spreadsheet',
     importFilter: 'calc8',
     targets: ['pdf', 'xlsx'],
+  },
+  '.odg': {
+    extension: '.odg',
+    family: 'draw',
+    mediaType: 'application/vnd.oasis.opendocument.graphics',
+    importFilter: 'draw8',
+    // PDF only. The raster pipeline (`png`/`jpg`) is reserved for sources with
+    // actual pages - a presentation, or a PDF that already is one - which is
+    // an invariant `test/unit.test.ts` pins down; a single-canvas drawing does
+    // not fit that promise, so it gets the one Draw export that does apply.
+    targets: ['pdf'],
   },
   '.odp': {
     extension: '.odp',
@@ -575,11 +625,67 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     importFilter: 'Calc MS Excel 2007 XML',
     targets: ['pdf', 'ods', 'csv', 'html'],
   },
+  '.xls': {
+    extension: '.xls',
+    family: 'calc',
+    mediaType: 'application/vnd.ms-excel',
+    importFilter: 'MS Excel 97',
+    targets: ['pdf', 'ods', 'csv', 'html'],
+  },
+  '.xlsm': {
+    extension: '.xlsm',
+    family: 'calc',
+    mediaType: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+    importFilter: 'Calc MS Excel 2007 XML',
+    targets: ['pdf', 'ods', 'csv', 'html'],
+  },
   '.pptx': {
     extension: '.pptx',
     family: 'impress',
     mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     importFilter: 'Impress MS PowerPoint 2007 XML',
+    targets: ['pdf', 'odp', 'png', 'jpg'],
+  },
+  '.ppt': {
+    extension: '.ppt',
+    family: 'impress',
+    mediaType: 'application/vnd.ms-powerpoint',
+    importFilter: 'MS PowerPoint 97',
+    targets: ['pdf', 'odp', 'png', 'jpg'],
+  },
+  '.pptm': {
+    extension: '.pptm',
+    family: 'impress',
+    mediaType: 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+    importFilter: 'Impress MS PowerPoint 2007 XML',
+    targets: ['pdf', 'odp', 'png', 'jpg'],
+  },
+  '.pps': {
+    extension: '.pps',
+    family: 'impress',
+    mediaType: 'application/vnd.ms-powerpoint',
+    importFilter: 'MS PowerPoint 97 AutoPlay',
+    targets: ['pdf', 'odp', 'png', 'jpg'],
+  },
+  '.ppsx': {
+    extension: '.ppsx',
+    family: 'impress',
+    mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+    importFilter: 'Impress Office Open XML AutoPlay',
+    targets: ['pdf', 'odp', 'png', 'jpg'],
+  },
+  '.pot': {
+    extension: '.pot',
+    family: 'impress',
+    mediaType: 'application/vnd.ms-powerpoint',
+    importFilter: 'MS PowerPoint 97 Vorlage',
+    targets: ['pdf', 'odp', 'png', 'jpg'],
+  },
+  '.potx': {
+    extension: '.potx',
+    family: 'impress',
+    mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.template',
+    importFilter: 'Impress MS PowerPoint 2007 XML Template',
     targets: ['pdf', 'odp', 'png', 'jpg'],
   },
   '.csv': {

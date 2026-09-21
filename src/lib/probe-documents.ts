@@ -176,6 +176,47 @@ export function impressProbe(): Buffer {
 }
 
 // ---------------------------------------------------------------------------
+// Draw: a minimal .odg
+// ---------------------------------------------------------------------------
+
+/**
+ * A single-page ODF drawing.
+ *
+ * `office:drawing`, not `office:presentation` - if this reused
+ * `buildMinimalOdp`'s content, soffice's own type sniffing would open it as an
+ * Impress document regardless of the `.odg` extension on disk (verified by
+ * hand), which would make a test that uploads it exercise the Impress import
+ * filter instead of the Draw one `.odg` is actually supposed to prove.
+ */
+export function buildMinimalOdg(text: string): Buffer {
+  const content = `<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content ${ODF_NAMESPACES} office:version="1.2"><office:body><office:drawing>
+ <draw:page draw:name="page1" draw:master-page-name="Default">
+  <draw:frame svg:width="10cm" svg:height="3cm" svg:x="1cm" svg:y="1cm">
+   <draw:text-box><text:p>${escapeXml(text)}</text:p></draw:text-box>
+  </draw:frame>
+ </draw:page>
+</office:drawing></office:body></office:document-content>`;
+
+  const manifest = `<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">
+ <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.graphics"/>
+ <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+</manifest:manifest>`;
+
+  return zipStored([
+    { name: 'mimetype', data: Buffer.from('application/vnd.oasis.opendocument.graphics') },
+    { name: 'META-INF/manifest.xml', data: Buffer.from(manifest, 'utf8') },
+    { name: 'content.xml', data: Buffer.from(content, 'utf8') },
+  ]);
+}
+
+/** The standard draw probe. */
+export function drawProbe(): Buffer {
+  return buildMinimalOdg(`${PROBE_TEXT} - ${PROBE_FONTS}`);
+}
+
+// ---------------------------------------------------------------------------
 // A minimal PNG, for tests of the raster pipeline's output checks
 // ---------------------------------------------------------------------------
 

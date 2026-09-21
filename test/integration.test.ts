@@ -13,6 +13,7 @@ import fsp from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 import {
+  buildLegacyFixture,
   buildPptxFixture,
   expectJsonEnvelope,
   listWorkspaces,
@@ -33,6 +34,7 @@ const execFileAsync = promisify(execFile);
 
 const {
   buildMinimalDocx,
+  buildMinimalOdg,
   buildMinimalOdp,
   buildSolidPng,
   pdfProbe,
@@ -446,6 +448,94 @@ describe('POST /convert/<target> - the universal matrix', () => {
     const before_ = await listWorkspaces();
     await upload(server.baseUrl, 'sheet.csv', SAMPLE_CSV, { target: 'xlsx' });
     assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
+describe('POST /convert/<target> - legacy/variant Office extensions', () => {
+  // Each fixture is a real file in its format, generated once by running
+  // soffice against an already-verified probe - see `buildLegacyFixture`.
+  // This is the ground-truth check the matrix entries in formats.ts claim to
+  // have passed: a matrix-shape test proves the table is consistent with
+  // itself, not that soffice actually reads and writes these extensions.
+
+  it('converts a Word template (.dot) to PDF', async () => {
+    const dot = await buildLegacyFixture(SAMPLE_DOCX, '.docx', '.dot', 'MS Word 97 Vorlage');
+    const response = await upload(server.baseUrl, 'template.dot', dot, { target: 'pdf' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+    assert.equal(response.body.subarray(0, 5).toString('latin1'), '%PDF-');
+  });
+
+  it('converts a Word template (.dotx) to HTML', async () => {
+    const dotx = await buildLegacyFixture(
+      SAMPLE_DOCX,
+      '.docx',
+      '.dotx',
+      'MS Word 2007 XML Template',
+    );
+    const response = await upload(server.baseUrl, 'template.dotx', dotx, { target: 'html' });
+    assert.equal(response.status, 200);
+    assert.match(response.contentType ?? '', /^text\/html/);
+  });
+
+  it('converts a legacy Excel workbook (.xls) to ODS', async () => {
+    const xls = await buildLegacyFixture(SAMPLE_CSV, '.csv', '.xls', 'MS Excel 97');
+    const response = await upload(server.baseUrl, 'sheet.xls', xls, { target: 'ods' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/vnd.oasis.opendocument.spreadsheet');
+  });
+
+  it('converts a macro-enabled Excel workbook (.xlsm) to CSV', async () => {
+    const xlsm = await buildLegacyFixture(SAMPLE_CSV, '.csv', '.xlsm', 'Calc MS Excel 2007 XML');
+    const response = await upload(server.baseUrl, 'sheet.xlsm', xlsm, { target: 'csv' });
+    assert.equal(response.status, 200);
+    assert.match(response.contentType ?? '', /^text\/csv/);
+  });
+
+  it('converts a legacy PowerPoint deck (.ppt) to a real PNG per slide', async () => {
+    const pptx = await buildPptxFixture(['one', 'two']);
+    const ppt = await buildLegacyFixture(pptx, '.pptx', '.ppt', 'MS PowerPoint 97');
+    const response = await upload(server.baseUrl, 'deck.ppt', ppt, { target: 'png' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/zip');
+    assert.deepEqual(zipEntryNames(response.body), ['slide-1.png', 'slide-2.png']);
+  });
+
+  it('converts a PowerPoint show (.ppsx) to PDF', async () => {
+    const pptx = await buildPptxFixture(['one']);
+    const ppsx = await buildLegacyFixture(
+      pptx,
+      '.pptx',
+      '.ppsx',
+      'Impress Office Open XML AutoPlay',
+    );
+    const response = await upload(server.baseUrl, 'deck.ppsx', ppsx, { target: 'pdf' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+  });
+
+  it('converts a PowerPoint template (.pot) to ODP', async () => {
+    const pptx = await buildPptxFixture(['one']);
+    const pot = await buildLegacyFixture(pptx, '.pptx', '.pot', 'MS PowerPoint 97 Vorlage');
+    const response = await upload(server.baseUrl, 'deck.pot', pot, { target: 'odp' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/vnd.oasis.opendocument.presentation');
+  });
+
+  it('converts an OpenDocument drawing (.odg) to PDF', async () => {
+    const response = await upload(server.baseUrl, 'drawing.odg', buildMinimalOdg('drawing probe'), {
+      target: 'pdf',
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/pdf');
+  });
+
+  it('rejects an unsupported target for a legacy extension, listing what it can become', async () => {
+    const dot = await buildLegacyFixture(SAMPLE_DOCX, '.docx', '.dot', 'MS Word 97 Vorlage');
+    const response = await upload(server.baseUrl, 'template.dot', dot, { target: 'tables' });
+    assert.equal(response.status, 415);
+    const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+    assert.match(error.message, /PDF/);
   });
 });
 
