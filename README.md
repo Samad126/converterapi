@@ -73,6 +73,8 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.png` `.jpg` `.jpeg` | PDF |
 | `.psd` | PNG (one image per layer) |
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
+| `.rst` `.tex` `.textile` `.org` `.opml` `.muse` `.ipynb` | DOCX, HTML, ODT, RTF, TXT, Markdown |
+| `.md` | DOCX, HTML, ODT, RTF, TXT |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
 `.xlsm` are legacy or variant extensions LibreOffice already opens through
@@ -102,6 +104,37 @@ The image targets are offered from **both** `.pptx` and `.odp`. They are the
 same kind of document and the pipeline behind them is identical, so the
 asymmetry would be an artefact of the table rather than of anything the
 conversion engine cares about.
+
+### Markup sources: pandoc, a non-LibreOffice engine
+
+`.md`, `.rst`, `.tex`, `.textile`, `.org`, `.opml`, `.muse` and `.ipynb` are
+not documents LibreOffice opens, so they never reach `soffice`. They are read
+by `pandoc` instead (see [`pandoc.service.ts`](src/services/pandoc.service.ts)),
+the same way a PDF's `docx`/`pptx`/`xlsx`/`markdown` route through the
+"second, independent conversion engine" below (`pdf_engine.py`) rather than a
+LibreOffice filter — this is a third such engine, alongside it.
+`formats.ts` names this explicitly: `TargetFormat.engineFrom` is keyed by
+engine (`pdf` or `pandoc`), and `ResolvedConversion.engine` carries the
+choice forward to the converter.
+
+`.md` does **not** get the `markdown` target — a Markdown file "converting" to
+Markdown is not a conversion this service should offer. Every other markup
+source does: pandoc's own `gfm` writer, not its `markdown` writer, because a
+plain "give me a `.md` file" request means GitHub-Flavored Markdown, not
+pandoc's own extension syntax (`:---:` alignment markers, footnote syntax)
+that most consumers do not expect.
+
+AsciiDoc (`.adoc`) is deliberately **not** in the matrix. Debian's `pandoc`
+package ships without the `asciidoc` reader at all - confirmed by running
+`pandoc --list-input-formats` (it is absent) and `pandoc -f asciidoc`
+(`Unknown input format asciidoc`) against the exact build this service was
+verified with. Advertising it would mean every request 500s.
+
+Pandoc's PDF output (a LaTeX engine or `wkhtmltopdf`/weasyprint) is
+deliberately **not** wired up either. It is a large, separate dependency with
+its own failure modes, and anyone who needs a PDF from Markdown already has a
+faithful path: `.md` → `docx` (through this engine) → `pdf` (through the
+already-verified, already-running LibreOffice `docx`→`pdf` filter).
 
 A request for a target that exists but is not reachable from your source is a
 `415` whose message lists what that source *can* become. A target that does not

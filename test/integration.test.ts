@@ -539,6 +539,88 @@ describe('POST /convert/<target> - legacy/variant Office extensions', () => {
   });
 });
 
+describe('POST /convert/<target> - markup sources (pandoc)', () => {
+  const SAMPLE_MD = Buffer.from(
+    '# Heading\n\nSome **bold** text and a list:\n\n- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n',
+    'utf8',
+  );
+  const SAMPLE_RST = Buffer.from('Heading\n=======\n\nSome **bold** text.\n\n- one\n- two\n', 'utf8');
+  const SAMPLE_ORG = Buffer.from('* Heading\n\nSome *bold* text.\n', 'utf8');
+  const SAMPLE_IPYNB = Buffer.from(
+    JSON.stringify({
+      cells: [
+        { cell_type: 'markdown', metadata: {}, source: ['# Heading\n', 'text'] },
+        { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ["print('hi')"] },
+      ],
+      metadata: { kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' } },
+      nbformat: 4,
+      nbformat_minor: 5,
+    }),
+    'utf8',
+  );
+
+  it('converts Markdown to a real DOCX', async () => {
+    const response = await upload(server.baseUrl, 'note.md', SAMPLE_MD, { target: 'docx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    assert.equal(response.body.readUInt32LE(0), 0x04034b50, 'docx is not a zip package');
+  });
+
+  it('converts reStructuredText to HTML', async () => {
+    const response = await upload(server.baseUrl, 'note.rst', SAMPLE_RST, { target: 'html' });
+    assert.equal(response.status, 200);
+    assert.match(response.contentType ?? '', /^text\/html/);
+    assert.match(response.body.toString('utf8'), /Heading/);
+  });
+
+  it('converts an Org file to ODT and to plain text', async () => {
+    const odt = await upload(server.baseUrl, 'note.org', SAMPLE_ORG, { target: 'odt' });
+    assert.equal(odt.status, 200);
+    assert.equal(odt.contentType, 'application/vnd.oasis.opendocument.text');
+
+    const txt = await upload(server.baseUrl, 'note.org', SAMPLE_ORG, { target: 'txt' });
+    assert.equal(txt.status, 200);
+    assert.match(txt.contentType ?? '', /^text\/plain/);
+    assert.match(txt.body.toString('utf8'), /Heading/);
+  });
+
+  it('converts a Jupyter notebook to RTF', async () => {
+    const response = await upload(server.baseUrl, 'note.ipynb', SAMPLE_IPYNB, { target: 'rtf' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/rtf');
+  });
+
+  it("converts reStructuredText to GitHub-flavoured Markdown, via pandoc's own gfm writer", async () => {
+    const response = await upload(server.baseUrl, 'note.rst', SAMPLE_RST, { target: 'markdown' });
+    assert.equal(response.status, 200);
+    assert.match(response.contentType ?? '', /^text\/markdown/);
+    assert.match(response.body.toString('utf8'), /\*\*bold\*\*/);
+  });
+
+  it('does not offer .md the markdown target - a Markdown file has nothing to become', async () => {
+    const response = await upload(server.baseUrl, 'note.md', SAMPLE_MD, { target: 'markdown' });
+    assert.equal(response.status, 415);
+    const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+    assert.doesNotMatch(error.message, /Markdown/);
+  });
+
+  it('rejects an unsupported target for a markup source, listing what it can become', async () => {
+    const response = await upload(server.baseUrl, 'note.md', SAMPLE_MD, { target: 'xlsx' });
+    assert.equal(response.status, 415);
+    const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+    assert.match(error.message, /DOCX/);
+  });
+
+  it('deletes the workspace after a pandoc conversion', async () => {
+    const before_ = await listWorkspaces();
+    await upload(server.baseUrl, 'note.md', SAMPLE_MD, { target: 'docx' });
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
 describe('POST /convert/tables', () => {
   /** Read one part back out of the workbook the server sent. */
   function workbookPart(body: Buffer, name: string): string {

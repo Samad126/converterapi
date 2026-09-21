@@ -65,7 +65,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 29);
+    assert.equal(ALLOWED_EXTENSIONS.length, 37);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
@@ -87,14 +87,15 @@ describe('conversion matrix', () => {
         const resolved = resolveConversion(extension, target);
         assert.ok(resolved, `${extension} -> ${target} does not resolve`);
 
-        if (resolved.viaEngine) {
+        if (resolved.engine === 'pdf-engine' || resolved.engine === 'pandoc') {
           // A second, non-LibreOffice route to this target id - see
           // `engineFrom`'s doc comment. Checked before `mode`, because `mode`
           // describes how every OTHER source reaches this same id.
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          const key = resolved.engine === 'pdf-engine' ? 'pdf' : 'pandoc';
           assert.ok(
-            TARGETS[target].engineFrom?.includes(extension),
-            `${extension} -> ${target}, but the target does not list it as an engine source`,
+            TARGETS[target].engineFrom?.[key]?.includes(extension),
+            `${extension} -> ${target}, but the target does not list it under "${key}" as an engine source`,
           );
           continue;
         }

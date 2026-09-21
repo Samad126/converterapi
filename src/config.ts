@@ -84,6 +84,15 @@ export const HOST = process.env.HOST ?? '0.0.0.0';
 export const SOFFICE_BIN = process.env.SOFFICE_BIN ?? 'soffice';
 
 /**
+ * The markup-format engine (`.md`/`.rst`/`.tex`/`.textile`/`.org`/`.opml`/
+ * `.muse`/`.ipynb`) - a second, non-LibreOffice converter for the same
+ * reason `pdf_engine.py` is: none of these formats is something soffice
+ * opens, so there is no `--convert-to` for any of them. See
+ * `services/pandoc.service.ts`.
+ */
+export const PANDOC_BIN = process.env.PANDOC_BIN ?? 'pandoc';
+
+/**
  * Rasteriser for the PNG/JPG targets (Debian package: poppler-utils).
  *
  * A separate binary because LibreOffice cannot do this job: its command-line

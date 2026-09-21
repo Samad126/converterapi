@@ -217,6 +217,18 @@ export function drawProbe(): Buffer {
 }
 
 // ---------------------------------------------------------------------------
+// Pandoc: a minimal .md
+// ---------------------------------------------------------------------------
+
+/**
+ * The standard pandoc probe: Markdown needs no container at all, so this is
+ * the plain-text equivalent of `calcProbe` for the pandoc-reached targets.
+ */
+export function markdownProbe(): Buffer {
+  return Buffer.from(`# ${PROBE_TEXT}\n\n${PROBE_FONTS}\n`, 'utf8');
+}
+
+// ---------------------------------------------------------------------------
 // A minimal PNG, for tests of the raster pipeline's output checks
 // ---------------------------------------------------------------------------
 

@@ -20,6 +20,7 @@ import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  PANDOC_BIN,
   PDFTOPPM_BIN,
   PDF_ENGINE_SCRIPT,
   PYTHON_BIN,
@@ -34,6 +35,7 @@ import { MANIFEST_FILENAME } from '../lib/psd-layers.ts';
 import {
   calcProbe,
   impressProbe,
+  markdownProbe,
   pdfProbe,
   PSD_PROBE_DRAWABLE_LAYERS,
   psdProbe,
@@ -48,6 +50,7 @@ import { createWorkspace, inputFileNameFor, removeWorkspace } from './workspace.
 export interface PreflightReport {
   sofficeVersion: string;
   rasterizerVersion: string;
+  pandocVersion: string;
   fonts: Array<{ requested: string; resolved: string }>;
   /** False means a scanned PDF's `docx` will convert without OCR - see `checkTesseractPresent`. */
   ocrAvailable: boolean;
@@ -60,6 +63,7 @@ export async function preflight(): Promise<PreflightReport> {
   const fonts = assertMetricCompatibleFonts();
   assertPdfEnginePresent();
   assertQpdfPresent();
+  const pandocVersion = assertPandocPresent();
   const ocrAvailable = checkTesseractPresent();
   if (!ocrAvailable) {
     console.warn(
@@ -67,7 +71,7 @@ export async function preflight(): Promise<PreflightReport> {
         'convert without OCR text. Install tesseract-ocr to enable it - see the Dockerfile.',
     );
   }
-  return { sofficeVersion, rasterizerVersion, fonts, ocrAvailable };
+  return { sofficeVersion, rasterizerVersion, pandocVersion, fonts, ocrAvailable };
 }
 
 function assertNotRoot(): void {
@@ -246,6 +250,44 @@ function assertQpdfPresent(): void {
 }
 
 /**
+ * pandoc, needed by the markup sources (`.md`/`.rst`/`.tex`/`.textile`/
+ * `.org`/`.opml`/`.muse`/`.ipynb`) asking for `docx`/`html`/`odt`/`rtf`/
+ * `txt`/`markdown`.
+ *
+ * Checked the same way qpdf is: can it even be run, before any request
+ * depends on it. `warmUp()`'s `.md -> docx` case is what proves it produces
+ * REAL output, not just that the binary exists - the same division of labour
+ * `assertPdfEnginePresent`/its own warm-up pair already uses.
+ */
+function assertPandocPresent(): string {
+  const result = spawnSync(PANDOC_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${PANDOC_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It converts the markup sources (.md/.rst/.tex/.textile/.org/.opml/',
+        '.muse/.ipynb) to docx/html/odt/rtf/txt/markdown - none of these is a',
+        'document LibreOffice opens, so there is no --convert-to for any of',
+        'them.',
+        '  Debian/Ubuntu:  apt-get install -y pandoc',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        'Set PANDOC_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${PANDOC_BIN} --version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
  * tesseract, used by `ocrmypdf` for a scanned PDF (no extractable text at
  * all) asking for `docx`.
  *
@@ -390,6 +432,13 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   // them specifically is far more likely to be in the PDF itself than in this
   // plumbing.
   { extension: '.pdf', target: 'docx', document: pdfProbe },
+  // pandoc is a FOURTH conversion engine, checked the same way the PDF
+  // engine is: `assertPandocPresent` proves the binary runs, this proves
+  // spawning it from Node, writing `-o` into `outDir` and reading that
+  // output back all actually work. `.md -> docx` writes a ZIP-based OOXML
+  // package, so it shares the same single-file/OOXML-signature checks below
+  // as `tables` and the PDF engine's own cases, rather than needing new ones.
+  { extension: '.md', target: 'docx', document: markdownProbe },
 ];
 
 export interface WarmUpReport {
@@ -435,11 +484,19 @@ export async function warmUp(): Promise<WarmUpReport> {
       // A single-file answer comes in more than one shape, and which one is
       // expected is the matrix's answer rather than the mode's: `tables`
       // puts however many tables it finds into ONE workbook, while a PDF's
-      // `docx`/`pptx`/`xlsx` (`viaEngine`) produce whichever OOXML package
-      // their id names, which is not a workbook unless that id is `xlsx`.
-      // Checking the wrong shape here would pass a pipeline that had quietly
-      // started unwrapping differently from what `GET /formats` promises.
-      if ((conversion.target.mode === 'extract' || conversion.viaEngine) && !archivesFiles(conversion.target)) {
+      // `docx`/`pptx`/`xlsx` (an engine pair) produce whichever OOXML
+      // package their id names, which is not a workbook unless that id is
+      // `xlsx`. Checking the wrong shape here would pass a pipeline that had
+      // quietly started unwrapping differently from what `GET /formats`
+      // promises. Every engine warm-up case below targets `docx` (a ZIP-
+      // based OOXML package, same as `tables`' own workbook), so the
+      // ZIP-signature check just below holds for both engines equally - a
+      // future warm-up case for a non-ZIP pandoc target (`txt`/`html`/`rtf`)
+      // would need its own check, not this one.
+      if (
+        (conversion.target.mode === 'extract' || conversion.engine !== 'soffice') &&
+        !archivesFiles(conversion.target)
+      ) {
         if (result.files.length !== 1) {
           throw new PreflightError(
             `Warm-up ${warmUpCase.extension} -> ${warmUpCase.target} produced ${result.files.length} files for a single-file target.`,
@@ -530,26 +587,34 @@ export async function warmUp(): Promise<WarmUpReport> {
       // The advice has to match the pipeline. Sending someone to apt-get for a
       // fault in our own reader would have them install packages that cannot
       // fix it, which is worse than saying nothing.
-      const advice = conversion.viaEngine
-        ? [
-            'The service can start, but it cannot serve this conversion. This runs',
-            'scripts/pdf_engine.py, not LibreOffice - `assertPdfEnginePresent`',
-            'already proved python3 runs and its packages import, so this is a',
-            'fault in that script or in spawning it, not a missing package.',
-          ]
-        : conversion.target.mode === 'extract'
+      const advice =
+        conversion.engine === 'pdf-engine'
           ? [
-              'The service can start, but it cannot serve this conversion. Nothing',
-              'outside this process is involved in it - no LibreOffice, no',
-              'rasteriser - so this is a fault in the extractor or in the workbook',
-              'writer, not a missing package.',
+              'The service can start, but it cannot serve this conversion. This runs',
+              'scripts/pdf_engine.py, not LibreOffice - `assertPdfEnginePresent`',
+              'already proved python3 runs and its packages import, so this is a',
+              'fault in that script or in spawning it, not a missing package.',
             ]
-          : [
-              'The service can start, but it cannot serve this conversion - which is',
-              'how a container built with only part of LibreOffice behaves. Check that',
-              'every module is installed:',
-              '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
-            ];
+          : conversion.engine === 'pandoc'
+            ? [
+                'The service can start, but it cannot serve this conversion. This runs',
+                '`pandoc`, not LibreOffice - `assertPandocPresent` already proved the',
+                'binary runs, so this is a fault in that specific reader/writer pair,',
+                'not a missing package.',
+              ]
+            : conversion.target.mode === 'extract'
+              ? [
+                  'The service can start, but it cannot serve this conversion. Nothing',
+                  'outside this process is involved in it - no LibreOffice, no',
+                  'rasteriser - so this is a fault in the extractor or in the workbook',
+                  'writer, not a missing package.',
+                ]
+              : [
+                  'The service can start, but it cannot serve this conversion - which is',
+                  'how a container built with only part of LibreOffice behaves. Check that',
+                  'every module is installed:',
+                  '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
+                ];
 
       throw new PreflightError(
         [

@@ -1992,7 +1992,7 @@ components:
           example:
             error:
               code: E_UNSUPPORTED
-              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf.'
+              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb.'
 
     UnsupportedTarget:
       description: |

@@ -30,6 +30,7 @@ export async function startServer(port = PORT): Promise<StartedServer> {
       outcome: 'preflight_ok',
       soffice: report.sofficeVersion,
       rasterizer: report.rasterizerVersion,
+      pandoc: report.pandocVersion,
       fonts: report.fonts.length,
       ocrAvailable: report.ocrAvailable,
     }),

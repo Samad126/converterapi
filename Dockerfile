@@ -97,10 +97,18 @@ FROM node:22-bookworm-slim AS runtime
 # no italic (needed for this same report's italic captions), and installing
 # the wrong one fails at first use, not at build time.
 #
+# pandoc is a SIXTH, unrelated engine, for the markup/plain-text sources
+# (.md .rst .tex .textile .org .opml .muse .ipynb) reaching docx/html/odt/
+# rtf/txt/markdown. None of these is a document LibreOffice opens, so - the
+# same story as the PDF engine above - there is no `--convert-to` for any of
+# them. See `pandoc.service.ts`. Debian's package is missing the `asciidoc`
+# reader (confirmed with `pandoc --list-input-formats`), which is why `.adoc`
+# is not in the matrix - see the note at the top of that file.
+#
 # The service refuses to boot without any of this. Preflight checks soffice,
-# `pdftoppm` and the fonts, and then converts one real document per family
-# before it listens - so a missing module fails loudly at startup rather than on
-# some user's first spreadsheet, days later.
+# `pdftoppm`, `pandoc` and the fonts, and then converts one real document per
+# family (plus one pandoc case) before it listens - so a missing module fails
+# loudly at startup rather than on some user's first spreadsheet, days later.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer \
@@ -118,6 +126,7 @@ RUN apt-get update \
       python3 \
       python3-pip \
       qpdf \
+      pandoc \
       tesseract-ocr \
       tesseract-ocr-eng \
       tesseract-ocr-aze \

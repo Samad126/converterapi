@@ -94,7 +94,36 @@ export type AllowedExtension =
   | '.jpg'
   | '.jpeg'
   | '.psd'
-  | '.pdf';
+  | '.pdf'
+  | '.md'
+  | '.rst'
+  | '.tex'
+  | '.textile'
+  | '.org'
+  | '.opml'
+  | '.muse'
+  | '.ipynb';
+
+/**
+ * The pandoc-readable markup/plain-text sources - see `pandoc.service.ts`.
+ *
+ * One list, referenced by every target pandoc reaches, so a new markup
+ * source is one line here rather than a change to five different targets.
+ *
+ * AsciiDoc (`.adoc`) is deliberately not in this list - see the note at the
+ * top of `pandoc.service.ts` for why: the pandoc build this service was
+ * verified against has no AsciiDoc reader at all.
+ */
+export const MARKUP_EXTENSIONS: readonly AllowedExtension[] = [
+  '.md',
+  '.rst',
+  '.tex',
+  '.textile',
+  '.org',
+  '.opml',
+  '.muse',
+  '.ipynb',
+];
 
 export interface TargetFormat {
   id: TargetId;
@@ -179,24 +208,36 @@ export interface TargetFormat {
    */
   extractFrom?: readonly AllowedExtension[];
   /**
-   * Sources that reach this target through `pdf_engine.py` (see
-   * `pdf-engine.service.ts`) instead of through `filters` - today, only a
-   * PDF, reaching `docx`/`pptx`/`xlsx`.
+   * Sources that reach this target through a non-LibreOffice engine instead
+   * of through `filters` - today, a PDF (via `pdf_engine.py`, see
+   * `pdf-engine.service.ts`) reaching `docx`/`pptx`/`xlsx`/`markdown`, and
+   * the pandoc-readable markup formats (via `pandoc.service.ts`) reaching
+   * `docx`/`html`/`odt`/`rtf`/`txt`/`markdown`.
+   *
+   * Keyed by engine rather than a flat list, because there are now two
+   * independent non-LibreOffice engines and a source can only ever reach a
+   * given target through ONE of them - `resolveConversion` needs to know
+   * which, so it knows which service to call. `ResolvedConversion.engine`
+   * carries that same choice forward to the caller.
    *
    * A second, independent route to the SAME target id, not a target of its
    * own the way `extractFrom` is for `tables`/`layers`: those two are lossy
    * in a way that a plain `docx`/`xlsx` promise is not, so they earned
-   * separate ids. A PDF's `docx` is a genuine reconstruction of the same
-   * format the id already means, so it answers to the same name - the
-   * engine that produced it is an implementation detail `resolveConversion`
-   * resolves, not something the URL should ever have to say.
+   * separate ids. A PDF's or a Markdown file's `docx` is a genuine
+   * reconstruction of the same format the id already means, so it answers
+   * to the same name - the engine that produced it is an implementation
+   * detail `resolveConversion` resolves, not something the URL should ever
+   * have to say.
    *
    * `validateMatrix` checks this the same way it checks `extractFrom`: every
    * named source must offer this target id, and every source that offers
-   * this id via the engine route (rather than via `filters`) must be named
-   * here.
+   * this id via an engine route (rather than via `filters`) must be named
+   * here, under exactly one engine.
    */
-  engineFrom?: readonly AllowedExtension[];
+  engineFrom?: {
+    pdf?: readonly AllowedExtension[];
+    pandoc?: readonly AllowedExtension[];
+  };
 }
 
 /**
@@ -230,6 +271,9 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { writer: 'writer8' },
+    // A markup source has no LibreOffice family, so it reaches ODT through
+    // pandoc's own `odt` writer rather than a filter - see `pandoc.service.ts`.
+    engineFrom: { pandoc: MARKUP_EXTENSIONS },
   },
   docx: {
     id: 'docx',
@@ -244,7 +288,9 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // reconstruction of a Word document, not a raster fallback, which is why
     // it answers to the same `docx` id rather than a lossy-extract id of its
     // own. See the note on `engineFrom` for why this differs from `tables`.
-    engineFrom: ['.pdf'],
+    // From a markup source (`.md`/`.rst`/...), it is pandoc's own `docx`
+    // writer - also a genuine, editable OOXML package, not a fallback.
+    engineFrom: { pdf: ['.pdf'], pandoc: MARKUP_EXTENSIONS },
   },
   txt: {
     id: 'txt',
@@ -257,6 +303,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // writes in the process locale, which would mangle anything non-ASCII into
     // question marks while still reporting success.
     filters: { writer: 'Text (encoded):UTF8' },
+    engineFrom: { pandoc: MARKUP_EXTENSIONS },
   },
   html: {
     id: 'html',
@@ -266,6 +313,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { writer: 'HTML (StarWriter)', calc: 'HTML (StarCalc)' },
+    engineFrom: { pandoc: MARKUP_EXTENSIONS },
   },
   rtf: {
     id: 'rtf',
@@ -275,6 +323,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { writer: 'Rich Text Format' },
+    engineFrom: { pandoc: MARKUP_EXTENSIONS },
   },
   epub: {
     id: 'epub',
@@ -309,7 +358,10 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // both promise and a PDF has no faithful, non-lossy spreadsheet export
     // to compare it against the way `.docx` -> `xlsx` would. A PDF with no
     // ruled table found answers E_NO_TABLES, exactly as `tables` does.
-    engineFrom: ['.pdf'],
+    // Pandoc reaches no spreadsheet writer worth trusting - it is a markup
+    // engine, not a table-extraction one - so no markup source names this
+    // target.
+    engineFrom: { pdf: ['.pdf'] },
   },
   csv: {
     id: 'csv',
@@ -351,7 +403,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // already a native deck - lossier than the `docx` route (no editable
     // text) and still a genuine, openable `.pptx`, which is why it answers
     // to this id rather than a name of its own.
-    engineFrom: ['.pdf'],
+    engineFrom: { pdf: ['.pdf'] },
   },
   png: {
     id: 'png',
@@ -485,7 +537,14 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // than `docx` (this is heuristic reconstruction from formatting, not
     // pdf2docx's structural rebuild) - which is why it is its own target
     // rather than folded into either.
-    engineFrom: ['.pdf'],
+    //
+    // pandoc's own `gfm` writer for every OTHER markup source - genuinely
+    // faithful, not heuristic, which is why `.md` itself is excluded: a
+    // Markdown file "converting" to Markdown is not a conversion this
+    // service should advertise, matrix self-target check or not (that check
+    // compares `source.targets` against `ext.slice(1)`, which is `'md'`, not
+    // the id `'markdown'` - so it would not have caught this on its own).
+    engineFrom: { pdf: ['.pdf'], pandoc: MARKUP_EXTENSIONS.filter((ext) => ext !== '.md') },
   },
 };
 
@@ -778,6 +837,51 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // targets are LibreOffice's own faithful re-export of the same bytes.
     targets: ['pdfa', 'png', 'jpg', 'docx', 'pptx', 'xlsx', 'markdown'],
   },
+  '.md': {
+    extension: '.md',
+    // No `family`: pandoc, not LibreOffice, reads every source in this
+    // group - see the note on `.psd` above for why a source with no family
+    // is possible at all, and `pandoc.service.ts` for the engine itself.
+    mediaType: 'text/markdown',
+    // `markdown` is excluded (see the target's own `engineFrom` comment): a
+    // `.md` file "converting" to Markdown is not a conversion to offer.
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt'],
+  },
+  '.rst': {
+    extension: '.rst',
+    mediaType: 'text/x-rst',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
+  '.tex': {
+    extension: '.tex',
+    mediaType: 'application/x-tex',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
+  '.textile': {
+    extension: '.textile',
+    mediaType: 'text/x-textile',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
+  '.org': {
+    extension: '.org',
+    mediaType: 'text/org',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
+  '.opml': {
+    extension: '.opml',
+    mediaType: 'text/x-opml',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
+  '.muse': {
+    extension: '.muse',
+    mediaType: 'text/x-muse',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
+  '.ipynb': {
+    extension: '.ipynb',
+    mediaType: 'application/x-ipynb+json',
+    targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -804,27 +908,30 @@ export interface ResolvedConversion {
   source: SourceFormat;
   target: TargetFormat;
   /**
-   * The `--convert-to` argument for a `direct` target.
+   * The `--convert-to` argument for a `direct` target reached through
+   * `filters`.
    *
    * Empty for a `raster` target, which is rendered to PDF first and then
    * rasterised - the caller uses `pdfFilterFor()` for that first step - and
-   * empty for a `viaEngine` pair, which never touches soffice at all.
+   * empty for an engine pair, which never touches soffice at all.
    */
   convertTo: string;
   /**
-   * Does THIS PAIR reach `target` through `pdf_engine.py` rather than
-   * through `mode`'s usual route?
+   * Which engine produces this PAIR - `'soffice'` for everything `filters`/
+   * `mode: 'raster'` describes, `'extract'` for the two targets that read
+   * the upload's own bytes, or the name of the non-LibreOffice engine named
+   * in `target.engineFrom`.
    *
    * A property of the PAIR, not of the target: `target.mode` for `docx` is
    * `'direct'`, and stays `'direct'`, because that is how every OTHER source
    * reaches it - a `.doc` upload asking for `docx` still gets a plain
-   * `soffice --convert-to`. Only a PDF's request for `docx`/`pptx`/`xlsx`
-   * takes the engine route, which is exactly what `target.engineFrom` names.
-   * The caller (`conversion.service.ts`) checks this before falling back to
-   * `target.mode`, so it never has to ask "but which route did THIS one
-   * take" any other way.
+   * `soffice --convert-to`. Only a PDF's or a markup file's request for
+   * `docx` takes an engine route, which is exactly what `target.engineFrom`
+   * names. The caller (`conversion.service.ts`) checks this before falling
+   * back to `target.mode`, so it never has to ask "but which route did THIS
+   * one take" any other way.
    */
-  viaEngine: boolean;
+  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc';
 }
 
 /**
@@ -843,11 +950,14 @@ export function resolveConversion(
   const target = TARGETS[targetId];
   if (!source.targets.includes(targetId)) return null;
 
-  if (target.engineFrom?.includes(extension)) {
+  if (target.engineFrom?.pdf?.includes(extension)) {
     // Checked before `mode`: this is a second, independent route to the same
     // target id, and it says nothing about how any OTHER source reaches it.
-    // See `ResolvedConversion.viaEngine` and the field's own doc comment.
-    return { source, target, convertTo: '', viaEngine: true };
+    // See `ResolvedConversion.engine` and the field's own doc comment.
+    return { source, target, convertTo: '', engine: 'pdf-engine' };
+  }
+  if (target.engineFrom?.pandoc?.includes(extension)) {
+    return { source, target, convertTo: '', engine: 'pandoc' };
   }
 
   if (target.mode === 'extract') {
@@ -856,7 +966,7 @@ export function resolveConversion(
     // decided by the `targets` check above, and `validateMatrix` guarantees
     // the two lists agree - so reaching here means the extractor can read this
     // source, or the matrix is broken and would have thrown at import.
-    return { source, target, convertTo: '', viaEngine: false };
+    return { source, target, convertTo: '', engine: 'extract' };
   }
 
   // Everything below asks LibreOffice to do the work, so a source it cannot
@@ -870,12 +980,17 @@ export function resolveConversion(
     // A raster target is built from the family's PDF export, so a family that
     // cannot write a PDF cannot write an image either.
     if (!pdfFilterFor(source.family)) return null;
-    return { source, target, convertTo: '', viaEngine: false };
+    return { source, target, convertTo: '', engine: 'soffice' };
   }
 
   const filter = target.filters[source.family];
   if (!filter) return null;
-  return { source, target, convertTo: `${target.extension.slice(1)}:${filter}`, viaEngine: false };
+  return {
+    source,
+    target,
+    convertTo: `${target.extension.slice(1)}:${filter}`,
+    engine: 'soffice',
+  };
 }
 
 /**
@@ -949,12 +1064,15 @@ export function validateMatrix(): void {
       problems.push(`target "${id}" has a bare extension "${target.extension}"`);
     }
     const filterCount = Object.keys(target.filters).length;
+    const engineSourceCount =
+      (target.engineFrom?.pdf?.length ?? 0) + (target.engineFrom?.pandoc?.length ?? 0);
     // A direct target with no filters at all is only legitimate when
     // `engineFrom` is its ENTIRE reach (`markdown`, reachable only from a
-    // PDF via `pdf_engine.py`) - the real invariant is "reachable by some
-    // mechanism", and `engineFrom` is checked as its own mechanism further
-    // down, so this only has to catch a target with NEITHER.
-    if (target.mode === 'direct' && filterCount === 0 && !target.engineFrom?.length) {
+    // PDF via `pdf_engine.py` or a markup source via pandoc) - the real
+    // invariant is "reachable by some mechanism", and `engineFrom` is
+    // checked as its own mechanism further down, so this only has to catch a
+    // target with NEITHER.
+    if (target.mode === 'direct' && filterCount === 0 && engineSourceCount === 0) {
       problems.push(`direct target "${id}" declares no filters`);
     }
     if (target.mode !== 'direct' && filterCount > 0) {
@@ -995,24 +1113,38 @@ export function validateMatrix(): void {
     // second route to the SAME target id rather than a mode of its own - see
     // the field's own doc comment. Both directions matter here too: a name
     // that is not a source, and a source that does not list this id among
-    // its own targets.
-    for (const extension of target.engineFrom ?? []) {
-      const source = SOURCES[extension];
-      if (!source) {
-        problems.push(`target "${id}" names unknown engine source "${extension}"`);
-        continue;
-      }
-      if (!source.targets.includes(id as TargetId)) {
-        problems.push(`target "${id}" names engine source "${extension}", which does not offer it`);
-      }
-      // A source whose family already has a filter for this target would
-      // make `resolveConversion` silently prefer the engine route over a
-      // working LibreOffice one - never useful, and a sign the matrix means
-      // something other than what it says.
-      if (source.family && target.filters[source.family]) {
-        problems.push(
-          `target "${id}" has both a filter and an engine route for "${extension}" - ambiguous`,
-        );
+    // its own targets. Checked once per engine, and once more across both
+    // engines together, since a source named under BOTH would leave
+    // `resolveConversion` to silently pick whichever is checked first.
+    const engines = ['pdf', 'pandoc'] as const;
+    const seenUnderAnotherEngine = new Set<string>();
+    for (const engine of engines) {
+      for (const extension of target.engineFrom?.[engine] ?? []) {
+        const source = SOURCES[extension];
+        if (!source) {
+          problems.push(`target "${id}" names unknown ${engine} engine source "${extension}"`);
+          continue;
+        }
+        if (!source.targets.includes(id as TargetId)) {
+          problems.push(
+            `target "${id}" names ${engine} engine source "${extension}", which does not offer it`,
+          );
+        }
+        // A source whose family already has a filter for this target would
+        // make `resolveConversion` silently prefer the engine route over a
+        // working LibreOffice one - never useful, and a sign the matrix means
+        // something other than what it says.
+        if (source.family && target.filters[source.family]) {
+          problems.push(
+            `target "${id}" has both a filter and a ${engine} engine route for "${extension}" - ambiguous`,
+          );
+        }
+        if (seenUnderAnotherEngine.has(extension)) {
+          problems.push(
+            `target "${id}" names engine source "${extension}" under more than one engine`,
+          );
+        }
+        seenUnderAnotherEngine.add(extension);
       }
     }
   }
@@ -1031,9 +1163,17 @@ export function validateMatrix(): void {
         );
       }
       // The other half of the family rule below, in the direction that catches
-      // a source claiming to be convertable by LibreOffice when it has also
-      // said LibreOffice cannot open it.
-      if (TARGETS[targetId].mode !== 'extract' && !source.family) {
+      // a source claiming to be convertible by LibreOffice when it has also
+      // said LibreOffice cannot open it. A family-less source reaching this
+      // target through an engine (`.md` -> `docx` via pandoc, same as `.pdf`
+      // -> `docx` via pdf_engine.py) is not that claim - `resolveConversion`
+      // already proved it above - so only a target with no engine route for
+      // this extension, and no `extract` route either, is actually a
+      // contradiction.
+      const reachesViaEngine =
+        (TARGETS[targetId].engineFrom?.pdf?.includes(ext as AllowedExtension) ?? false) ||
+        (TARGETS[targetId].engineFrom?.pandoc?.includes(ext as AllowedExtension) ?? false);
+      if (TARGETS[targetId].mode !== 'extract' && !reachesViaEngine && !source.family) {
         problems.push(
           `source "${ext}" has no family but advertises "${targetId}", which LibreOffice must produce`,
         );

@@ -55,6 +55,7 @@ import { isPasswordProtected } from '../lib/encrypted.ts';
 import { extractLayers, MANIFEST_FILENAME, manifestJson } from '../lib/psd-layers.ts';
 import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
+import { PANDOC_WRITERS, runPandoc } from './pandoc.service.ts';
 import {
   PDF_ENGINE_NO_TABLES_EXIT_CODE,
   runPdfEngine,
@@ -146,42 +147,49 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
   await fsp.mkdir(outDir, { recursive: true });
 
   const startedAt = Date.now();
-  const files = conversion.viaEngine
-    ? await runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline, ocr })
-    : target.mode === 'extract'
-      ? await runExtractPipeline({ inputPath, target, signal, deadline })
-      : target.mode === 'raster'
-        ? await runRasterPipeline({
-            inputPath,
-            outDir,
-            workspace,
-            profileDir,
-            target,
-            // The source is already a PDF, so the "render to PDF first" half of
-            // this pipeline is not just unnecessary but wrong to run: soffice
-            // would reopen it as a Draw document and re-export it, spending a
-            // whole process on a lossy round-trip of bytes we already have.
-            sourceIsPdf: source.extension === '.pdf',
-            // Resolved here, from the family, rather than passed as a family for
-            // the raster pipeline to look up. A source that reaches this branch
-            // is one the matrix says has a PDF export, and turning that into the
-            // filter string once means the pipeline below cannot be handed a
-            // family it has no filter for - which is the only way it could ever
-            // have failed.
-            pdfFilter: pdfFilterFor(source.family) ?? '',
-            deadline,
-            signal,
-          })
-        : await runDirectPipeline({
-            inputPath,
-            outDir,
-            workspace,
-            profileDir,
-            target,
-            convertTo: conversion.convertTo,
-            deadline,
-            signal,
-          });
+  const files = await (async () => {
+    switch (conversion.engine) {
+      case 'pdf-engine':
+        return runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline, ocr });
+      case 'pandoc':
+        return runPandocPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+      case 'extract':
+        return runExtractPipeline({ inputPath, target, signal, deadline });
+      case 'soffice':
+        return target.mode === 'raster'
+          ? runRasterPipeline({
+              inputPath,
+              outDir,
+              workspace,
+              profileDir,
+              target,
+              // The source is already a PDF, so the "render to PDF first" half of
+              // this pipeline is not just unnecessary but wrong to run: soffice
+              // would reopen it as a Draw document and re-export it, spending a
+              // whole process on a lossy round-trip of bytes we already have.
+              sourceIsPdf: source.extension === '.pdf',
+              // Resolved here, from the family, rather than passed as a family for
+              // the raster pipeline to look up. A source that reaches this branch
+              // is one the matrix says has a PDF export, and turning that into the
+              // filter string once means the pipeline below cannot be handed a
+              // family it has no filter for - which is the only way it could ever
+              // have failed.
+              pdfFilter: pdfFilterFor(source.family) ?? '',
+              deadline,
+              signal,
+            })
+          : runDirectPipeline({
+              inputPath,
+              outDir,
+              workspace,
+              profileDir,
+              target,
+              convertTo: conversion.convertTo,
+              deadline,
+              signal,
+            });
+    }
+  })();
 
   // Does the response carry a ZIP? Ask the matrix rather than restating the
   // rule here, because `GET /formats` tells the client the same thing and the
@@ -593,6 +601,56 @@ async function runEnginePipeline(run: {
   if (!file) {
     throw Errors.convertFailed(
       `pdf_engine.py ${operation} produced no ${target.extension} file ` +
+        `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
+    );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: a markup source (.md/.rst/.tex/...) asking for docx/html/odt/rtf/
+// txt/markdown, answered by pandoc
+// ---------------------------------------------------------------------------
+
+/**
+ * Run pandoc for a source `formats.ts` names under `target.engineFrom.pandoc`.
+ *
+ * Shaped like `runEnginePipeline`: one process, one output file expected in
+ * `outDir`, the same deadline/abort-signal handling every pipeline here uses.
+ * `target.id` cannot double as the pandoc writer name the way it does for
+ * `PdfEngineOperation` - pandoc's own writer for the `markdown` target is
+ * `gfm`, not `markdown` - so `PANDOC_WRITERS` looks it up instead.
+ */
+async function runPandocPipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+  const writer = PANDOC_WRITERS[target.id];
+  if (!writer) {
+    // Unreachable as the matrix stands - every target `engineFrom.pandoc`
+    // names has an entry in `PANDOC_WRITERS` - but a target added to one
+    // without the other should fail loudly here rather than call pandoc
+    // with `undefined` as its `-t` argument.
+    throw Errors.convertFailed(`no pandoc writer registered for target "${target.id}"`);
+  }
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+
+  const outcome = await runPandoc({ inputPath, outputPath, writer, workspace, deadline, signal });
+  throwForOutcome(outcome);
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(
+      `pandoc -t ${writer} produced no ${target.extension} file ` +
         `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
     );
   }
