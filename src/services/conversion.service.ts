@@ -55,6 +55,8 @@ import { isPasswordProtected } from '../lib/encrypted.ts';
 import { extractLayers, MANIFEST_FILENAME, manifestJson } from '../lib/psd-layers.ts';
 import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
+import { zipDeflated } from '../lib/zip.ts';
+import { collectTreeFiles, createArchive, extractArchiveTree } from './archive.service.ts';
 import { PANDOC_WRITERS, runPandoc } from './pandoc.service.ts';
 import {
   PDF_ENGINE_NO_TABLES_EXIT_CODE,
@@ -155,6 +157,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
         return runPandocPipeline({ inputPath, outDir, workspace, target, signal, deadline });
       case 'extract':
         return runExtractPipeline({ inputPath, target, signal, deadline });
+      case 'archive':
+        return runArchivePipeline({ inputPath, outDir, workspace, target, signal, deadline });
       case 'soffice':
         return target.mode === 'raster'
           ? runRasterPipeline({
@@ -653,6 +657,68 @@ async function runPandocPipeline(run: {
       `pandoc -t ${writer} produced no ${target.extension} file ` +
         `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
     );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: an archive source (.zip/.tar/.tar.gz/.7z/...) asking for another
+// archive format, answered by 7z
+// ---------------------------------------------------------------------------
+
+/**
+ * List, validate and unpack the source archive, then repack the tree into
+ * the target format. See `archive.service.ts`'s own header comment for the
+ * security reasoning - this is the one pipeline here that writes untrusted
+ * archive contents to disk before the response is built.
+ *
+ * `zip` is written by `zip.ts`'s `zipDeflated` rather than another `7z`
+ * subprocess call, per `createArchive`'s own comment: a format this codebase
+ * already trusts a few hundred lines to describe does not need a dependency
+ * to write it too.
+ */
+async function runArchivePipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+  const writer = target.archiveWriter;
+  if (!writer) {
+    // Unreachable as the matrix stands - `validateMatrix` refuses an
+    // `archive`-mode target with no `archiveWriter` - but a target added to
+    // one without the other should fail loudly here rather than silently
+    // produce nothing.
+    throw Errors.convertFailed(`no archiveWriter registered for target "${target.id}"`);
+  }
+
+  const extractDir = join(workspace, 'archive-extracted');
+  const tree = await extractArchiveTree({
+    archivePath: inputPath,
+    workspace,
+    outDir: extractDir,
+    deadline,
+    signal,
+  });
+
+  if (writer === 'zip') {
+    const files = await collectTreeFiles(tree);
+    return [{ name: `converted${target.extension}`, data: zipDeflated(files) }];
+  }
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+  await fsp.mkdir(outDir, { recursive: true });
+  await createArchive({ writer, sourceDir: tree, outputPath, workspace, deadline, signal });
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(`7z produced no ${target.extension} file for archive target "${target.id}"`);
   }
 
   return [{ name: outputName, data: file.data }];

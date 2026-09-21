@@ -31,7 +31,14 @@ import { pathToFileURL } from 'node:url';
 import { PDFTOPPM_BIN, SIGKILL_GRACE_MS, SOFFICE_BIN } from '../config.ts';
 
 export type ProcessOutcome =
-  | { kind: 'exited'; exitCode: number | null; signal: NodeJS.Signals | null; stderr: string }
+  | {
+      kind: 'exited';
+      exitCode: number | null;
+      signal: NodeJS.Signals | null;
+      stderr: string;
+      /** Present only when the caller passed `captureStdout: true`. */
+      stdout?: string;
+    }
   | { kind: 'timeout' }
   | { kind: 'aborted' };
 
@@ -49,6 +56,12 @@ interface RunProcessOptions {
   signal?: AbortSignal;
   /** Extra environment on top of the safe baseline. */
   env?: Record<string, string>;
+  /**
+   * Keep stdout rather than draining and discarding it - `archive.service.ts`
+   * needs `7z l -slt`'s output. Bounded the same way stderr already is, for
+   * the same reason: a pathological archive can make `7z` extremely chatty.
+   */
+  captureStdout?: boolean;
 }
 
 /**
@@ -66,7 +79,7 @@ interface RunProcessOptions {
  * of the pipeline - so they reuse this runner rather than a second copy of it.
  */
 export function runProcess(options: RunProcessOptions): Promise<ProcessOutcome> {
-  const { bin, args, workspace, deadline, signal, env } = options;
+  const { bin, args, workspace, deadline, signal, env, captureStdout } = options;
 
   return new Promise<ProcessOutcome>((resolve) => {
     const child = spawn(bin, args, {
@@ -92,6 +105,7 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessOutcome> 
     });
 
     let stderr = '';
+    let stdout = '';
     let settled = false;
     let deadlineTimer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
@@ -123,9 +137,11 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessOutcome> 
       // this text exists only to explain a failure in the logs.
       if (stderr.length < 8_192) stderr += chunk.toString('utf8');
     });
-    // stdout is not read for content, but the stream has to be drained or a
-    // full pipe buffer will block the child forever.
-    child.stdout?.on('data', () => {});
+    // Drained either way, or a full pipe buffer would block the child
+    // forever - `captureStdout` only decides whether the bytes are kept.
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (captureStdout && stdout.length < 4_194_304) stdout += chunk.toString('utf8');
+    });
 
     const remaining = deadline - Date.now();
     deadlineTimer = setTimeout(() => {
@@ -149,7 +165,13 @@ export function runProcess(options: RunProcessOptions): Promise<ProcessOutcome> 
     });
 
     child.on('close', (code, signalName) => {
-      finish({ kind: 'exited', exitCode: code, signal: signalName, stderr });
+      finish({
+        kind: 'exited',
+        exitCode: code,
+        signal: signalName,
+        stderr,
+        ...(captureStdout ? { stdout } : {}),
+      });
     });
   });
 }

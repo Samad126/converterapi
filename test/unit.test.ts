@@ -65,7 +65,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 37);
+    assert.equal(ALLOWED_EXTENSIONS.length, 47);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
@@ -120,6 +120,14 @@ describe('conversion matrix', () => {
             TARGETS[target].extractFrom?.includes(extension),
             `${extension} -> ${target}, but the target does not list it as a source`,
           );
+          continue;
+        }
+
+        if (TARGETS[target].mode === 'archive') {
+          // `7z`, not LibreOffice, reads and writes every archive pair - no
+          // filter, no family, same as `extract` above but its own engine.
+          assert.equal(resolved.engine, 'archive', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
         }
 

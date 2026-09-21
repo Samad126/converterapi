@@ -26,6 +26,7 @@ import {
   PYTHON_BIN,
   QPDF_BIN,
   REQUIRED_FONT_ALIASES,
+  SEVENZIP_BIN,
   SOFFICE_BIN,
   TESSERACT_BIN,
 } from '../config.ts';
@@ -39,6 +40,7 @@ import {
   pdfProbe,
   PSD_PROBE_DRAWABLE_LAYERS,
   psdProbe,
+  tarProbe,
   tablesProbe,
   writerProbe,
 } from '../lib/probe-documents.ts';
@@ -51,6 +53,7 @@ export interface PreflightReport {
   sofficeVersion: string;
   rasterizerVersion: string;
   pandocVersion: string;
+  sevenZipVersion: string;
   fonts: Array<{ requested: string; resolved: string }>;
   /** False means a scanned PDF's `docx` will convert without OCR - see `checkTesseractPresent`. */
   ocrAvailable: boolean;
@@ -64,6 +67,7 @@ export async function preflight(): Promise<PreflightReport> {
   assertPdfEnginePresent();
   assertQpdfPresent();
   const pandocVersion = assertPandocPresent();
+  const sevenZipVersion = assertSevenZipPresent();
   const ocrAvailable = checkTesseractPresent();
   if (!ocrAvailable) {
     console.warn(
@@ -71,7 +75,7 @@ export async function preflight(): Promise<PreflightReport> {
         'convert without OCR text. Install tesseract-ocr to enable it - see the Dockerfile.',
     );
   }
-  return { sofficeVersion, rasterizerVersion, pandocVersion, fonts, ocrAvailable };
+  return { sofficeVersion, rasterizerVersion, pandocVersion, sevenZipVersion, fonts, ocrAvailable };
 }
 
 function assertNotRoot(): void {
@@ -288,6 +292,46 @@ function assertPandocPresent(): string {
 }
 
 /**
+ * `7z` (p7zip), needed by the archive sources (`.zip`/`.tar`/`.tgz`/
+ * `.tbz2`/`.txz`/`.gz`/`.bz2`/`.xz`/`.7z`/`.iso`) asking for `zip`/`tar`/
+ * `tar.gz`/`tar.bz2`/`7z`.
+ *
+ * Checked the same way pandoc is: can it even be run, before any request
+ * depends on it. `warmUp()`'s `.tar -> zip` case is what proves it actually
+ * lists, unpacks and repacks a real archive correctly - not just that the
+ * binary exists.
+ */
+function assertSevenZipPresent(): string {
+  const result = spawnSync(SEVENZIP_BIN, ['--help'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${SEVENZIP_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It lists, unpacks and repacks the archive sources (.zip/.tar/.tgz/',
+        '.tbz2/.txz/.gz/.bz2/.xz/.7z/.iso) reaching zip/tar/tar.gz/tar.bz2/7z -',
+        'none of these is a document LibreOffice, pandoc or pdf_engine.py open.',
+        '  Debian/Ubuntu:  apt-get install -y p7zip-full',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        'Set SEVENZIP_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  // `7z --help` exits 0 on this build even without an archive argument;
+  // a non-zero exit here means the binary itself is broken, not merely that
+  // no file was given.
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${SEVENZIP_BIN} --help" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
  * tesseract, used by `ocrmypdf` for a scanned PDF (no extractable text at
  * all) asking for `docx`.
  *
@@ -439,6 +483,16 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   // package, so it shares the same single-file/OOXML-signature checks below
   // as `tables` and the PDF engine's own cases, rather than needing new ones.
   { extension: '.md', target: 'docx', document: markdownProbe },
+  // 7z is a FIFTH conversion engine, checked the same way pandoc is:
+  // `assertSevenZipPresent` proves the binary runs, this proves listing,
+  // unpacking and repacking a real archive all actually work together -
+  // including the code path that writes untrusted archive contents to disk,
+  // which is new ground for this service (see archive.service.ts). `.tar ->
+  // zip` specifically exercises the `zip.ts`-backed writer, which is real
+  // ZIP-signature output - unlike `tar`/`7z`, whose own signatures the
+  // single-file check below does not assert on, so this is the one archive
+  // pairing that fits the existing OOXML-signature check without a new one.
+  { extension: '.tar', target: 'zip', document: tarProbe },
 ];
 
 export interface WarmUpReport {
@@ -602,19 +656,26 @@ export async function warmUp(): Promise<WarmUpReport> {
                 'binary runs, so this is a fault in that specific reader/writer pair,',
                 'not a missing package.',
               ]
-            : conversion.target.mode === 'extract'
+            : conversion.engine === 'archive'
               ? [
-                  'The service can start, but it cannot serve this conversion. Nothing',
-                  'outside this process is involved in it - no LibreOffice, no',
-                  'rasteriser - so this is a fault in the extractor or in the workbook',
-                  'writer, not a missing package.',
+                  'The service can start, but it cannot serve this conversion. This runs',
+                  '`7z`, not LibreOffice - `assertSevenZipPresent` already proved the',
+                  'binary runs, so this is a fault in listing, unpacking or repacking this',
+                  'specific archive pair, not a missing package.',
                 ]
-              : [
-                  'The service can start, but it cannot serve this conversion - which is',
-                  'how a container built with only part of LibreOffice behaves. Check that',
-                  'every module is installed:',
-                  '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
-                ];
+              : conversion.target.mode === 'extract'
+                ? [
+                    'The service can start, but it cannot serve this conversion. Nothing',
+                    'outside this process is involved in it - no LibreOffice, no',
+                    'rasteriser - so this is a fault in the extractor or in the workbook',
+                    'writer, not a missing package.',
+                  ]
+                : [
+                    'The service can start, but it cannot serve this conversion - which is',
+                    'how a container built with only part of LibreOffice behaves. Check that',
+                    'every module is installed:',
+                    '  Debian/Ubuntu:  apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw poppler-utils',
+                  ];
 
       throw new PreflightError(
         [

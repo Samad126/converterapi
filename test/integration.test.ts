@@ -10,14 +10,25 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import {
+  buildArchiveFixture,
+  buildDeclaredSizeBombFixture,
+  buildEncryptedZipFixture,
+  buildEntryCountBombFixture,
+  buildIsoFixture,
   buildLegacyFixture,
   buildPptxFixture,
+  buildSymlinkEscapeFixture,
+  buildZipSlipFixture,
   expectJsonEnvelope,
   listWorkspaces,
   startTestServer,
+  tarEntryNames,
+  tarGzContainsFile,
   upload,
   waitFor,
   zipEntryNames,
@@ -617,6 +628,140 @@ describe('POST /convert/<target> - markup sources (pandoc)', () => {
   it('deletes the workspace after a pandoc conversion', async () => {
     const before_ = await listWorkspaces();
     await upload(server.baseUrl, 'note.md', SAMPLE_MD, { target: 'docx' });
+    assert.deepEqual(await listWorkspaces(), before_);
+  });
+});
+
+describe('POST /convert/<target> - archive engine (7z)', () => {
+  it('converts a real ZIP to a real TAR, preserving the file tree', async () => {
+    const zip = await buildArchiveFixture('zip', { 'a.txt': 'hello', 'sub/b.txt': 'nested' });
+    const response = await upload(server.baseUrl, 'archive.zip', zip, { target: 'tar' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/x-tar');
+    const names = await tarEntryNames(response.body);
+    assert.equal(names.sort().join(','), 'a.txt,sub/,sub/b.txt');
+  });
+
+  it('converts a real TAR to a real ZIP', async () => {
+    const tar = await buildArchiveFixture('tar', { 'one.txt': 'one', 'dir/two.txt': 'two' });
+    const response = await upload(server.baseUrl, 'archive.tar', tar, { target: 'zip' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/zip');
+    assert.deepEqual(zipEntryNames(response.body).sort(), ['dir/two.txt', 'one.txt']);
+  });
+
+  it('converts a real 7z to tar.gz and tar.bz2, both readable by real tar', async () => {
+    const sevenZip = await buildArchiveFixture('7z', { 'note.txt': 'seven zip contents' });
+
+    const targz = await upload(server.baseUrl, 'archive.7z', sevenZip, { target: 'tar.gz' });
+    assert.equal(targz.status, 200);
+    assert.equal(targz.contentType, 'application/gzip');
+    assert.equal(await tarGzContainsFile(targz.body, 'note.txt'), true);
+
+    const tarbz2 = await upload(server.baseUrl, 'archive.7z', sevenZip, { target: 'tar.bz2' });
+    assert.equal(tarbz2.status, 200);
+    assert.equal(tarbz2.contentType, 'application/x-bzip2');
+  });
+
+  it('converts a real ISO 9660 image to a ZIP', async () => {
+    const iso = await buildIsoFixture({ 'readme.txt': 'iso contents' });
+    const response = await upload(server.baseUrl, 'disk.iso', iso, { target: 'zip' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(zipEntryNames(response.body), ['readme.txt']);
+  });
+
+  it('reads a bare .gz (no tar layer) as a single-file archive', async () => {
+    const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-plaingz-'));
+    const filePath = join(dir, 'solo.txt');
+    await fsp.writeFile(filePath, 'just one file');
+    await execFileAsync('gzip', ['-k', filePath]);
+    const bytes = await fsp.readFile(join(dir, 'solo.txt.gz'));
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+
+    const response = await upload(server.baseUrl, 'solo.gz', bytes, { target: 'zip' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(zipEntryNames(response.body), ['solo.txt']);
+  });
+
+  it('does not offer .zip the zip target - a ZIP file has nothing to become', async () => {
+    const zip = await buildArchiveFixture('zip', { 'a.txt': 'hello' });
+    const response = await upload(server.baseUrl, 'archive.zip', zip, { target: 'zip' });
+    assert.equal(response.status, 415);
+    expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+  });
+
+  it('rejects a .rar upload as an unsupported extension', async () => {
+    // .rar is deliberately not in the matrix at all - see formats.ts's own
+    // comment: there is no legal way to author a real .rar fixture to
+    // verify reading against in this environment, and 7z can only ever read
+    // the format, never write it. This proves the exclusion is real: a
+    // client that tries anyway gets the ordinary 415, not a 500 from some
+    // half-wired code path.
+    const response = await upload(server.baseUrl, 'archive.rar', Buffer.from('Rar!\x1a\x07\x00'), {
+      target: 'zip',
+    });
+    assert.equal(response.status, 415);
+    expectJsonEnvelope(response, 415, 'E_UNSUPPORTED');
+  });
+
+  describe('malicious archives are refused, not silently sanitised', () => {
+    it('refuses a zip-slip attempt and never writes outside the workspace', async () => {
+      const canary = '/tmp/converter-archive-slip-canary';
+      await fsp.rm(canary, { recursive: true, force: true }).catch(() => {});
+
+      const evil = await buildZipSlipFixture();
+      const response = await upload(server.baseUrl, 'evil.zip', evil, { target: 'tar' });
+
+      // Either the pipeline refused outright, or (7z's own sanitisation)
+      // it succeeded but landed everything inside the extraction directory -
+      // what must NEVER happen is the canary file appearing outside it.
+      const canaryExists = await fsp
+        .access(canary)
+        .then(() => true)
+        .catch(() => false);
+      assert.equal(canaryExists, false, 'zip-slip entry escaped the workspace');
+      await fsp.rm(canary, { recursive: true, force: true }).catch(() => {});
+
+      if (response.status !== 200) {
+        expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+      }
+    });
+
+    it('refuses an archive containing a symlink', async () => {
+      const evil = await buildSymlinkEscapeFixture();
+      const response = await upload(server.baseUrl, 'evil.zip', evil, { target: 'tar' });
+      assert.equal(response.status, 500);
+      expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+    });
+
+    it('refuses an archive with more entries than the cap', async () => {
+      const { MAX_ARCHIVE_ENTRIES } = await import('../src/config.ts');
+      const evil = await buildEntryCountBombFixture(MAX_ARCHIVE_ENTRIES + 1);
+      const response = await upload(server.baseUrl, 'evil.zip', evil, { target: 'tar' });
+      assert.equal(response.status, 500);
+      expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+    });
+
+    it('refuses an archive whose declared size is a decompression bomb', async () => {
+      const { MAX_ARCHIVE_UNCOMPRESSED_BYTES } = await import('../src/config.ts');
+      const evil = await buildDeclaredSizeBombFixture(MAX_ARCHIVE_UNCOMPRESSED_BYTES + 1024 * 1024);
+      const response = await upload(server.baseUrl, 'evil.zip', evil, { target: 'tar' });
+      assert.equal(response.status, 500);
+      expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+    });
+
+    it('refuses a password-protected archive as encrypted, not as a generic failure', async () => {
+      const encrypted = await buildEncryptedZipFixture('Secret123');
+      const response = await upload(server.baseUrl, 'protected.zip', encrypted, { target: 'tar' });
+      assert.equal(response.status, 422);
+      expectJsonEnvelope(response, 422, 'E_ENCRYPTED');
+    });
+  });
+
+  it('deletes the workspace after an archive conversion', async () => {
+    const before_ = await listWorkspaces();
+    const zip = await buildArchiveFixture('zip', { 'a.txt': 'hello' });
+    await upload(server.baseUrl, 'archive.zip', zip, { target: 'tar' });
     assert.deepEqual(await listWorkspaces(), before_);
   });
 });

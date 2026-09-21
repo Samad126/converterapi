@@ -262,6 +262,47 @@ export const MAX_PSD_DECODE_BYTES = intFromEnv('MAX_PSD_DECODE_BYTES', 192 * MB,
 export const MAX_LAYER_OUTPUT_BYTES = intFromEnv('MAX_LAYER_OUTPUT_BYTES', 48 * MB, 1024);
 
 /**
+ * `SEVENZIP_BIN`: the archive engine (`.zip`/`.tar`/`.tar.gz`/`.tar.bz2`/
+ * `.tar.xz`/`.gz`/`.bz2`/`.xz`/`.7z`/`.iso` sources, `zip`/`tar`/`tar.gz`/
+ * `tar.bz2`/`7z` targets) - a fourth conversion engine, running `7z` as a
+ * subprocess exactly as `soffice`/`pandoc`/`pdf_engine.py` are. See
+ * `archive.service.ts`.
+ */
+export const SEVENZIP_BIN = process.env.SEVENZIP_BIN ?? '7z';
+
+/**
+ * Ceiling on how many entries one archive may unpack into.
+ *
+ * The direct analogue of MAX_PSD_LAYERS/MAX_TABLES: unpacking is genuinely new
+ * ground for this service (see `archive.service.ts`'s own header comment for
+ * why that is a hazard on its own), and a reader that unpacks one file per
+ * archive entry - which is what a conversion has to do - pays a cost per
+ * entry before it has produced anything. An archive of a hundred thousand
+ * zero-byte files is a real, easy-to-build attack, not a hypothetical one.
+ */
+export const MAX_ARCHIVE_ENTRIES = intFromEnv('MAX_ARCHIVE_ENTRIES', 5_000, 1);
+
+/**
+ * Ceiling on the total DECLARED uncompressed size of everything an archive
+ * unpacks to, in bytes.
+ *
+ * This is the decompression-bomb bound, and it is checked against `7z l
+ * -slt`'s own declared sizes BEFORE any entry is extracted - the same
+ * "refuse before doing the work" shape MAX_DOCUMENT_XML_BYTES and
+ * MAX_PSD_DECODE_BYTES use, for the same reason: the declared number is
+ * exactly what a bomb lies about, and checking it after extraction has
+ * already spent the disk and CPU the check exists to avoid spending. 512MB
+ * is generously above anything a 25MB upload legitimately expands to at
+ * ordinary compression ratios, while comfortably under the container's
+ * `mem_limit: 1g` alongside MAX_CONCURRENT_CONVERSIONS.
+ */
+export const MAX_ARCHIVE_UNCOMPRESSED_BYTES = intFromEnv(
+  'MAX_ARCHIVE_UNCOMPRESSED_BYTES',
+  512 * MB,
+  1024,
+);
+
+/**
  * The page-manipulation endpoints (`/pdf/merge`, `/pdf/split`, `/pdf/
  * remove-pages`, `/pdf/extract-pages`, `/pdf/organize`, `/pdf/scan-to-pdf`)
  * accept more than one file, so `MAX_UPLOAD_BYTES` alone does not bound a

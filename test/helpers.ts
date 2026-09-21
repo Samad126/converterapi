@@ -307,6 +307,147 @@ export async function buildLegacyFixture(
   }
 }
 
+/** Run a tool to completion in `cwd`, throwing on a non-zero exit. */
+async function runTool(bin: string, args: string[], cwd: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    execFile(bin, args, { cwd, timeout: 60_000 }, (error, _stdout, stderr) =>
+      error ? reject(new Error(`${bin} ${args.join(' ')} failed: ${error.message}\n${stderr}`)) : resolve(),
+    );
+  });
+}
+
+/**
+ * A real, ordinary `.zip`/`.tar`/`.7z` fixture - built with `7z`/`tar`
+ * themselves, the same real-tool-not-hand-rolled-bytes trade
+ * `buildPptxFixture`/`buildLegacyFixture` already make, for the same reason:
+ * these are container formats with real structure, and a fixture that is not
+ * itself real proves nothing about whether the service reads real ones.
+ */
+export async function buildArchiveFixture(
+  format: 'zip' | 'tar' | '7z',
+  files: Record<string, string>,
+): Promise<Buffer> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-archive-'));
+  try {
+    const srcDir = join(dir, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      const full = join(srcDir, name);
+      await fsp.mkdir(join(full, '..'), { recursive: true });
+      await fsp.writeFile(full, content);
+    }
+    const outPath = join(dir, `out.${format}`);
+    const typeFlag = format === 'zip' ? '-tzip' : format === 'tar' ? '-ttar' : '-t7z';
+    await runTool('7z', ['a', typeFlag, outPath, `${srcDir}/.`], dir);
+    return await fsp.readFile(outPath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** A real ISO 9660 image, built with `genisoimage`. */
+export async function buildIsoFixture(files: Record<string, string>): Promise<Buffer> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-iso-'));
+  try {
+    const srcDir = join(dir, 'src');
+    await fsp.mkdir(srcDir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      await fsp.writeFile(join(srcDir, name), content);
+    }
+    const outPath = join(dir, 'out.iso');
+    await runTool('genisoimage', ['-quiet', '-r', '-o', outPath, srcDir], dir);
+    return await fsp.readFile(outPath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * A password-protected `.zip`, built with `7z`.
+ *
+ * For the "an encrypted archive is refused, not silently skipped" test -
+ * `archive.service.ts`'s own `validateEntries` refuses the whole conversion
+ * the moment `7z l -slt` reports `Encrypted = +` on any entry.
+ */
+export async function buildEncryptedZipFixture(password: string): Promise<Buffer> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-enczip-'));
+  try {
+    const filePath = join(dir, 'secret.txt');
+    await fsp.writeFile(filePath, 'top secret');
+    const outPath = join(dir, 'out.zip');
+    await runTool('7z', ['a', `-p${password}`, '-mem=AES256', outPath, filePath], dir);
+    return await fsp.readFile(outPath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Malicious archives, built with Python's standard `zipfile` module rather
+ * than this project's own `zip.ts` - `zip.ts`'s `safeEntryName` would
+ * sanitise away the exact hostile names these fixtures need to exist for the
+ * test to mean anything, so a genuinely untrusted-in-the-wild zip writer is
+ * the right tool here, the same way `soffice` is the right tool for a
+ * fixture that needs to be a real `.ppt`.
+ */
+async function buildViaPython(script: string): Promise<Buffer> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-malzip-'));
+  try {
+    const outPath = join(dir, 'out.zip');
+    await runTool('python3', ['-c', script.replace('{{OUT}}', outPath)], dir);
+    return await fsp.readFile(outPath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** A zip entry named to escape the extraction directory via `../..`. */
+export function buildZipSlipFixture(): Promise<Buffer> {
+  return buildViaPython(`
+import zipfile
+with zipfile.ZipFile('{{OUT}}', 'w') as z:
+    z.writestr('normal.txt', 'hello')
+    z.writestr('../../../../tmp/converter-archive-slip-canary/pwned.txt', 'evil traversal')
+`);
+}
+
+/** A zip entry that is a symlink pointing outside the archive. */
+export function buildSymlinkEscapeFixture(): Promise<Buffer> {
+  return buildViaPython(`
+import zipfile, stat
+zi = zipfile.ZipInfo('evil_link')
+zi.create_system = 3
+zi.external_attr = (stat.S_IFLNK | 0o777) << 16
+with zipfile.ZipFile('{{OUT}}', 'w') as z:
+    z.writestr(zi, '/etc/passwd')
+`);
+}
+
+/** A zip with more entries than `MAX_ARCHIVE_ENTRIES` should allow. */
+export function buildEntryCountBombFixture(count: number): Promise<Buffer> {
+  return buildViaPython(`
+import zipfile
+with zipfile.ZipFile('{{OUT}}', 'w') as z:
+    for i in range(${count}):
+        z.writestr(f'f{i}.txt', '')
+`);
+}
+
+/**
+ * A single entry whose declared uncompressed size is far over
+ * `MAX_ARCHIVE_UNCOMPRESSED_BYTES`, backed by real (highly compressible)
+ * bytes rather than a hand-patched lie - so the fixture is small on disk
+ * while the declared size the central directory reports is genuinely huge,
+ * exactly what `7z l -slt` (and any real decompression bomb) looks like.
+ */
+export function buildDeclaredSizeBombFixture(declaredBytes: number): Promise<Buffer> {
+  return buildViaPython(`
+import zipfile
+with zipfile.ZipFile('{{OUT}}', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.writestr('bomb.bin', b'0' * ${declaredBytes})
+`);
+}
+
 /**
  * Read the entry names out of a ZIP, via its central directory.
  *
@@ -342,6 +483,45 @@ export function zipEntryNames(archive: Buffer): string[] {
   }
 
   return names;
+}
+
+/**
+ * The entry names in a `.tar`, via the real `tar` binary - reading the
+ * format ourselves is not worth a second implementation when the system
+ * `tar` is already a dependency this test suite can assume, the same way
+ * `pdftotext` below is assumed for reading a PDF's text.
+ */
+export async function tarEntryNames(archive: Buffer): Promise<string[]> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-tarread-'));
+  try {
+    const path = join(dir, 'in.tar');
+    await fsp.writeFile(path, archive);
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile('tar', ['-tf', path], { cwd: dir }, (error, stdout, stderr) =>
+        error ? reject(new Error(`tar -tf failed: ${error.message}\n${stderr}`)) : resolve(stdout),
+      );
+    });
+    return output.split('\n').filter((line) => line.trim() !== '');
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Does a real `.tar.gz` contain a given file, via the real `tar` binary? */
+export async function tarGzContainsFile(archive: Buffer, name: string): Promise<boolean> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-targzread-'));
+  try {
+    const path = join(dir, 'in.tar.gz');
+    await fsp.writeFile(path, archive);
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile('tar', ['-tzf', path], { cwd: dir }, (error, stdout, stderr) =>
+        error ? reject(new Error(`tar -tzf failed: ${error.message}\n${stderr}`)) : resolve(stdout),
+      );
+    });
+    return output.split('\n').some((line) => line.trim() === name);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /**

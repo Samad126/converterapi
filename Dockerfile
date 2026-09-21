@@ -105,10 +105,23 @@ FROM node:22-bookworm-slim AS runtime
 # reader (confirmed with `pandoc --list-input-formats`), which is why `.adoc`
 # is not in the matrix - see the note at the top of that file.
 #
+# p7zip-full is a SEVENTH, unrelated engine: `7z`, for the archive sources
+# (.zip/.tar/.tgz/.tbz2/.txz/.gz/.bz2/.xz/.7z/.iso) reaching zip/tar/
+# tar.gz/tar.bz2/7z. Converting an archive to another archive format means
+# genuinely unpacking untrusted bytes to disk - new ground for this service,
+# see `archive.service.ts`'s own header comment for the mitigations that
+# exist because of it (list-before-extract, symlinks refused outright, path
+# traversal checked ourselves ahead of 7z's own defence, per-request
+# workspace isolation, only a zero exit is trusted). RAR (`.rar`) is
+# deliberately not in the matrix: `7z` can only ever read it, never write
+# it, and there is no legal way to author a real `.rar` fixture to verify
+# reading against - see the note on `.rar` in formats.ts.
+#
 # The service refuses to boot without any of this. Preflight checks soffice,
-# `pdftoppm`, `pandoc` and the fonts, and then converts one real document per
-# family (plus one pandoc case) before it listens - so a missing module fails
-# loudly at startup rather than on some user's first spreadsheet, days later.
+# `pdftoppm`, `pandoc`, `7z` and the fonts, and then converts one real
+# document per family (plus one pandoc case and one archive case) before it
+# listens - so a missing module fails loudly at startup rather than on some
+# user's first spreadsheet, days later.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer \
@@ -127,6 +140,7 @@ RUN apt-get update \
       python3-pip \
       qpdf \
       pandoc \
+      p7zip-full \
       tesseract-ocr \
       tesseract-ocr-eng \
       tesseract-ocr-aze \

@@ -229,6 +229,46 @@ export function markdownProbe(): Buffer {
 }
 
 // ---------------------------------------------------------------------------
+// Archive: a minimal, real .tar (one entry, ustar format)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single-entry USTAR archive, hand-built rather than shelled out to `tar`
+ * so the boot-time warm-up case does not depend on the very engine it is
+ * meant to prove works. Verified against both GNU `tar` and `7z l`/`7z x`
+ * reading it correctly - see the archive-engine tests.
+ *
+ * USTAR's header is a fixed 512-byte block: null-padded ASCII fields at
+ * fixed offsets, an octal size, an octal checksum computed with the checksum
+ * field itself treated as eight spaces, and a magic `"ustar\0"` at byte 257.
+ * The archive ends with two all-zero 512-byte blocks.
+ */
+export function tarProbe(): Buffer {
+  const name = 'probe.txt';
+  const data = Buffer.from(`${PROBE_TEXT}\n${PROBE_FONTS}\n`, 'utf8');
+
+  const header = Buffer.alloc(512);
+  header.write(name, 0, 'ascii');
+  header.write('0000644\0', 100, 'ascii'); // mode
+  header.write('0000000\0', 108, 'ascii'); // uid
+  header.write('0000000\0', 116, 'ascii'); // gid
+  header.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124, 'ascii'); // size
+  header.write('00000000000\0', 136, 'ascii'); // mtime
+  header.write('        ', 148, 'ascii'); // checksum: spaces while computing
+  header.write('0', 156, 'ascii'); // typeflag: regular file
+  header.write('ustar\0', 257, 'ascii');
+  header.write('00', 263, 'ascii'); // ustar version
+
+  let checksum = 0;
+  for (let i = 0; i < header.length; i += 1) checksum += header[i]!;
+  header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 'ascii');
+
+  const padded = Buffer.alloc((512 - (data.length % 512)) % 512);
+  const endMarker = Buffer.alloc(1024);
+  return Buffer.concat([header, data, padded, endMarker]);
+}
+
+// ---------------------------------------------------------------------------
 // A minimal PNG, for tests of the raster pipeline's output checks
 // ---------------------------------------------------------------------------
 

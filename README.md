@@ -75,6 +75,9 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
 | `.rst` `.tex` `.textile` `.org` `.opml` `.muse` `.ipynb` | DOCX, HTML, ODT, RTF, TXT, Markdown |
 | `.md` | DOCX, HTML, ODT, RTF, TXT |
+| `.zip` | TAR, TAR.GZ, TAR.BZ2, 7Z |
+| `.tar` `.tgz` `.tbz2` `.txz` `.gz` `.bz2` `.xz` `.iso` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (minus whichever is its own format) |
+| `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2 |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
 `.xlsm` are legacy or variant extensions LibreOffice already opens through
@@ -135,6 +138,86 @@ deliberately **not** wired up either. It is a large, separate dependency with
 its own failure modes, and anyone who needs a PDF from Markdown already has a
 faithful path: `.md` → `docx` (through this engine) → `pdf` (through the
 already-verified, already-running LibreOffice `docx`→`pdf` filter).
+
+### Archive sources: `7z`, and why unpacking gets extra rules
+
+`.zip`, `.tar`, `.tgz`, `.tbz2`, `.txz`, `.gz`, `.bz2`, `.xz`, `.7z` and
+`.iso` convert to `zip`/`tar`/`tar.gz`/`tar.bz2`/`7z` through
+[`archive.service.ts`](src/services/archive.service.ts), which runs `7z`
+(p7zip) as a subprocess - a fourth non-LibreOffice engine.
+
+This is the one place in the service that genuinely **unpacks** untrusted
+bytes to disk. [`unzip.ts`](src/lib/unzip.ts)'s own header comment states the
+house rule everywhere else in the codebase follows: *"we look up ONE entry by
+name and return its bytes. We never list the archive, never write anything to
+disk, and never build a path out of a name that came from inside the file.
+Zip-slip is a hazard of unpacking, and we do not unpack."* Converting an
+archive to another archive format breaks that rule on purpose - there is no
+way to repack a `.zip` as a `.tar` without putting its files somewhere first
+- so the mitigations that rule made unnecessary everywhere else exist here
+instead:
+
+1. **List before extracting.** `7z l -slt` reports every entry's declared
+   path, size and attributes without writing a single byte to disk. The
+   whole conversion is refused - before any extraction runs - if the entry
+   count is over `MAX_ARCHIVE_ENTRIES` (default 5,000), if the total declared
+   uncompressed size is over `MAX_ARCHIVE_UNCOMPRESSED_BYTES` (default
+   512MB), if any entry's path escapes the extraction directory, or if any
+   entry is a symlink.
+2. **Every symlink is refused outright**, not merely "not followed" - a
+   symlink inside an archive being converted serves no purpose this feature
+   needs. This is a second, independent check ahead of `7z`'s own: this
+   build of `7z` already refuses to write a symlink whose target would
+   escape the extraction directory (`ERROR: Dangerous link path was ignored`,
+   a non-zero exit), verified by hand against a real crafted archive.
+3. **Path traversal is checked ourselves too**, ahead of `7z`'s own defence
+   (also verified by hand: on Linux, `7z x` writes a `../../escape` entry
+   name *inside* the extraction directory rather than resolving it against
+   one - it does not treat `..` in an archived path as an instruction to
+   escape). A path is rejected if any segment is `.` or `..`, or if it is
+   absolute.
+4. **Every entry lands in a dedicated, per-request subdirectory** of the
+   workspace `createWorkspace()` already gives every request - the same
+   isolation and `0700` permissions every other engine gets.
+5. **Only `7z`'s exit code is trusted.** A non-zero exit - whether it is one
+   skipped entry's warning or a hard failure - fails the whole conversion,
+   rather than trying to tell "a warning that's fine" from "a warning that
+   matters" apart from stderr text, which the CLI does not promise to make a
+   reliable distinction on.
+
+All five are exercised against real, hand-crafted malicious archives in
+[`test/integration.test.ts`](test/integration.test.ts)'s archive-engine
+section - a zip-slip attempt, a symlink escaping the extraction directory, an
+entry-count bomb, a declared-size decompression bomb, and a password-protected
+archive (refused as `E_ENCRYPTED`, not a generic failure) - not just asserted
+in the abstract.
+
+**`.tar.gz`/`.tar.bz2`/`.tar.xz` are not extensions of their own.** Node's
+`extname()` (what the upload filter uses) only ever returns the *last*
+extension, so a `report.tar.gz` upload is already accepted as `.gz` - which
+reads correctly, because the extraction is content-based, not name-based: it
+detects a first pass that produced a single `.tar` file and recurses into it
+once, whatever the upload was actually called. `.tgz`/`.tbz2`/`.txz` are
+listed as their own source extensions because those *are* single, whole
+extensions `extname()` returns intact.
+
+**RAR (`.rar`) is deliberately not in the matrix**, as either a source or a
+target. `7z` can read it (`7z i` lists both `Rar` and `Rar5` as recognised),
+but there is no legal way to author a real `.rar` fixture to verify that
+reading against - the format's writer is a proprietary tool, unlike every
+other format here - so it stays out until someone can actually test it, the
+same reasoning `.pub` was left out of the legacy-Office extensions for.
+Writing `.rar` was never in scope regardless: `7z`/p7zip can only ever read
+the format, never write it.
+
+**`zip` is written by this codebase's own [`zip.ts`](src/lib/zip.ts)**, not
+another `7z` subprocess call - the project's standing rule is that a format
+describable in a few hundred lines does not justify a dependency, and
+`zip.ts` already is that description, trusted and in use elsewhere (the
+raster/layers targets' multi-file responses). `7z` writes everything
+`zip.ts` does not: `tar`, `7z`, and (in two steps, since one `7z a` call
+cannot write a compound format directly - verified by hand) `tar.gz`/
+`tar.bz2`.
 
 A request for a target that exists but is not reachable from your source is a
 `415` whose message lists what that source *can* become. A target that does not
@@ -344,7 +427,8 @@ npm start          # http://localhost:3001
 
 The service **refuses to boot** if LibreOffice is missing, if the rasteriser is
 missing, if the metric-compatible fonts are not installed, if the PDF
-engine's Python dependencies are not importable, or if `qpdf` is missing — see
+engine's Python dependencies are not importable, if `qpdf` is missing, if
+`pandoc` is missing, or if `7z` is missing — see
 [Fonts](#fonts-and-why-they-are-not-optional). A missing `tesseract` is the
 one exception: it is logged as a warning at boot, not a boot refusal, because
 OCR is a best-effort enhancement to a target that already works without it —
@@ -355,11 +439,15 @@ On a bare Debian/Ubuntu box:
 sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
   poppler-utils \
   fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation fontconfig \
-  python3 python3-pip qpdf \
+  python3 python3-pip qpdf pandoc p7zip-full \
   tesseract-ocr tesseract-ocr-eng tesseract-ocr-aze tesseract-ocr-tur tesseract-ocr-rus
 sudo fc-cache -f
 pip3 install --break-system-packages pdf2docx pdfplumber python-pptx openpyxl python-docx ocrmypdf
 ```
+
+Running the test suite additionally needs `genisoimage` (or `xorriso`), to
+build a real `.iso` fixture for the archive-engine tests:
+`sudo apt-get install -y genisoimage`.
 
 All four LibreOffice modules are required, not just the writer. They are
 separate packages, and a machine with only `libreoffice-writer` converts every
@@ -1686,6 +1774,12 @@ import filters this service exercises. **Treat a conversion failure as an
 expected, normal event, not an incident** — and assume that a sufficiently
 determined attacker can eventually find a way to run code inside the container.
 
+The archive engine (`.zip`/`.tar`/... → `zip`/`tar`/...) additionally
+**unpacks** untrusted bytes to disk, which nothing else in this service does —
+see [Archive sources](#archive-sources-7z-and-why-unpacking-gets-extra-rules)
+for the zip-slip, symlink and decompression-bomb mitigations that exist
+specifically because of it.
+
 The design assumption is therefore *not* "the parser is safe" but "the parser
 will be compromised, and it should be worth very little":
 
@@ -1919,15 +2013,17 @@ The test suite is `node:test` — no test framework dependency.
 
 | File | Covers |
 |---|---|
-| [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
+| [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, legacy Office extensions, pandoc's markup sources, the archive engine (including malicious-archive rejection), oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
+| [`test/archive.test.ts`](test/archive.test.ts) | `validateEntries`'s pre-extraction arithmetic directly: the entry-count and declared-size caps, path-traversal and symlink rejection, encrypted-entry detection — the same hand-built-list-not-real-multi-hundred-MB-file shape `test/tables.test.ts` uses for `readZipEntry`'s own bomb defence. |
 | [`test/unit.test.ts`](test/unit.test.ts) | Matrix self-consistency, prototype-safe lookups, the ZIP writer and its zip-slip guard, the probe-document builders, queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
 | [`test/timeout.test.ts`](test/timeout.test.ts) | The 90s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
 | [`test/preflight.test.ts`](test/preflight.test.ts) | The boot refusal, by starting the real entry point with a broken environment — a missing `soffice`, a missing `pdftoppm`, and an unresolvable `fc-match`. |
 | [`test/openapi.test.ts`](test/openapi.test.ts) | That [`openapi.yaml`](openapi.yaml) still describes this service: codes, exact messages, upload limit, and the responses the endpoints really return. |
 | [`test/fixtures.ts`](test/fixtures.ts) | Binary fixtures built in code — including hand-built OLE/CFB containers, since there is no way to produce a password-protected document without a copy of Word or a checked-in blob. |
 
-The suite needs a working `soffice` and `pdftoppm` but **not** the fonts: the
-tests exercise the HTTP contract, which holds either way, so they run through
+The suite needs a working `soffice`, `pdftoppm`, `pandoc` and `7z`, plus
+`genisoimage` for the one `.iso` fixture, but **not** the fonts: the tests
+exercise the HTTP contract, which holds either way, so they run through
 `createApp()` rather than `startServer()` and skip preflight.
 
 Documents used as test input are built in code rather than checked in — a

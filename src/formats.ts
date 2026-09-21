@@ -62,7 +62,12 @@ export type TargetId =
   | 'tables'
   | 'layers'
   | 'pdfa'
-  | 'markdown';
+  | 'markdown'
+  | 'zip'
+  | 'tar'
+  | 'tar.gz'
+  | 'tar.bz2'
+  | '7z';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -102,7 +107,31 @@ export type AllowedExtension =
   | '.org'
   | '.opml'
   | '.muse'
-  | '.ipynb';
+  | '.ipynb'
+  | '.zip'
+  | '.tar'
+  | '.tgz'
+  | '.tbz2'
+  | '.txz'
+  | '.gz'
+  | '.bz2'
+  | '.xz'
+  | '.7z'
+  | '.iso';
+
+/**
+ * RAR (`.rar`) is deliberately not an accepted extension. `7z` can read it
+ * (`7z i` lists both `Rar` and `Rar5` as recognised formats), but there is no
+ * legal way to author a REAL `.rar` fixture to verify that reading against in
+ * this environment - the format's writer is a proprietary tool, unlike every
+ * other archive format here. Same reasoning as `.pub` in the legacy-Office
+ * extensions above: not trusted until run against a real file, and there is
+ * no real file to run it against yet.
+ *
+ * Writing `.rar` was never in scope regardless: even CloudConvert's own
+ * public catalogue routes RAR *creation* through a separate, proprietary,
+ * credit-gated engine - `7z`/p7zip can only read the format, never write it.
+ */
 
 /**
  * The pandoc-readable markup/plain-text sources - see `pandoc.service.ts`.
@@ -123,6 +152,31 @@ export const MARKUP_EXTENSIONS: readonly AllowedExtension[] = [
   '.opml',
   '.muse',
   '.ipynb',
+];
+
+/**
+ * The archive-engine sources - see `archive.service.ts`.
+ *
+ * `.tar.gz`/`.tar.bz2`/`.tar.xz` are deliberately NOT extensions of their
+ * own: `extname()` (used by the upload filter - see
+ * `middleware/convert-upload.ts`) only ever returns the LAST extension, so a
+ * `report.tar.gz` upload is already accepted as `.gz`, which reads correctly
+ * because `archive.service.ts`'s extraction is content-based, not name-based
+ * - it recurses into a compound source's inner `.tar` regardless of what the
+ * outer file was called. `.tgz`/`.tbz2`/`.txz` are listed here because those
+ * ARE single, whole extensions `extname()` returns intact.
+ */
+export const ARCHIVE_EXTENSIONS: readonly AllowedExtension[] = [
+  '.zip',
+  '.tar',
+  '.tgz',
+  '.tbz2',
+  '.txz',
+  '.gz',
+  '.bz2',
+  '.xz',
+  '.7z',
+  '.iso',
 ];
 
 export interface TargetFormat {
@@ -147,6 +201,12 @@ export interface TargetFormat {
    *     whole, which is what makes a PSD's layers available as images. The
    *     engine is named by `extractFrom` rather than by a filter, and it is
    *     this mode that makes the service more than a LibreOffice front end.
+   *   - `archive` - `7z` (p7zip), run as a subprocess: the source archive is
+   *     listed, validated and unpacked, then the resulting file tree is
+   *     packed into the target format. See `archive.service.ts` for why this
+   *     is NOT the same shape as `extract` - it genuinely unpacks untrusted
+   *     bytes to disk, which `extract` never does. `archiveWriter` names
+   *     which writer `conversion.service.ts` calls for it.
    *
    * `mode` describes the LIBREOFFICE-OR-NOT route a target normally takes.
    * `engineFrom`, below, is orthogonal to it: `docx`/`pptx`/`xlsx` are
@@ -165,15 +225,23 @@ export interface TargetFormat {
    * `tables` and `layers` are both extracts and one answers with a single
    * workbook while the other answers with an archive.
    */
-  mode: 'direct' | 'raster' | 'extract';
+  mode: 'direct' | 'raster' | 'extract' | 'archive';
+  /**
+   * `mode: 'archive'` only: which writer `archive.service.ts` calls.
+   * `'zip'` goes through `zip.ts`'s own `zipDeflated`, not a `7z` subprocess
+   * - see `createArchive`'s own comment for why. Absent for every other mode.
+   */
+  archiveWriter?: 'zip' | 'tar' | 'tar.gz' | 'tar.bz2' | '7z';
   /**
    * Does this target answer with a ZIP of several files rather than one file?
    *
    * Declared rather than derived, because it is not derivable: a raster target
    * is always `true` (one image per page, and it archives even for a
    * single-page source so that the response type does not depend on how many
-   * slides the upload happened to have), a direct target is always `false`, and
-   * the two extract targets differ from each other in exactly this respect.
+   * slides the upload happened to have), a direct target is always `false`,
+   * an archive target is always `false` too (the response IS the one archive
+   * file the client asked for, not a wrapper around several), and the two
+   * extract targets differ from each other in exactly this respect.
    * `validateMatrix` pins the two fixed cases so a target cannot contradict
    * itself here.
    *
@@ -546,6 +614,60 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // the id `'markdown'` - so it would not have caught this on its own).
     engineFrom: { pdf: ['.pdf'], pandoc: MARKUP_EXTENSIONS.filter((ext) => ext !== '.md') },
   },
+  zip: {
+    id: 'zip',
+    extension: '.zip',
+    // The SAME media type the raster/layers targets already answer with for
+    // a multi-file ZIP - not a new ambiguity, because `multiple: false` here
+    // is what tells them apart: this response IS the one file the client
+    // asked for, not several files wrapped in one.
+    mediaType: 'application/zip',
+    label: 'ZIP',
+    mode: 'archive',
+    archiveWriter: 'zip',
+    multiple: false,
+    filters: {},
+  },
+  tar: {
+    id: 'tar',
+    extension: '.tar',
+    mediaType: 'application/x-tar',
+    label: 'TAR',
+    mode: 'archive',
+    archiveWriter: 'tar',
+    multiple: false,
+    filters: {},
+  },
+  'tar.gz': {
+    id: 'tar.gz',
+    extension: '.tar.gz',
+    mediaType: 'application/gzip',
+    label: 'TAR.GZ',
+    mode: 'archive',
+    archiveWriter: 'tar.gz',
+    multiple: false,
+    filters: {},
+  },
+  'tar.bz2': {
+    id: 'tar.bz2',
+    extension: '.tar.bz2',
+    mediaType: 'application/x-bzip2',
+    label: 'TAR.BZ2',
+    mode: 'archive',
+    archiveWriter: 'tar.bz2',
+    multiple: false,
+    filters: {},
+  },
+  '7z': {
+    id: '7z',
+    extension: '.7z',
+    mediaType: 'application/x-7z-compressed',
+    label: '7Z',
+    mode: 'archive',
+    archiveWriter: '7z',
+    multiple: false,
+    filters: {},
+  },
 };
 
 export interface SourceFormat {
@@ -882,6 +1004,64 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     mediaType: 'application/x-ipynb+json',
     targets: ['docx', 'html', 'odt', 'rtf', 'txt', 'markdown'],
   },
+  '.zip': {
+    extension: '.zip',
+    // No `family`: `7z`, not LibreOffice, reads every source in this group -
+    // see `archive.service.ts`. `zip` itself is excluded from `targets`
+    // (caught by the matrix's own self-target check, since this extension's
+    // stripped form is exactly the `zip` id).
+    mediaType: 'application/zip',
+    targets: ['tar', 'tar.gz', 'tar.bz2', '7z'],
+  },
+  '.tar': {
+    extension: '.tar',
+    mediaType: 'application/x-tar',
+    targets: ['zip', 'tar.gz', 'tar.bz2', '7z'],
+  },
+  '.tgz': {
+    extension: '.tgz',
+    mediaType: 'application/gzip',
+    targets: ['zip', 'tar', 'tar.bz2', '7z'],
+  },
+  '.tbz2': {
+    extension: '.tbz2',
+    mediaType: 'application/x-bzip2',
+    targets: ['zip', 'tar', 'tar.gz', '7z'],
+  },
+  '.txz': {
+    extension: '.txz',
+    mediaType: 'application/x-xz',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+  },
+  '.gz': {
+    extension: '.gz',
+    mediaType: 'application/gzip',
+    // A bare `.gz` (one compressed file, not a tarball) offers the same five
+    // targets as every other archive source: `archive.service.ts`'s
+    // extraction is generic over "how many files came out", not specific to
+    // tar's own container shape.
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+  },
+  '.bz2': {
+    extension: '.bz2',
+    mediaType: 'application/x-bzip2',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+  },
+  '.xz': {
+    extension: '.xz',
+    mediaType: 'application/x-xz',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+  },
+  '.7z': {
+    extension: '.7z',
+    mediaType: 'application/x-7z-compressed',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2'],
+  },
+  '.iso': {
+    extension: '.iso',
+    mediaType: 'application/x-iso9660-image',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -931,7 +1111,7 @@ export interface ResolvedConversion {
    * back to `target.mode`, so it never has to ask "but which route did THIS
    * one take" any other way.
    */
-  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc';
+  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc' | 'archive';
 }
 
 /**
@@ -967,6 +1147,13 @@ export function resolveConversion(
     // the two lists agree - so reaching here means the extractor can read this
     // source, or the matrix is broken and would have thrown at import.
     return { source, target, convertTo: '', engine: 'extract' };
+  }
+
+  if (target.mode === 'archive') {
+    // Also family-less, like `extract` above - `7z`, not LibreOffice, reads
+    // and writes every pair this mode covers, so there is no filter to look
+    // up and no family to require.
+    return { source, target, convertTo: '', engine: 'archive' };
   }
 
   // Everything below asks LibreOffice to do the work, so a source it cannot
@@ -1089,6 +1276,17 @@ export function validateMatrix(): void {
     if (target.mode === 'direct' && target.multiple) {
       problems.push(`direct target "${id}" declares itself an archive but writes one file`);
     }
+    if (target.mode === 'archive' && target.multiple) {
+      problems.push(
+        `archive target "${id}" declares itself a multi-file response, but the response IS the one archive`,
+      );
+    }
+    if (target.mode === 'archive' && !target.archiveWriter) {
+      problems.push(`archive target "${id}" declares no archiveWriter`);
+    }
+    if (target.mode !== 'archive' && target.archiveWriter) {
+      problems.push(`target "${id}" declares archiveWriter but is not an archive target`);
+    }
 
     if (target.mode === 'extract') {
       // An extract target names its own sources, so it is the only target
@@ -1173,7 +1371,13 @@ export function validateMatrix(): void {
       const reachesViaEngine =
         (TARGETS[targetId].engineFrom?.pdf?.includes(ext as AllowedExtension) ?? false) ||
         (TARGETS[targetId].engineFrom?.pandoc?.includes(ext as AllowedExtension) ?? false);
-      if (TARGETS[targetId].mode !== 'extract' && !reachesViaEngine && !source.family) {
+      const isArchiveTarget = TARGETS[targetId].mode === 'archive';
+      if (
+        TARGETS[targetId].mode !== 'extract' &&
+        !isArchiveTarget &&
+        !reachesViaEngine &&
+        !source.family
+      ) {
         problems.push(
           `source "${ext}" has no family but advertises "${targetId}", which LibreOffice must produce`,
         );
