@@ -856,6 +856,36 @@ describe('POST /convert/<target> - image transcode engine (ffmpeg)', () => {
     expectJsonEnvelope(asJpg, 415, 'E_UNSUPPORTED_TARGET');
   });
 
+  it('converts a real PNG to a real single-file JPEG via jpg-image', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const response = await upload(server.baseUrl, 'photo.png', png, { target: 'jpg-image' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/jpeg');
+    // JPEG magic: FF D8 FF.
+    assert.equal(response.body.subarray(0, 3).toString('hex'), 'ffd8ff');
+  });
+
+  it('converts a real JPEG to a real single-file PNG via png-image', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const jpeg = await buildImageFixture(png, 'jpg');
+    const response = await upload(server.baseUrl, 'photo.jpg', jpeg, { target: 'png-image' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'image/png');
+    assert.equal(response.body.subarray(1, 4).toString('ascii'), 'PNG');
+  });
+
+  it('does not offer .png the jpg-image target as png-image (no self-conversion), but .jpeg can reach jpg-image', async () => {
+    const png = buildSolidPng(16, 16, [10, 90, 200]);
+    const selfPng = await upload(server.baseUrl, 'photo.png', png, { target: 'png-image' });
+    assert.equal(selfPng.status, 415);
+    expectJsonEnvelope(selfPng, 415, 'E_UNSUPPORTED_TARGET');
+
+    const jpeg = await buildImageFixture(png, 'jpg');
+    const jpegToJpgImage = await upload(server.baseUrl, 'photo.jpeg', jpeg, { target: 'jpg-image' });
+    assert.equal(jpegToJpgImage.status, 200);
+    assert.equal(jpegToJpgImage.contentType, 'image/jpeg');
+  });
+
   it('still reaches pdf from a plain image upload, unaffected by the new transcode targets', async () => {
     const png = buildSolidPng(16, 16, [10, 90, 200]);
     const response = await upload(server.baseUrl, 'photo.png', png, { target: 'pdf' });

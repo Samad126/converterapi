@@ -73,7 +73,9 @@ export type TargetId =
   | 'tiff'
   | 'webp'
   | 'avif'
-  | 'ico';
+  | 'ico'
+  | 'png-image'
+  | 'jpg-image';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -132,27 +134,28 @@ export type AllowedExtension =
   | '.ico';
 
 /**
- * There is deliberately no `image` target reaching the `png`/`jpg` ids.
- * Those two already mean something fixed and load-bearing: "one image PER
- * PAGE of a presentation or PDF, always answered as a ZIP" (`mode:
- * 'raster'`, `multiple: true` - see `TargetFormat.mode`'s own comment). A
- * plain image source converting to a single PNG/JPEG file is a genuinely
- * different operation - one file in, one file out, never an archive - and
- * `multiple` is a property of the TARGET ID, fixed across every source that
- * reaches it, not something a pair can override. Reusing `png`/`jpg` for
- * this would mean either breaking that promise for existing raster
- * consumers or wrapping a single transcoded image in a one-entry ZIP, which
- * is a worse response for the common case a person asking to "convert my
- * BMP to PNG" actually wants.
+ * `png-image`/`jpg-image` reach a single transcoded PNG/JPEG file - and are
+ * NOT the same thing `png`/`jpg` mean elsewhere in this table. Those two
+ * ids already mean something fixed and load-bearing: "one image PER PAGE of
+ * a presentation or PDF, always answered as a ZIP" (`mode: 'raster'`,
+ * `multiple: true` - see `TargetFormat.mode`'s own comment). A plain image
+ * source converting to a single PNG/JPEG file is a genuinely different
+ * operation - one file in, one file out, never an archive - and `multiple`
+ * is a property of the TARGET ID, fixed across every source that reaches
+ * it, not something a pair can override. Reusing `png`/`jpg` for this would
+ * mean either breaking that promise for existing raster consumers or
+ * wrapping a single transcoded image in a one-entry ZIP, which is a worse
+ * response for the common case a person asking to "convert my BMP to PNG"
+ * actually wants.
  *
  * The codebase's own precedent for exactly this shape of collision is
  * `tables` vs `xlsx` and `layers` vs `png`: a differently-shaped operation
  * gets its own name rather than a second meaning bolted onto an existing
- * one. Minting a same-shaped id like a hypothetical `png-image`/`jpg-image`
- * would follow that precedent but adds two non-obvious URL segments for a
- * need nobody has asked for yet - so for this pass, image-to-PNG/JPEG
- * specifically is left out. `bmp`/`gif`/`tiff`/`webp`/`avif`/`ico` are not
- * this problem: none of them collides with an existing id.
+ * one - `png-image`/`jpg-image` follow it the same way. First left out of
+ * an earlier pass of this feature as a need nobody had asked for yet; added
+ * once someone did (a person converting a plain image expects to be able to
+ * ask for PNG or JPEG, which is the single most common image conversion
+ * there is).
  */
 
 /**
@@ -222,7 +225,16 @@ export const ARCHIVE_EXTENSIONS: readonly AllowedExtension[] = [
  * One list, referenced by every image source, so that a new transcode
  * target is one line here rather than a change to seven different sources.
  */
-const TRANSCODE_TARGETS: readonly TargetId[] = ['bmp', 'gif', 'tiff', 'webp', 'avif', 'ico'];
+const TRANSCODE_TARGETS: readonly TargetId[] = [
+  'bmp',
+  'gif',
+  'tiff',
+  'webp',
+  'avif',
+  'ico',
+  'png-image',
+  'jpg-image',
+];
 
 export interface TargetFormat {
   id: TargetId;
@@ -786,6 +798,28 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: false,
     filters: {},
   },
+  'png-image': {
+    id: 'png-image',
+    extension: '.png',
+    mediaType: 'image/png',
+    // Distinct from `png`'s label for the same reason `tables` is distinct
+    // from `xlsx`: a 415 or a bad target id gets answered with a list of
+    // labels, and "PNG" appearing twice in one sentence tells the reader
+    // nothing about which one they wanted.
+    label: 'PNG (image)',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  'jpg-image': {
+    id: 'jpg-image',
+    extension: '.jpg',
+    mediaType: 'image/jpeg',
+    label: 'JPG (image)',
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
 };
 
 export interface SourceFormat {
@@ -1030,21 +1064,27 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // `pdf` via the Draw family (soffice), the rest via `ffmpeg` - two
     // engines, one source, exactly like `.pdf` itself reaches `pdfa`/`png`/
     // `jpg` through Draw and `docx`/`pptx`/`xlsx`/`markdown` through a
-    // second engine entirely.
-    targets: ['pdf', ...TRANSCODE_TARGETS],
+    // second engine entirely. `png-image` is excluded: a PNG "converting"
+    // to a single PNG is not a conversion this service should advertise.
+    targets: ['pdf', ...TRANSCODE_TARGETS.filter((id) => id !== 'png-image')],
   },
   '.jpg': {
     extension: '.jpg',
     family: 'draw',
     mediaType: 'image/jpeg',
     importFilter: 'draw_jpg_Import',
-    targets: ['pdf', ...TRANSCODE_TARGETS],
+    // Same exclusion as `.png` above, for `jpg-image` this time.
+    targets: ['pdf', ...TRANSCODE_TARGETS.filter((id) => id !== 'jpg-image')],
   },
   '.jpeg': {
     extension: '.jpeg',
     family: 'draw',
     mediaType: 'image/jpeg',
     importFilter: 'draw_jpg_Import',
+    // `.jpeg` keeps `jpg-image` in its list, unlike `.jpg` above: the two
+    // extensions are the same format, but `.jpeg` -> `jpg-image` is a real
+    // normalising conversion (a different spelling of the extension in, a
+    // `.jpg` out) rather than a source becoming its own literal extension.
     targets: ['pdf', ...TRANSCODE_TARGETS],
   },
   '.psd': {

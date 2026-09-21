@@ -71,7 +71,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.txt` | PDF, DOCX, ODT |
 | `.html` `.htm` | PDF, DOCX, ODT |
 | `.rtf` | DOCX, PDF, ODT |
-| `.png` `.jpg` `.jpeg` | PDF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO (see below) |
+| `.png` `.jpg` `.jpeg` | PDF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/PNG (image)/JPG (image) (see below) |
 | `.psd` | PNG (one image per layer) |
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
 | `.rst` `.tex` `.textile` `.org` `.opml` `.muse` `.ipynb` | DOCX, HTML, ODT, RTF, TXT, Markdown |
@@ -224,27 +224,29 @@ cannot write a compound format directly - verified by hand) `tar.gz`/
 ### Image sources: `ffmpeg`, and the PNG/JPG target that is deliberately missing
 
 `.bmp`, `.gif`, `.tiff`, `.webp`, `.avif` and `.ico` convert to
-`bmp`/`gif`/`tiff`/`webp`/`avif`/`ico` through
+`bmp`/`gif`/`tiff`/`webp`/`avif`/`ico`/`png-image`/`jpg-image` through
 [`ffmpeg.service.ts`](src/services/ffmpeg.service.ts), a fifth non-LibreOffice
 engine. `.png`, `.jpg` and `.jpeg` - already sources, but previously reaching
-only `pdf` - now reach all six of these too.
+only `pdf` - now reach all eight of these too (minus their own format:
+`.png` does not offer `png-image`, `.jpg` does not offer `jpg-image` - see
+below).
 
-**There is no `image -> png` or `image -> jpg` target, and that is
-deliberate, not a gap.** Those two ids already mean something fixed and
-load-bearing: "one image PER PAGE of a presentation or PDF, always answered
-as a ZIP" (`mode: 'raster'`, `multiple: true`). `multiple` is a property of
-the TARGET ID, fixed across every source that reaches it, not something one
-pair can override - so a plain image converting to a single PNG file (one
-file in, one file out, never an archive) cannot reuse `png`/`jpg` without
-either breaking that promise for existing raster consumers or wrapping a
-single transcoded image in a one-entry ZIP, which is a worse response for
-the ordinary case. This codebase's own precedent for exactly this shape of
-collision is `tables` vs `xlsx` and `layers` vs `png`: a differently-shaped
-operation gets its own name rather than a second meaning bolted onto an
-existing one. Minting new ids (something like `png-image`/`jpg-image`) would
-follow that precedent but adds two non-obvious URL segments for a need
-nobody has asked for yet, so for now it stays out - see the comment above
-`AllowedExtension` in `formats.ts` for the fuller reasoning.
+**`png-image`/`jpg-image` are NOT `png`/`jpg`.** Those two existing ids
+already mean something fixed and load-bearing: "one image PER PAGE of a
+presentation or PDF, always answered as a ZIP" (`mode: 'raster'`,
+`multiple: true`). `multiple` is a property of the TARGET ID, fixed across
+every source that reaches it, not something one pair can override - so a
+plain image converting to a single PNG file (one file in, one file out,
+never an archive) cannot reuse `png`/`jpg` without either breaking that
+promise for existing raster consumers or wrapping a single transcoded image
+in a one-entry ZIP, which is a worse response for the ordinary case. This
+codebase's own precedent for exactly this shape of collision is `tables` vs
+`xlsx` and `layers` vs `png`: a differently-shaped operation gets its own
+name rather than a second meaning bolted onto an existing one -
+`png-image`/`jpg-image` follow it the same way. (An earlier pass of this
+feature left the two out entirely as a need nobody had asked for yet; a
+plain "convert my PNG to JPG" request is common enough that leaving it out
+was the actual gap, not the conservative choice.)
 
 **`-frames:v 1 -update 1` is mandatory on every `ffmpeg` call, not
 cosmetic.** Without it, a GIF or WEBP source - which ffmpeg decodes as a
