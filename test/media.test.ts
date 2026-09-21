@@ -59,6 +59,40 @@ describe('POST /media/{target} - audio', () => {
     assert.equal(download.contentType, 'audio/flac');
     assert.equal(download.body.subarray(0, 4).toString('ascii'), 'fLaC');
   });
+
+  it('converts WAV to OPUS', async () => {
+    const wav = await buildMediaFixture('audio', 'wav');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.wav', wav, 'opus');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'audio/opus');
+    assert.equal(download.body.subarray(0, 4).toString('ascii'), 'OggS');
+  });
+
+  it('converts WAV to AIFF', async () => {
+    const wav = await buildMediaFixture('audio', 'wav');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.wav', wav, 'aiff');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'audio/aiff');
+    assert.equal(download.body.subarray(0, 4).toString('ascii'), 'FORM');
+  });
+
+  it('converts WAV to M4B', async () => {
+    const wav = await buildMediaFixture('audio', 'wav');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.wav', wav, 'm4b');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'audio/mp4');
+    // An MP4-family container: 'ftyp' box tag sits at byte offset 4.
+    assert.equal(download.body.subarray(4, 8).toString('ascii'), 'ftyp');
+  });
 });
 
 describe('POST /media/{target} - video', () => {

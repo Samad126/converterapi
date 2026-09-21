@@ -643,6 +643,22 @@ describe('POST /convert/<target> - archive engine (7z)', () => {
     assert.equal(names.sort().join(','), 'a.txt,sub/,sub/b.txt');
   });
 
+  it('converts a real ZIP to a real CBZ, preserving the page files', async () => {
+    const zip = await buildArchiveFixture('zip', { '001.jpg': 'page one', '002.jpg': 'page two' });
+    const response = await upload(server.baseUrl, 'comic.zip', zip, { target: 'cbz' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/vnd.comicbook+zip');
+    assert.deepEqual(zipEntryNames(response.body).sort(), ['001.jpg', '002.jpg']);
+  });
+
+  it('reads a real CBZ back as a ZIP', async () => {
+    const cbz = await buildArchiveFixture('zip', { '001.jpg': 'page one' });
+    const response = await upload(server.baseUrl, 'comic.cbz', cbz, { target: 'zip' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/zip');
+    assert.deepEqual(zipEntryNames(response.body), ['001.jpg']);
+  });
+
   it('converts a real TAR to a real ZIP', async () => {
     const tar = await buildArchiveFixture('tar', { 'one.txt': 'one', 'dir/two.txt': 'two' });
     const response = await upload(server.baseUrl, 'archive.tar', tar, { target: 'zip' });

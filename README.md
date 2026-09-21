@@ -76,9 +76,10 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
 | `.rst` `.tex` `.textile` `.org` `.opml` `.muse` `.ipynb` | DOCX, HTML, ODT, RTF, TXT, Markdown |
 | `.md` | DOCX, HTML, ODT, RTF, TXT |
-| `.zip` | TAR, TAR.GZ, TAR.BZ2, 7Z |
-| `.tar` `.tgz` `.tbz2` `.txz` `.gz` `.bz2` `.xz` `.iso` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (minus whichever is its own format) |
-| `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2 |
+| `.zip` | TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ |
+| `.tar` `.tgz` `.tbz2` `.txz` `.gz` `.bz2` `.xz` `.iso` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ (minus whichever is its own format) |
+| `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2, CBZ |
+| `.cbz` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (a CBZ is a plain ZIP of page images under a comic-reader extension, so it rides the same archive engine) |
 | `.bmp` `.gif` `.tiff` `.webp` `.avif` `.ico` | BMP/GIF/TIFF/WEBP/AVIF/ICO (minus whichever is its own format) |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
@@ -675,8 +676,8 @@ curl https://converterapi.example.com/media/jobs/<id>
 curl https://converterapi.example.com/media/jobs/<id>/download -o lecture.mp3
 ```
 
-**Formats.** Audio: `mp3`, `wav`, `flac`, `ogg`, `aac`, `m4a`, `wma`. Video:
-`mp4`, `webm`, `mkv`, `avi`, `mov`, `flv`. A source only ever reaches a
+**Formats.** Audio: `mp3`, `wav`, `flac`, `ogg`, `aac`, `m4a`, `wma`, `opus`,
+`aiff`, `m4b`. Video: `mp4`, `webm`, `mkv`, `avi`, `mov`, `flv`. A source only ever reaches a
 target of the SAME kind (audio to audio, video to video) — extracting an
 audio track from a video file is a real, different feature this endpoint
 does not offer. This list is deliberately smaller than audio/video support

@@ -75,7 +75,8 @@ export type TargetId =
   | 'avif'
   | 'ico'
   | 'png-image'
-  | 'jpg-image';
+  | 'jpg-image'
+  | 'cbz';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -131,7 +132,8 @@ export type AllowedExtension =
   | '.tiff'
   | '.webp'
   | '.avif'
-  | '.ico';
+  | '.ico'
+  | '.cbz';
 
 /**
  * `png-image`/`jpg-image` reach a single transcoded PNG/JPEG file - and are
@@ -216,6 +218,11 @@ export const ARCHIVE_EXTENSIONS: readonly AllowedExtension[] = [
   '.xz',
   '.7z',
   '.iso',
+  // `.cbz` is a comic-book archive - a plain ZIP of page images under a
+  // reader-recognised extension, nothing more - so it rides this exact
+  // engine unchanged: `7z`/`zipDeflated` neither know nor care what the
+  // files inside happen to be.
+  '.cbz',
 ];
 
 /**
@@ -731,6 +738,25 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: false,
     filters: {},
   },
+  cbz: {
+    id: 'cbz',
+    extension: '.cbz',
+    mediaType: 'application/vnd.comicbook+zip',
+    label: 'CBZ',
+    /**
+     * The same `zip` writer every other `zip`-shaped target already uses
+     * (`archiveWriter: 'zip'` goes through `zip.ts`'s `zipDeflated`, never a
+     * `7z` subprocess - see `createArchive`'s own comment for why). A CBZ
+     * IS a ZIP; the extension is the only thing that makes a comic reader
+     * recognise it as one, so there is no separate writer to build - this
+     * target exists to put that recognised extension on an otherwise
+     * ordinary `zip` archive job.
+     */
+    mode: 'archive',
+    archiveWriter: 'zip',
+    multiple: false,
+    filters: {},
+  },
   bmp: {
     id: 'bmp',
     extension: '.bmp',
@@ -1173,27 +1199,27 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // (caught by the matrix's own self-target check, since this extension's
     // stripped form is exactly the `zip` id).
     mediaType: 'application/zip',
-    targets: ['tar', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.tar': {
     extension: '.tar',
     mediaType: 'application/x-tar',
-    targets: ['zip', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.tgz': {
     extension: '.tgz',
     mediaType: 'application/gzip',
-    targets: ['zip', 'tar', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar', 'tar.bz2', '7z', 'cbz'],
   },
   '.tbz2': {
     extension: '.tbz2',
     mediaType: 'application/x-bzip2',
-    targets: ['zip', 'tar', 'tar.gz', '7z'],
+    targets: ['zip', 'tar', 'tar.gz', '7z', 'cbz'],
   },
   '.txz': {
     extension: '.txz',
     mediaType: 'application/x-xz',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.gz': {
     extension: '.gz',
@@ -1202,26 +1228,34 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // targets as every other archive source: `archive.service.ts`'s
     // extraction is generic over "how many files came out", not specific to
     // tar's own container shape.
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.bz2': {
     extension: '.bz2',
     mediaType: 'application/x-bzip2',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.xz': {
     extension: '.xz',
     mediaType: 'application/x-xz',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.7z': {
     extension: '.7z',
     mediaType: 'application/x-7z-compressed',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'cbz'],
   },
   '.iso': {
     extension: '.iso',
     mediaType: 'application/x-iso9660-image',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+  },
+  '.cbz': {
+    extension: '.cbz',
+    // A CBZ is a plain ZIP under a comic-reader extension - same engine,
+    // same validation, as every other archive source. Excludes `cbz` itself
+    // (self-target check) but otherwise offers exactly what `.zip` does.
+    mediaType: 'application/vnd.comicbook+zip',
     targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
   },
   '.bmp': {

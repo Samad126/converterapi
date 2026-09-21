@@ -11,19 +11,23 @@
  * extracting an audio track from a video file is a real, different feature
  * this endpoint does not offer).
  *
- * THE INITIAL SET IS DELIBERATELY SMALLER THAN AUDIO/VIDEO SUPPORT COULD
- * IN PRINCIPLE COVER. Every extension below was verified by hand against the
- * real `ffmpeg` build this service runs - both reading and writing it -
- * before being added, the same standard every other format in this service
- * is held to. The wider lists CloudConvert's own catalogue advertises for
- * audio/video (`aac`/`ac3`/`aiff`/`amr`/`au`/`caf`/`flac`/`m4a`/`m4b`/`mp3`/
- * `oga`/`ogg`/`opus`/`voc`/`wav`/`weba`/`wma` for audio;
- * `avi`/`flv`/`m4v`/`mkv`/`mov`/`mp4`/`mpeg`/`mpg`/`ogv`/`rm`/`rmvb`/`swf`/
- * `ts`/`vob`/`webm`/`wmv` and the rarer `3g2`/`3gp`/`cavs`/`dv`/`m2ts`/
- * `mod`/`mts`/`mxf`/`wtv` for video) are all, in principle, formats this
- * same generic `ffmpeg` mechanism could reach - adding one is a single line
- * in the relevant list below, verified against a real file the same way
- * every entry here already was, not a new engine or a new code path.
+ * THE SET IS DELIBERATELY SMALLER THAN AUDIO/VIDEO SUPPORT COULD IN
+ * PRINCIPLE COVER. Every extension below was verified by hand against the
+ * real `ffmpeg` build this service runs - both reading and writing it, with
+ * the exact zero-flags `-y -i in out` command `runFfmpegMedia` actually
+ * issues (no per-pair codec/rate args exist to paper over a default that
+ * fails) - before being added, the same standard every other format in this
+ * service is held to. `.3gp` was tried and deliberately left out this pass:
+ * ffmpeg's default muxer for it picks `libopencore_amrnb`, which hard-fails
+ * on anything but an 8kHz source, and this engine has no per-pair resampling
+ * to fix that with. The remaining CloudConvert-catalogue formats not yet
+ * here (`ac3`/`amr`/`au`/`caf`/`oga`/`voc`/`weba` for audio;
+ * `avi`/`flv`/`m4v`/`mpeg`/`mpg`/`ogv`/`rm`/`rmvb`/`swf`/`ts`/`vob`/`wmv` and
+ * the rarer `3g2`/`cavs`/`dv`/`m2ts`/`mod`/`mts`/`mxf`/`wtv` for video) are
+ * all, in principle, formats this same generic `ffmpeg` mechanism could
+ * reach - adding one is a single line in the relevant list below, verified
+ * against a real file the same way every entry here already was, not a new
+ * engine or a new code path.
  */
 
 export type MediaKind = 'audio' | 'video';
@@ -36,6 +40,9 @@ export type MediaExtension =
   | '.aac'
   | '.m4a'
   | '.wma'
+  | '.opus'
+  | '.aiff'
+  | '.m4b'
   | '.mp4'
   | '.webm'
   | '.mkv'
@@ -51,6 +58,9 @@ export type MediaTargetId =
   | 'aac'
   | 'm4a'
   | 'wma'
+  | 'opus'
+  | 'aiff'
+  | 'm4b'
   | 'mp4'
   | 'webm'
   | 'mkv'
@@ -81,6 +91,9 @@ const MEDIA_FORMATS: Readonly<Record<MediaTargetId, MediaFormat>> = {
   aac: { extension: '.aac', id: 'aac', kind: 'audio', mediaType: 'audio/aac', label: 'AAC' },
   m4a: { extension: '.m4a', id: 'm4a', kind: 'audio', mediaType: 'audio/mp4', label: 'M4A' },
   wma: { extension: '.wma', id: 'wma', kind: 'audio', mediaType: 'audio/x-ms-wma', label: 'WMA' },
+  opus: { extension: '.opus', id: 'opus', kind: 'audio', mediaType: 'audio/opus', label: 'OPUS' },
+  aiff: { extension: '.aiff', id: 'aiff', kind: 'audio', mediaType: 'audio/aiff', label: 'AIFF' },
+  m4b: { extension: '.m4b', id: 'm4b', kind: 'audio', mediaType: 'audio/mp4', label: 'M4B' },
   mp4: { extension: '.mp4', id: 'mp4', kind: 'video', mediaType: 'video/mp4', label: 'MP4' },
   webm: { extension: '.webm', id: 'webm', kind: 'video', mediaType: 'video/webm', label: 'WEBM' },
   mkv: {
