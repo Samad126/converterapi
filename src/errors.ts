@@ -27,6 +27,7 @@ export type ErrorCode =
   | 'E_TOO_LARGE'
   | 'E_NO_TABLES'
   | 'E_NO_LAYERS'
+  | 'E_NOT_TABULAR'
   | 'E_BAD_PAGE_RANGE'
   | 'E_TOO_FEW_FILES'
   | 'E_WRONG_PASSWORD'
@@ -176,6 +177,25 @@ export const Errors = {
       'E_NO_LAYERS',
       422,
       'This PSD file does not contain any layers with images that can be extracted.',
+    ),
+
+  /**
+   * The source parsed fine - it is a real, valid JSON/YAML/JSONL document -
+   * and simply is not shaped the way `targetLabel` needs: CSV/TSV can only
+   * represent a top-level array of flat objects, and JSONL needs at least a
+   * top-level array (see `data.service.ts`'s own header comment for why).
+   * This document is a single object, a bare scalar, or - for CSV/TSV - an
+   * array with nesting inside it. The same distinction as
+   * E_NO_TABLES/E_NO_LAYERS, for the same reason: nothing here is damaged,
+   * so the generic "could not be converted" would be the wrong explanation.
+   * `shapeRequirement` names the specific rule that was not met, since the
+   * two targets this covers do not share exactly one.
+   */
+  notTabular: (targetLabel: string, shapeRequirement: string) =>
+    new AppError(
+      'E_NOT_TABULAR',
+      422,
+      `This document is not ${shapeRequirement}, so it cannot become ${targetLabel}.`,
     ),
 
   /**

@@ -46,6 +46,7 @@ import { ClientGoneError, Errors } from '../errors.ts';
 import {
   archivesFiles,
   pdfFilterFor,
+  type AllowedExtension,
   type ResolvedConversion,
   type TargetFormat,
   type TargetId,
@@ -57,6 +58,7 @@ import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
 import { zipDeflated } from '../lib/zip.ts';
 import { collectTreeFiles, createArchive, extractArchiveTree } from './archive.service.ts';
+import { parseDataSource, serializeDataTarget } from './data.service.ts';
 import { runFfmpeg } from './ffmpeg.service.ts';
 import { PANDOC_WRITERS, runPandoc } from './pandoc.service.ts';
 import {
@@ -158,6 +160,8 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
         return runPandocPipeline({ inputPath, outDir, workspace, target, signal, deadline });
       case 'extract':
         return runExtractPipeline({ inputPath, target, signal, deadline });
+      case 'data':
+        return runDataPipeline({ inputPath, sourceExtension: source.extension, target, signal });
       case 'archive':
         return runArchivePipeline({ inputPath, outDir, workspace, target, signal, deadline });
       case 'ffmpeg':
@@ -552,6 +556,35 @@ async function extractLayersToArchive(run: {
     ...extraction.layers.map((layer) => ({ name: layer.file, data: layer.data })),
     { name: MANIFEST_FILENAME, data: manifestJson(extraction.manifest) },
   ];
+}
+
+// ---------------------------------------------------------------------------
+// engine: CSV/TSV/JSON/JSONL/YAML asking for another data format, answered
+// by data.service.ts - pure JS, no subprocess
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the source into `data.service.ts`'s common JS value and write the
+ * target's own serialisation of it. Shaped like `runExtractPipeline`, not
+ * like `runFfmpegPipeline`/`runArchivePipeline`: there is no subprocess, no
+ * deadline for one to respect, and no output directory for a process to
+ * write into - the whole conversion is one function call, so the only thing
+ * worth checking before it runs is whether the client is still there.
+ */
+async function runDataPipeline(run: {
+  inputPath: string;
+  sourceExtension: AllowedExtension;
+  target: TargetFormat;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, sourceExtension, target, signal } = run;
+  if (signal?.aborted) throw new ClientGoneError();
+
+  const text = await fsp.readFile(inputPath, 'utf8');
+  const value = parseDataSource(sourceExtension, text);
+  const serialized = serializeDataTarget(target.id, value);
+
+  return [{ name: `converted${target.extension}`, data: Buffer.from(serialized, 'utf8') }];
 }
 
 // ---------------------------------------------------------------------------

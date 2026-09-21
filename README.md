@@ -67,7 +67,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.odg` | PDF |
 | `.ods` | PDF, XLSX |
 | `.odp` | PDF, PPTX, PNG/JPG (one image per slide) |
-| `.csv` | XLSX, ODS, PDF |
+| `.csv` | XLSX, ODS, PDF, plus TSV/JSON/YAML/JSONL (see below) |
 | `.txt` | PDF, DOCX, ODT |
 | `.html` `.htm` | PDF, DOCX, ODT |
 | `.rtf` | DOCX, PDF, ODT |
@@ -82,6 +82,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.cbz` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (a CBZ is a plain ZIP of page images under a comic-reader extension, so it rides the same archive engine) |
 | `.bmp` `.gif` `.tiff` `.webp` `.avif` `.ico` | BMP/GIF/TIFF/WEBP/AVIF/ICO (minus whichever is its own format) |
 | `.srt` `.vtt` `.ass` `.ssa` | SRT/VTT/ASS/SSA (minus whichever is its own format) |
+| `.tsv` `.json` `.yaml` `.yml` `.jsonl` | CSV, plus TSV/JSON/YAML/JSONL (minus whichever is its own format) |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
 `.xlsm` are legacy or variant extensions LibreOffice already opens through

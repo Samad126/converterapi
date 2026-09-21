@@ -999,6 +999,96 @@ describe('POST /convert/<target> - subtitle transcode engine (ffmpeg)', () => {
   });
 });
 
+describe('POST /convert/<target> - data engine (JSON/YAML/CSV/TSV/JSONL)', () => {
+  const csvFixture = Buffer.from('name,age\nAda,36\nGrace,85\n', 'utf8');
+  const jsonFixture = Buffer.from(
+    JSON.stringify([
+      { name: 'Ada', age: 36 },
+      { name: 'Grace', age: 85 },
+    ]),
+    'utf8',
+  );
+  const yamlFixture = Buffer.from('- name: Ada\n  age: 36\n- name: Grace\n  age: 85\n', 'utf8');
+  const jsonlFixture = Buffer.from(
+    '{"name":"Ada","age":36}\n{"name":"Grace","age":85}\n',
+    'utf8',
+  );
+
+  it('converts a real CSV to real JSON, preserving every row', async () => {
+    const response = await upload(server.baseUrl, 'people.csv', csvFixture, { target: 'json' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/json; charset=utf-8');
+    const parsed = JSON.parse(response.body.toString('utf8'));
+    assert.deepEqual(parsed, [
+      { name: 'Ada', age: '36' },
+      { name: 'Grace', age: '85' },
+    ]);
+  });
+
+  it('converts a real JSON array of records to real CSV', async () => {
+    const response = await upload(server.baseUrl, 'people.json', jsonFixture, { target: 'csv' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'text/csv; charset=utf-8');
+    assert.equal(response.body.toString('utf8'), 'name,age\r\nAda,36\r\nGrace,85\r\n');
+  });
+
+  it('converts a real YAML document to real TSV', async () => {
+    const response = await upload(server.baseUrl, 'people.yaml', yamlFixture, { target: 'tsv' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'text/tab-separated-values; charset=utf-8');
+    assert.equal(response.body.toString('utf8'), 'name\tage\r\nAda\t36\r\nGrace\t85\r\n');
+  });
+
+  it('converts a real JSONL stream to real YAML', async () => {
+    const response = await upload(server.baseUrl, 'people.jsonl', jsonlFixture, { target: 'yaml' });
+    assert.equal(response.status, 200);
+    assert.equal(response.contentType, 'application/yaml; charset=utf-8');
+    const text = response.body.toString('utf8');
+    assert.match(text, /name: Ada/);
+    assert.match(text, /age: 36/);
+  });
+
+  it('converts real CSV with a quoted, comma-containing field to JSON and back to CSV', async () => {
+    const withComma = Buffer.from('city,note\nParis,"hello, world"\n', 'utf8');
+    const toJson = await upload(server.baseUrl, 'notes.csv', withComma, { target: 'json' });
+    assert.equal(toJson.status, 200);
+    assert.deepEqual(JSON.parse(toJson.body.toString('utf8')), [{ city: 'Paris', note: 'hello, world' }]);
+
+    const backToCsv = await upload(server.baseUrl, 'notes.json', toJson.body, { target: 'csv' });
+    assert.equal(backToCsv.status, 200);
+    assert.equal(backToCsv.body.toString('utf8'), 'city,note\r\nParis,"hello, world"\r\n');
+  });
+
+  it('refuses a non-tabular JSON document asking for CSV, with a specific reason', async () => {
+    const singleObject = Buffer.from(JSON.stringify({ name: 'Ada', age: 36 }), 'utf8');
+    const response = await upload(server.baseUrl, 'person.json', singleObject, { target: 'csv' });
+    assert.equal(response.status, 422);
+    expectJsonEnvelope(response, 422, 'E_NOT_TABULAR');
+  });
+
+  it('refuses malformed JSON with a conversion failure, not a crash', async () => {
+    const broken = Buffer.from('{not valid json', 'utf8');
+    const response = await upload(server.baseUrl, 'broken.json', broken, { target: 'yaml' });
+    assert.equal(response.status, 500);
+    expectJsonEnvelope(response, 500, 'E_CONVERT_FAILED');
+  });
+
+  it('does not offer a data source its own format as a target', async () => {
+    const response = await upload(server.baseUrl, 'people.json', jsonFixture, { target: 'json' });
+    assert.equal(response.status, 415);
+    expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
+  });
+
+  it('still reaches xlsx/ods/pdf from a .csv upload through the ordinary LibreOffice route', async () => {
+    const response = await upload(server.baseUrl, 'people.csv', csvFixture, { target: 'xlsx' });
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.contentType,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+  });
+});
+
 describe('POST /convert/tables', () => {
   /** Read one part back out of the workbook the server sent. */
   function workbookPart(body: Buffer, name: string): string {

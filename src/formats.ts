@@ -80,7 +80,11 @@ export type TargetId =
   | 'srt'
   | 'vtt'
   | 'ass'
-  | 'ssa';
+  | 'ssa'
+  | 'json'
+  | 'yaml'
+  | 'tsv'
+  | 'jsonl';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -141,7 +145,12 @@ export type AllowedExtension =
   | '.srt'
   | '.vtt'
   | '.ass'
-  | '.ssa';
+  | '.ssa'
+  | '.json'
+  | '.yaml'
+  | '.yml'
+  | '.tsv'
+  | '.jsonl';
 
 /**
  * `png-image`/`jpg-image` reach a single transcoded PNG/JPEG file - and are
@@ -281,6 +290,29 @@ const TRANSCODE_TARGETS: readonly TargetId[] = [
  */
 const SUBTITLE_TRANSCODE_TARGETS: readonly TargetId[] = ['srt', 'vtt', 'ass', 'ssa'];
 
+/**
+ * The data-interchange target ids - `data.service.ts`, pure JS, no
+ * subprocess. A third flat list, alongside `TRANSCODE_TARGETS` and
+ * `SUBTITLE_TRANSCODE_TARGETS`, for the same reason those two are kept
+ * apart from each other: mixing kinds would let an image or a subtitle
+ * source claim `json` as a target, which nothing about `mode: 'data'` alone
+ * would stop.
+ *
+ * `csv` is deliberately NOT in this list, even though it is a full member
+ * of the group every other source here reaches it as a target and is
+ * reached BY as a source. It is the one id in this group that already
+ * existed before this group did - `TARGETS.csv` is a `direct` LibreOffice
+ * export (`.docx`/`.xlsx` -> CSV via Calc), and that route is untouched.
+ * A source in THIS group reaches it through `TARGETS.csv.engineFrom.data`
+ * instead - the same second-route shape `docx`/`xlsx`/`markdown` already
+ * use for their PDF/pandoc engine routes - so `resolveConversion` never has
+ * to choose between two conflicting definitions of what "csv" means.
+ */
+const DATA_TARGETS: readonly TargetId[] = ['tsv', 'json', 'yaml', 'jsonl'];
+
+/** Every data-engine source extension, `csv` included - see `DATA_TARGETS`'s own comment for why `csv` the TARGET id is handled separately from `csv` the SOURCE extension. */
+const DATA_EXTENSIONS: readonly AllowedExtension[] = ['.csv', '.tsv', '.json', '.yaml', '.yml', '.jsonl'];
+
 export interface TargetFormat {
   id: TargetId;
   /** Extension of a produced file, including the dot. */
@@ -309,11 +341,16 @@ export interface TargetFormat {
    *     is NOT the same shape as `extract` - it genuinely unpacks untrusted
    *     bytes to disk, which `extract` never does. `archiveWriter` names
    *     which writer `conversion.service.ts` calls for it.
-   *   - `transcode` - `ffmpeg`, run as a subprocess: one image format
-   *     straight to another, with no document family to key a filter on -
-   *     unlike `soffice`'s `direct` mode, `ffmpeg` is a flat format-to-format
-   *     tool, so there is nothing for a per-family filter table to express.
-   *     See `ffmpeg.service.ts`.
+   *   - `transcode` - `ffmpeg`, run as a subprocess: one image (or subtitle)
+   *     format straight to another, with no document family to key a filter
+   *     on - unlike `soffice`'s `direct` mode, `ffmpeg` is a flat
+   *     format-to-format tool, so there is nothing for a per-family filter
+   *     table to express. See `ffmpeg.service.ts`.
+   *   - `data` - pure JS, no subprocess at all: CSV/TSV/JSON/JSONL/YAML,
+   *     read into one common JS value and written back out. Flat like
+   *     `transcode`, for the same reason (no document family applies), but
+   *     its own mode rather than folded into `transcode` because nothing
+   *     here is `ffmpeg` - see `data.service.ts`.
    *
    * `mode` describes the LIBREOFFICE-OR-NOT route a target normally takes.
    * `engineFrom`, below, is orthogonal to it: `docx`/`pptx`/`xlsx` are
@@ -332,7 +369,7 @@ export interface TargetFormat {
    * `tables` and `layers` are both extracts and one answers with a single
    * workbook while the other answers with an archive.
    */
-  mode: 'direct' | 'raster' | 'extract' | 'archive' | 'transcode';
+  mode: 'direct' | 'raster' | 'extract' | 'archive' | 'transcode' | 'data';
   /**
    * `mode: 'archive'` only: which writer `archive.service.ts` calls.
    * `'zip'` goes through `zip.ts`'s own `zipDeflated`, not a `7z` subprocess
@@ -386,11 +423,14 @@ export interface TargetFormat {
   /**
    * Sources that reach this target through a non-LibreOffice engine instead
    * of through `filters` - today, a PDF (via `pdf_engine.py`, see
-   * `pdf-engine.service.ts`) reaching `docx`/`pptx`/`xlsx`/`markdown`, and
-   * the pandoc-readable markup formats (via `pandoc.service.ts`) reaching
-   * `docx`/`html`/`odt`/`rtf`/`txt`/`markdown`.
+   * `pdf-engine.service.ts`) reaching `docx`/`pptx`/`xlsx`/`markdown`, the
+   * pandoc-readable markup formats (via `pandoc.service.ts`) reaching
+   * `docx`/`html`/`odt`/`rtf`/`txt`/`markdown`, and the OTHER data-engine
+   * formats (via `data.service.ts`) reaching `csv` - see `DATA_TARGETS`'s
+   * own comment for why `csv` needs this rather than just being `mode:
+   * 'data'` outright.
    *
-   * Keyed by engine rather than a flat list, because there are now two
+   * Keyed by engine rather than a flat list, because there are now three
    * independent non-LibreOffice engines and a source can only ever reach a
    * given target through ONE of them - `resolveConversion` needs to know
    * which, so it knows which service to call. `ResolvedConversion.engine`
@@ -413,6 +453,7 @@ export interface TargetFormat {
   engineFrom?: {
     pdf?: readonly AllowedExtension[];
     pandoc?: readonly AllowedExtension[];
+    data?: readonly AllowedExtension[];
   };
 }
 
@@ -554,6 +595,12 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     //   save cell contents as shown (true).
     // Without them the export uses the process locale's separator and encoding.
     filters: { calc: 'Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true' },
+    // The other data-engine formats (`.tsv`/`.json`/`.yaml`/`.yml`/`.jsonl`)
+    // reach CSV through `data.service.ts` rather than through `filters` -
+    // see `DATA_TARGETS`'s own comment for why `csv` keeps its existing
+    // `direct` LibreOffice route for `.docx`/`.xlsx` untouched rather than
+    // becoming `mode: 'data'` outright.
+    engineFrom: { data: DATA_EXTENSIONS.filter((ext) => ext !== '.csv') },
   },
   odp: {
     id: 'odp',
@@ -828,6 +875,50 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'text/x-ssa',
     label: 'SSA',
     mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  tsv: {
+    id: 'tsv',
+    extension: '.tsv',
+    mediaType: 'text/tab-separated-values; charset=utf-8',
+    label: 'TSV',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  json: {
+    id: 'json',
+    extension: '.json',
+    mediaType: 'application/json; charset=utf-8',
+    label: 'JSON',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  yaml: {
+    id: 'yaml',
+    extension: '.yaml',
+    mediaType: 'application/yaml; charset=utf-8',
+    label: 'YAML',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  jsonl: {
+    id: 'jsonl',
+    extension: '.jsonl',
+    mediaType: 'application/jsonl; charset=utf-8',
+    label: 'JSONL',
+    /**
+     * "JSON Lines" - one JSON value per line, always a top-level array in
+     * this engine's own common value model (see `data.service.ts`'s header
+     * comment). Its shape requirement is looser than CSV/TSV's ("a
+     * top-level array" rather than "a top-level array of FLAT objects")
+     * because each line is independently valid JSON with no delimited-text
+     * column structure to preserve - nesting inside an element is fine.
+     */
+    mode: 'data',
     multiple: false,
     filters: {},
   },
@@ -1126,7 +1217,11 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'calc',
     mediaType: 'text/csv',
     importFilter: 'Text - txt - csv (StarCalc)',
-    targets: ['xlsx', 'ods', 'pdf'],
+    // `xlsx`/`ods`/`pdf` via LibreOffice (unchanged); `DATA_TARGETS` via
+    // `data.service.ts` - the same family-less source can reach targets
+    // through two different engines, exactly as `.pdf` reaches `pdfa` via
+    // Draw and `docx` via `pdf_engine.py`.
+    targets: ['xlsx', 'ods', 'pdf', ...DATA_TARGETS],
   },
   '.txt': {
     extension: '.txt',
@@ -1390,6 +1485,40 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     mediaType: 'text/x-ssa',
     targets: SUBTITLE_TRANSCODE_TARGETS.filter((id) => id !== 'ssa'),
   },
+  '.tsv': {
+    extension: '.tsv',
+    // No `family`: `data.service.ts`, not LibreOffice, reads every source in
+    // this group - see the note above `DATA_TARGETS`. `csv` is included
+    // alongside the `DATA_TARGETS` ids because it reaches this source
+    // through `TARGETS.csv`'s own `engineFrom.data`, not through `mode:
+    // 'data'` - `resolveConversion` treats the two identically from here.
+    mediaType: 'text/tab-separated-values',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'tsv')],
+  },
+  '.json': {
+    extension: '.json',
+    mediaType: 'application/json',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'json')],
+  },
+  '.yaml': {
+    extension: '.yaml',
+    mediaType: 'application/yaml',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'yaml')],
+  },
+  '.yml': {
+    extension: '.yml',
+    // The same format as `.yaml` under its other common spelling - same
+    // reasoning as `.html`/`.htm` for why both exist as real, separate
+    // keys: soffice/this engine reads the file soffice was handed, and
+    // both spellings have to exist as real files for either to work.
+    mediaType: 'application/yaml',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'yaml')],
+  },
+  '.jsonl': {
+    extension: '.jsonl',
+    mediaType: 'application/jsonl',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'jsonl')],
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -1439,7 +1568,7 @@ export interface ResolvedConversion {
    * back to `target.mode`, so it never has to ask "but which route did THIS
    * one take" any other way.
    */
-  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc' | 'archive' | 'ffmpeg';
+  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc' | 'archive' | 'ffmpeg' | 'data';
 }
 
 /**
@@ -1467,6 +1596,12 @@ export function resolveConversion(
   if (target.engineFrom?.pandoc?.includes(extension)) {
     return { source, target, convertTo: '', engine: 'pandoc' };
   }
+  if (target.engineFrom?.data?.includes(extension)) {
+    // The other data-interchange formats reaching `csv` - see
+    // `DATA_TARGETS`'s own comment for why `csv` needs this route instead
+    // of `mode: 'data'` outright.
+    return { source, target, convertTo: '', engine: 'data' };
+  }
 
   if (target.mode === 'extract') {
     // Nothing to look up: there is no LibreOffice filter for an engine that
@@ -1490,6 +1625,15 @@ export function resolveConversion(
     // family (`.png`/`.jpg`/`.jpeg`, for their `pdf` target) still reaches a
     // transcode target this way, unaffected by whatever family it has.
     return { source, target, convertTo: '', engine: 'ffmpeg' };
+  }
+
+  if (target.mode === 'data') {
+    // Also family-less - `data.service.ts` reads and writes every pair
+    // this mode covers directly, exactly like `transcode` above but with no
+    // subprocess at all. `csv` the SOURCE extension reaches these targets
+    // this way too (it has a family, `calc`, but that is irrelevant here -
+    // this branch does not consult it, same as `transcode`'s comment above).
+    return { source, target, convertTo: '', engine: 'data' };
   }
 
   // Everything below asks LibreOffice to do the work, so a source it cannot
@@ -1626,6 +1770,9 @@ export function validateMatrix(): void {
     if (target.mode === 'transcode' && target.multiple) {
       problems.push(`transcode target "${id}" declares itself a multi-file response`);
     }
+    if (target.mode === 'data' && target.multiple) {
+      problems.push(`data target "${id}" declares itself a multi-file response`);
+    }
 
     if (target.mode === 'extract') {
       // An extract target names its own sources, so it is the only target
@@ -1653,7 +1800,7 @@ export function validateMatrix(): void {
     // its own targets. Checked once per engine, and once more across both
     // engines together, since a source named under BOTH would leave
     // `resolveConversion` to silently pick whichever is checked first.
-    const engines = ['pdf', 'pandoc'] as const;
+    const engines = ['pdf', 'pandoc', 'data'] as const;
     const seenUnderAnotherEngine = new Set<string>();
     for (const engine of engines) {
       for (const extension of target.engineFrom?.[engine] ?? []) {
@@ -1709,13 +1856,16 @@ export function validateMatrix(): void {
       // contradiction.
       const reachesViaEngine =
         (TARGETS[targetId].engineFrom?.pdf?.includes(ext as AllowedExtension) ?? false) ||
-        (TARGETS[targetId].engineFrom?.pandoc?.includes(ext as AllowedExtension) ?? false);
+        (TARGETS[targetId].engineFrom?.pandoc?.includes(ext as AllowedExtension) ?? false) ||
+        (TARGETS[targetId].engineFrom?.data?.includes(ext as AllowedExtension) ?? false);
       const isArchiveTarget = TARGETS[targetId].mode === 'archive';
       const isTranscodeTarget = TARGETS[targetId].mode === 'transcode';
+      const isDataTarget = TARGETS[targetId].mode === 'data';
       if (
         TARGETS[targetId].mode !== 'extract' &&
         !isArchiveTarget &&
         !isTranscodeTarget &&
+        !isDataTarget &&
         !reachesViaEngine &&
         !source.family
       ) {

@@ -65,7 +65,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 58);
+    assert.equal(ALLOWED_EXTENSIONS.length, 63);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
@@ -87,12 +87,17 @@ describe('conversion matrix', () => {
         const resolved = resolveConversion(extension, target);
         assert.ok(resolved, `${extension} -> ${target} does not resolve`);
 
-        if (resolved.engine === 'pdf-engine' || resolved.engine === 'pandoc') {
+        const isDataEngineFromRoute = resolved.engine === 'data' && TARGETS[target].mode !== 'data';
+        if (resolved.engine === 'pdf-engine' || resolved.engine === 'pandoc' || isDataEngineFromRoute) {
           // A second, non-LibreOffice route to this target id - see
           // `engineFrom`'s doc comment. Checked before `mode`, because `mode`
-          // describes how every OTHER source reaches this same id.
+          // describes how every OTHER source reaches this same id. The
+          // `data` engine is only ever this kind of route for `csv` (whose
+          // own `mode` stays `'direct'`) - see `DATA_TARGETS`'s own
+          // comment; every OTHER data target is `mode: 'data'` itself and
+          // is checked further down instead.
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
-          const key = resolved.engine === 'pdf-engine' ? 'pdf' : 'pandoc';
+          const key = resolved.engine === 'pdf-engine' ? 'pdf' : resolved.engine === 'pandoc' ? 'pandoc' : 'data';
           assert.ok(
             TARGETS[target].engineFrom?.[key]?.includes(extension),
             `${extension} -> ${target}, but the target does not list it under "${key}" as an engine source`,
@@ -136,6 +141,14 @@ describe('conversion matrix', () => {
           // pair - no filter, and a family (`.png`/`.jpg`/`.jpeg` also have
           // one, for their `pdf` target) is irrelevant to this route.
           assert.equal(resolved.engine, 'ffmpeg', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          continue;
+        }
+
+        if (TARGETS[target].mode === 'data') {
+          // Pure JS, no subprocess, no filter, no family - see
+          // `data.service.ts`.
+          assert.equal(resolved.engine, 'data', `${extension} -> ${target} used the wrong engine`);
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
         }

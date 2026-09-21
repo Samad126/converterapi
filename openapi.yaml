@@ -1800,7 +1800,7 @@ components:
         Identifier of an output format, as used in the `/convert/{target}` path
         and returned by `GET /formats`.
       enum:
-        [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa, markdown, zip, tar, "tar.gz", "tar.bz2", "7z", cbz, bmp, gif, tiff, webp, avif, ico, "png-image", "jpg-image", srt, vtt, ass, ssa]
+        [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa, markdown, zip, tar, "tar.gz", "tar.bz2", "7z", cbz, srt, vtt, ass, ssa, tsv, json, yaml, jsonl, bmp, gif, tiff, webp, avif, ico, "png-image", "jpg-image"]
 
     MediaTargetId:
       type: string
@@ -1875,6 +1875,7 @@ components:
         - E_TOO_LARGE
         - E_NO_TABLES
         - E_NO_LAYERS
+        - E_NOT_TABULAR
         - E_BAD_PAGE_RANGE
         - E_TOO_FEW_FILES
         - E_WRONG_PASSWORD
@@ -2155,7 +2156,7 @@ components:
           example:
             error:
               code: E_UNKNOWN_TARGET
-              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers), PDF/A, Markdown, ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ, SRT, VTT, ASS, SSA, BMP, GIF, TIFF, WEBP, AVIF, ICO, PNG (image), JPG (image).'
+              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers), PDF/A, Markdown, ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ, SRT, VTT, ASS, SSA, TSV, JSON, YAML, JSONL, BMP, GIF, TIFF, WEBP, AVIF, ICO, PNG (image), JPG (image).'
 
     TooLarge:
       description: |
@@ -2189,7 +2190,7 @@ components:
           example:
             error:
               code: E_UNSUPPORTED
-              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb, .zip, .tar, .tgz, .tbz2, .txz, .gz, .bz2, .xz, .7z, .iso, .cbz, .bmp, .gif, .tiff, .webp, .avif, .ico, .srt, .vtt, .ass, .ssa.'
+              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb, .zip, .tar, .tgz, .tbz2, .txz, .gz, .bz2, .xz, .7z, .iso, .cbz, .bmp, .gif, .tiff, .webp, .avif, .ico, .srt, .vtt, .ass, .ssa, .tsv, .json, .yaml, .yml, .jsonl.'
 
     UnsupportedTarget:
       description: |
@@ -2229,6 +2230,12 @@ components:
         truth is that it is a perfectly good document with no tables in it, or
         one whose layers are all adjustment and text layers and therefore have
         no pixels to write.
+
+        **Not a table.** A `csv`/`tsv`/`jsonl` request against a JSON/YAML
+        source whose content is not shaped for that target - a single object
+        rather than a top-level array, or nesting a delimited format has no
+        way to represent. The same reasoning as no-tables/no-layers: the
+        document is valid, just not shaped for what was asked of it.
       content:
         application/json:
           schema:
@@ -2252,6 +2259,12 @@ components:
                 error:
                   code: E_NO_LAYERS
                   message: This PSD file does not contain any layers with images that can be extracted.
+            notTabular:
+              summary: A `csv` request on a JSON document that is a single object, not a list.
+              value:
+                error:
+                  code: E_NOT_TABULAR
+                  message: This document is not a flat table of records (a top-level list of flat objects), so it cannot become CSV.
 
     BadPageRange:
       description: |
