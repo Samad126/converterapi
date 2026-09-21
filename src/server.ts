@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { createApp } from './app.ts';
 import { HOST, PORT, SKIP_WARMUP, SWEEP_INTERVAL_MS } from './config.ts';
 import { PreflightError } from './errors.ts';
+import { sweepMediaJobs, sweepOrphanedMediaWorkspaces } from './services/media-jobs.service.ts';
 import { preflight, warmUp } from './services/preflight.service.ts';
 import { sweepStaleWorkspaces } from './services/workspace.service.ts';
 
@@ -46,9 +47,27 @@ export async function startServer(port = PORT): Promise<StartedServer> {
   // Sweep what a previous crash left behind, then keep sweeping.
   const swept = await sweepStaleWorkspaces();
   if (swept > 0) console.log(JSON.stringify({ outcome: 'swept_stale_workspaces', count: swept }));
+  // Media jobs get their own two sweeps - see each function's own comment:
+  // `sweepMediaJobs` removes a job's workspace once it has been DONE (or
+  // FAILED) for MEDIA_JOB_TTL_MS, and `sweepOrphanedMediaWorkspaces` is the
+  // crash backstop for a workspace whose in-memory job record a restart lost.
+  const orphanedMediaSwept = await sweepOrphanedMediaWorkspaces();
+  if (orphanedMediaSwept > 0) {
+    console.log(
+      JSON.stringify({ outcome: 'swept_orphaned_media_workspaces', count: orphanedMediaSwept }),
+    );
+  }
   const sweepTimer = setInterval(() => {
     void sweepStaleWorkspaces().then((count) => {
       if (count > 0) console.log(JSON.stringify({ outcome: 'swept_stale_workspaces', count }));
+    });
+    void sweepMediaJobs().then((count) => {
+      if (count > 0) console.log(JSON.stringify({ outcome: 'swept_media_jobs', count }));
+    });
+    void sweepOrphanedMediaWorkspaces().then((count) => {
+      if (count > 0) {
+        console.log(JSON.stringify({ outcome: 'swept_orphaned_media_workspaces', count }));
+      }
     });
   }, SWEEP_INTERVAL_MS);
   sweepTimer.unref();

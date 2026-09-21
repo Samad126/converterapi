@@ -57,29 +57,39 @@ export async function removeWorkspace(dir: string): Promise<void> {
 /**
  * Delete workspaces left behind by a crashed or killed process.
  *
- * Only directories older than STALE_WORKSPACE_MS are touched, which is why that
- * value must stay comfortably above CONVERT_TIMEOUT_MS: a live conversion's
- * workspace is never old enough to be swept.
+ * Only directories older than `staleMs` are touched, which is why the default
+ * (`STALE_WORKSPACE_MS`) must stay comfortably above `CONVERT_TIMEOUT_MS`: a
+ * live conversion's workspace is never old enough to be swept.
+ *
+ * `root`/`staleMs` are parameters rather than always `TEMP_ROOT`/
+ * `STALE_WORKSPACE_MS` so `media-jobs.service.ts` can reuse this exact
+ * function as the crash backstop for its own, much-longer-lived job
+ * workspaces - see `sweepMediaJobs`'s own comment for why it needs one at
+ * all in addition to its own job-aware sweep.
  */
-export async function sweepStaleWorkspaces(now = Date.now()): Promise<number> {
+export async function sweepStaleWorkspaces(
+  now = Date.now(),
+  root: string = TEMP_ROOT,
+  staleMs: number = STALE_WORKSPACE_MS,
+): Promise<number> {
   let removed = 0;
   let entries: string[];
   try {
-    entries = await fsp.readdir(TEMP_ROOT);
+    entries = await fsp.readdir(root);
   } catch {
     return 0; // Root does not exist yet; nothing to sweep.
   }
 
   for (const entry of entries) {
-    const full = join(TEMP_ROOT, entry);
+    const full = join(root, entry);
     try {
       const stat = await fsp.stat(full);
       if (!stat.isDirectory()) continue;
-      if (now - stat.mtimeMs < STALE_WORKSPACE_MS) continue;
+      if (now - stat.mtimeMs < staleMs) continue;
       // Re-check mtime right before deleting: a workspace that was touched
       // between the stat and the delete belongs to something still alive.
       const fresh = await fsp.stat(full);
-      if (now - fresh.mtimeMs < STALE_WORKSPACE_MS) continue;
+      if (now - fresh.mtimeMs < staleMs) continue;
       await removeWorkspace(full);
       removed += 1;
     } catch {

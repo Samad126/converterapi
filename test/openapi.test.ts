@@ -147,6 +147,9 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.badRequest('test detail'),
     Errors.rateLimited(),
     Errors.internal(),
+    Errors.jobNotFound(),
+    Errors.jobNotReady('queued'),
+    Errors.jobNotReady('running'),
   ].map((error: AppError) => error.toEnvelope().error);
 
   // The 404 uses the same code as E_BAD_REQUEST with a different sentence, so

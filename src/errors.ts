@@ -34,7 +34,9 @@ export type ErrorCode =
   | 'E_BUSY'
   | 'E_BAD_REQUEST'
   | 'E_RATE_LIMITED'
-  | 'E_INTERNAL';
+  | 'E_INTERNAL'
+  | 'E_JOB_NOT_FOUND'
+  | 'E_JOB_NOT_READY';
 
 export interface ErrorEnvelope {
   error: { code: ErrorCode; message: string };
@@ -236,4 +238,15 @@ export const Errors = {
   /** Anything we did not anticipate. */
   internal: (cause?: unknown) =>
     new AppError('E_INTERNAL', 500, 'Something went wrong on the server.', { cause }),
+
+  /** `GET /media/jobs/{id}` (or its `/download`) named a job that does not exist - never did, or was swept after MEDIA_JOB_TTL_MS. */
+  jobNotFound: () => new AppError('E_JOB_NOT_FOUND', 404, 'That conversion job does not exist.'),
+
+  /** `GET /media/jobs/{id}/download` was called before the job finished. */
+  jobNotReady: (status: 'queued' | 'running') =>
+    new AppError(
+      'E_JOB_NOT_READY',
+      409,
+      `This conversion is still ${status === 'queued' ? 'queued' : 'in progress'}. Check back in a moment.`,
+    ),
 };

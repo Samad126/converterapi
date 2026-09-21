@@ -22,6 +22,7 @@ contract** with a client that is already shipped and cannot be changed.
 - [Conversion matrix](#conversion-matrix)
 - [API](#api)
   - [POST /convert/{target}](#post-converttarget)
+  - [POST /media/{target} (asynchronous audio/video)](#post-mediatarget--asynchronous-audiovideo-conversion)
   - [POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}](#post-pdfmergesplitremove-pagesextract-pagesorganizescan-to-pdf)
   - [POST /pdf/{rotate,watermark,protect,unlock}](#post-pdfrotatewatermarkprotectunlock)
   - [POST /pdf/{crop,page-numbers,repair}](#post-pdfcroppage-numbersrepair)
@@ -640,6 +641,98 @@ where that would be wrong:
 Getting this wrong is silent in both directions, which is why
 [`test/unit.test.ts`](test/unit.test.ts) pins the round trip for a real
 Azerbaijani filename and asserts that the names which must not change do not.
+
+### POST /media/{target} — asynchronous audio/video conversion
+
+A separate endpoint from `POST /convert/{target}`, on purpose. Real
+audio/video work breaks three assumptions the rest of this service depends
+on:
+
+1. **`CONVERT_TIMEOUT_MS`** (90s) / the Android client's 120s abort — a real
+   transcode routinely runs for minutes.
+2. **`MAX_UPLOAD_BYTES`** (25MB) — pinned to the Android client's wire
+   contract; video needs an order of magnitude more.
+3. **The synchronous one-request-one-file model** — a client cannot hold a
+   connection open for a transcode that may take a while, and nothing about
+   `/convert/{target}`'s own contract changes to accommodate one that can.
+
+So `/media/{target}` answers `202` the moment the upload is accepted and
+validated, with a job id to poll — it does not wait for the conversion
+itself:
+
+```bash
+# 1. Submit - 202, with a job id
+curl -F "files=@lecture.wav" https://converterapi.example.com/media/mp3
+# {"id":"…","status":"queued","statusUrl":"/media/jobs/…"}
+
+# 2. Poll status until it is no longer queued/running
+curl https://converterapi.example.com/media/jobs/<id>
+# {"id":"…","status":"done","target":"mp3","downloadUrl":"/media/jobs/…/download","bytes":123456}
+
+# 3. Download the result
+curl https://converterapi.example.com/media/jobs/<id>/download -o lecture.mp3
+```
+
+**Formats.** Audio: `mp3`, `wav`, `flac`, `ogg`, `aac`, `m4a`, `wma`. Video:
+`mp4`, `webm`, `mkv`, `avi`, `mov`, `flv`. A source only ever reaches a
+target of the SAME kind (audio to audio, video to video) — extracting an
+audio track from a video file is a real, different feature this endpoint
+does not offer. This list is deliberately smaller than audio/video support
+could in principle cover: every entry was verified by hand against the real
+`ffmpeg` build this service runs, the same standard held everywhere else in
+this service, rather than assumed from ffmpeg's own documentation. See
+[`formats-media.ts`](src/formats-media.ts) for the wider list a future pass
+could verify and add, one line at a time, the same way this one was built.
+
+**The job store is in-memory, on purpose.** "No database, no state" is this
+service's own design from the start, and the job store here is exactly what
+that allows: a `Map`, lost on restart. A job a deploy interrupts is a job the
+client resubmits — the same as an in-flight `/convert/{target}` request
+during a restart, this endpoint does not pretend to a durability the rest of
+the service does not have either.
+
+**Its own concurrency pool**, `MAX_CONCURRENT_MEDIA_JOBS` (default 1),
+entirely separate from `MAX_CONCURRENT_CONVERSIONS`. A video transcode is a
+heavier, much longer-running neighbour than a document conversion, and the
+two must never compete for the same slots — two video jobs running at once
+must not be able to starve every ordinary `/convert/{target}` request for
+the next twenty minutes.
+
+**Its own workspace root, `MEDIA_TEMP_ROOT`**, a *sibling* of `TEMP_ROOT`
+rather than a subdirectory of it. `sweepStaleWorkspaces` deletes whatever
+direct child of `TEMP_ROOT` looks older than `STALE_WORKSPACE_MS` (15
+minutes by default) — exactly right for a synchronous request, and exactly
+wrong for a job that can legitimately run for `MEDIA_CONVERT_TIMEOUT_MS` (30
+minutes by default): nesting the two under one root would risk the generic
+sweep deleting an entire in-progress job the moment its container
+directory's own mtime looked stale enough. Media jobs get two sweeps of
+their own instead: `sweepMediaJobs` removes a finished job's workspace
+`MEDIA_JOB_TTL_MS` after it completed (success or failure — there is nothing
+left to download either way once that window passes), and
+`sweepOrphanedMediaWorkspaces` is the crash backstop for a workspace whose
+in-memory job record a restart lost, with a deliberately generous threshold
+(`MEDIA_CONVERT_TIMEOUT_MS + MEDIA_JOB_TTL_MS`) so it can never race a job
+that is merely slow.
+
+**Job status**:
+
+| `status` | Meaning |
+|---|---|
+| `queued` | Accepted, waiting for a media-job slot. |
+| `running` | Converting. |
+| `done` | `downloadUrl` and `bytes` are present; `GET .../download` returns `200`. |
+| `failed` | `error` (`{code, message}`) is present; `GET .../download` returns the same envelope, at the status code that failure would have used had it happened synchronously (`500` for `E_CONVERT_FAILED`, `504` for `E_TIMEOUT`). |
+
+Downloading before the job reaches `done` answers `409 E_JOB_NOT_READY`;
+naming a job id that never existed, or was swept after its TTL, answers
+`404 E_JOB_NOT_FOUND`.
+
+**Resource caps raised for this endpoint specifically** — see
+[Configuration](#configuration) for the exact variables. The container's own
+`mem_limit`/tmpfs size were raised alongside them (see
+[`docker-compose.yml`](docker-compose.yml)'s own comments): a 500MB upload
+lands on the same tmpfs `/tmp` the document-conversion workspaces already
+share, which is RAM, not disk.
 
 ### POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}
 
@@ -1771,6 +1864,9 @@ All configuration is environment variables read in
 | `SOFFICE_BIN` | `soffice` | If not on `PATH` |
 | `PDFTOPPM_BIN` | `pdftoppm` | If not on `PATH`; needed by the PNG/JPG targets |
 | `QPDF_BIN` | `qpdf` | If not on `PATH`; needed by `/pdf/protect` and `/pdf/unlock` |
+| `PANDOC_BIN` | `pandoc` | If not on `PATH`; needed by the markup sources (`.md`/`.rst`/...) |
+| `SEVENZIP_BIN` | `7z` | If not on `PATH`; needed by the archive sources/targets |
+| `FFMPEG_BIN` | `ffmpeg` | If not on `PATH`; needed by the image-transcode targets and `/media/{target}` |
 | `TESSERACT_BIN` | `tesseract` | If not on `PATH`; OCR for a scanned PDF's `docx` - missing is a boot warning, not a refusal |
 | `OCR_LANGUAGES` | `eng+aze+tur+rus` | `+`-joined tesseract language codes; must match the installed `tesseract-ocr-<lang>` packages |
 | `RASTER_DPI` | `150` | Resolution of a rasterised page |
@@ -1784,6 +1880,15 @@ All configuration is environment variables read in
 | `MAX_LAYER_OUTPUT_BYTES` | `50331648` | For the `layers` target; refused with `E_TOO_LARGE` |
 | `MAX_PAGE_OPERATION_FILES` | `20` | For `/pdf/merge`, `/pdf/scan-to-pdf`; refused with `E_TOO_LARGE` |
 | `MAX_PAGE_OPERATION_TOTAL_BYTES` | `104857600` | Combined size of every file in one page-operation request |
+| `MAX_UPLOAD_BYTES` | `26214400` (25MB) | `/convert/{target}`'s per-file cap - must equal the Android client's own, and the reverse proxy's body-size limit; see [Wire-compatibility constraints](#wire-compatibility-constraints) |
+| `MAX_ARCHIVE_ENTRIES` | `5000` | For the archive targets; refused with `E_CONVERT_FAILED` |
+| `MAX_ARCHIVE_UNCOMPRESSED_BYTES` | `536870912` (512MB) | For the archive targets; the decompression-bomb bound |
+| `MEDIA_MAX_UPLOAD_BYTES` | `524288000` (500MB) | `/media/{target}`'s own, much larger upload cap - not part of the Android client's wire contract, so not tied to `MAX_UPLOAD_BYTES` |
+| `MEDIA_CONVERT_TIMEOUT_MS` | `1800000` (30 min) | How long one media job may run before `E_TIMEOUT` |
+| `MEDIA_JOB_TTL_MS` | `1800000` (30 min) | How long a finished media job's result stays downloadable |
+| `MAX_CONCURRENT_MEDIA_JOBS` | `1` | Its own pool, separate from `MAX_CONCURRENT_CONVERSIONS` |
+| `MAX_QUEUED_MEDIA_JOBS` | `4` | `0` disables queueing entirely |
+| `MEDIA_TEMP_ROOT` | `$TMPDIR/converterapi-media` | A sibling of `TEMP_ROOT`, not nested under it - see the constant's own comment in `config.ts` |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |
 | `CONVERT_TIMEOUT_MS` | `90000` | Must stay below the client's 120s |
@@ -2074,6 +2179,7 @@ The test suite is `node:test` — no test framework dependency.
 |---|---|
 | [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, legacy Office extensions, pandoc's markup sources, the archive engine (including malicious-archive rejection), the image-transcode engine (including the ICO size limit and the GIF-as-video edge case), oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
 | [`test/archive.test.ts`](test/archive.test.ts) | `validateEntries`'s pre-extraction arithmetic directly: the entry-count and declared-size caps, path-traversal and symlink rejection, encrypted-entry detection — the same hand-built-list-not-real-multi-hundred-MB-file shape `test/tables.test.ts` uses for `readZipEntry`'s own bomb defence. |
+| [`test/media.test.ts`](test/media.test.ts) | The real `/media/{target}` job lifecycle end to end — accept, poll, download — against real audio/video ffmpeg synthesises with its own `lavfi` test sources; unknown target, unsupported extension, cross-kind and self-conversion rejection, and the `404`/`409` job-lookup cases. |
 | [`test/unit.test.ts`](test/unit.test.ts) | Matrix self-consistency, prototype-safe lookups, the ZIP writer and its zip-slip guard, the probe-document builders, queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
 | [`test/timeout.test.ts`](test/timeout.test.ts) | The 90s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
 | [`test/preflight.test.ts`](test/preflight.test.ts) | The boot refusal, by starting the real entry point with a broken environment — a missing `soffice`, a missing `pdftoppm`, and an unresolvable `fc-match`. |

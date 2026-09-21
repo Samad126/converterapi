@@ -13,6 +13,7 @@ import { createConvertRouter } from './convert.routes.ts';
 import { createDocsRouter } from './docs.routes.ts';
 import { createFormatsRouter } from './formats.routes.ts';
 import { createHealthRouter } from './health.routes.ts';
+import { createMediaRouter } from './media.routes.ts';
 import { createPagesRouter } from './pages.routes.ts';
 
 export interface RouteDeps {
@@ -34,6 +35,7 @@ export function createRoutes(deps: RouteDeps): Router {
 
   router.use(createConvertRouter({ queue: deps.queue, rateLimiter: deps.rateLimiter }));
   router.use(createPagesRouter({ queue: deps.queue, rateLimiter: deps.rateLimiter }));
+  router.use(createMediaRouter({ rateLimiter: deps.rateLimiter }));
 
   return router;
 }

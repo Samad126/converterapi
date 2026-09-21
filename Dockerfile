@@ -117,17 +117,29 @@ FROM node:22-bookworm-slim AS runtime
 # it, and there is no legal way to author a real `.rar` fixture to verify
 # reading against - see the note on `.rar` in formats.ts.
 #
-# ffmpeg is an EIGHTH, unrelated engine, for the image-transcode sources
-# (.bmp/.gif/.tiff/.webp/.avif/.ico, plus making .png/.jpg/.jpeg real
-# sources) reaching bmp/gif/tiff/webp/avif/ico. Unlike soffice this is a flat
-# format-to-format tool with no document family to key a filter on - see
-# `ffmpeg.service.ts`. `-frames:v 1 -update 1` is mandatory on every call,
-# not cosmetic: without it, a GIF/WEBP source (decoded as a tiny video, not
-# a still image) trips ffmpeg's image2 muxer into "Cannot write more than
-# one file with the same name" and the conversion fails outright - verified
-# by hand. ICO cannot hold an image over 256x256 (a real format limit, also
-# verified by hand); this service does not silently downscale to make that
-# succeed, same as every other target.
+# ffmpeg is an EIGHTH, unrelated engine, doing two separate jobs:
+#
+#   - the image-transcode sources (.bmp/.gif/.tiff/.webp/.avif/.ico, plus
+#     making .png/.jpg/.jpeg real sources) reaching bmp/gif/tiff/webp/avif/
+#     ico, synchronously, as part of POST /convert/{target}. Unlike soffice
+#     this is a flat format-to-format tool with no document family to key a
+#     filter on - see `ffmpeg.service.ts`. `-frames:v 1 -update 1` is
+#     mandatory on every one of these calls, not cosmetic: without it, a
+#     GIF/WEBP source (decoded as a tiny video, not a still image) trips
+#     ffmpeg's image2 muxer into "Cannot write more than one file with the
+#     same name" and the conversion fails outright - verified by hand. ICO
+#     cannot hold an image over 256x256 (a real format limit, also verified
+#     by hand); this service does not silently downscale to make that
+#     succeed, same as every other target.
+#   - real audio/video transcoding for POST /media/{target} (mp3/wav/flac/
+#     ogg/aac/m4a/wma, mp4/webm/mkv/avi/mov/flv), asynchronously - its own
+#     job-based endpoint, not part of /convert/{target}'s synchronous
+#     contract. See the README's "POST /media/{target}" section and
+#     `media-jobs.service.ts` for why: a real transcode routinely exceeds
+#     CONVERT_TIMEOUT_MS and needs an upload ceiling far above
+#     MAX_UPLOAD_BYTES, neither of which /convert/{target}'s existing
+#     contract can be changed to accommodate without breaking it for every
+#     other target.
 #
 # The service refuses to boot without any of this. Preflight checks soffice,
 # `pdftoppm`, `pandoc`, `7z`, `ffmpeg` and the fonts, and then converts one

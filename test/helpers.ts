@@ -98,6 +98,56 @@ export async function upload(
   };
 }
 
+/** POST an upload to /media/<target> - the async job endpoint. Returns the parsed 202 body (or whatever error came back). */
+export async function uploadMedia(
+  baseUrl: string,
+  filename: string,
+  bytes: Buffer,
+  target: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const form = new FormData();
+  form.append('files', new Blob([bytes], { type: 'application/octet-stream' }), filename);
+  const response = await fetch(`${baseUrl}/media/${target}`, { method: 'POST', body: form });
+  const body = (await response.json()) as Record<string, unknown>;
+  return { status: response.status, body };
+}
+
+/** GET /media/jobs/<id>. */
+export async function getMediaJobStatus(
+  baseUrl: string,
+  id: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await fetch(`${baseUrl}/media/jobs/${id}`);
+  const body = (await response.json()) as Record<string, unknown>;
+  return { status: response.status, body };
+}
+
+/** Poll GET /media/jobs/<id> until it is no longer queued/running, or the timeout elapses. */
+export async function pollMediaJob(
+  baseUrl: string,
+  id: string,
+  timeoutMs = 60_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { body } = await getMediaJobStatus(baseUrl, id);
+    if (body.status !== 'queued' && body.status !== 'running') return body;
+    if (Date.now() > deadline) throw new Error(`job ${id} did not finish within ${timeoutMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** GET /media/jobs/<id>/download, as a raw response. */
+export async function downloadMediaJob(baseUrl: string, id: string): Promise<RawResponse> {
+  const response = await fetch(`${baseUrl}/media/jobs/${id}/download`);
+  return {
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+    contentDisposition: response.headers.get('content-disposition'),
+    body: Buffer.from(await response.arrayBuffer()),
+  };
+}
+
 /**
  * POST to one of the page endpoints (`/pdf/merge` and friends), which take
  * more than one file, a differently-named field, or extra text fields that
@@ -362,6 +412,42 @@ export async function buildImageFixture(
     await fsp.writeFile(srcPath, pngBytes);
     const outPath = join(dir, `out.${format}`);
     await runTool('ffmpeg', ['-y', '-i', srcPath, '-frames:v', '1', '-update', '1', outPath], dir);
+    return await fsp.readFile(outPath);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * A real, short audio or video file, synthesised entirely by `ffmpeg`'s own
+ * `lavfi` test sources (`sine`, `testsrc`) - no external fixture needed at
+ * all, and no ambiguity about codec support, since the generator and the
+ * thing under test are the same binary.
+ */
+export async function buildMediaFixture(
+  kind: 'audio' | 'video',
+  format: string,
+): Promise<Buffer> {
+  const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-media-'));
+  try {
+    const outPath = join(dir, `out.${format}`);
+    const args =
+      kind === 'audio'
+        ? ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', outPath]
+        : [
+            '-y',
+            '-f',
+            'lavfi',
+            '-i',
+            'testsrc=size=160x120:rate=5:duration=1',
+            '-f',
+            'lavfi',
+            '-i',
+            'sine=frequency=440:duration=1',
+            '-shortest',
+            outPath,
+          ];
+    await runTool('ffmpeg', args, dir);
     return await fsp.readFile(outPath);
   } finally {
     await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});

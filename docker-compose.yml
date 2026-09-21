@@ -68,8 +68,19 @@ services:
     # this limit is lowered, or OCR_LANGUAGES is given many more languages,
     # re-verify against a real multi-page scan before trusting it in
     # production.
-    mem_limit: 1g
-    memswap_limit: 1g
+    #
+    # Phase 5 (POST /media/{target}, audio/video) raised both figures below
+    # from the original 1g/1g. MEDIA_MAX_UPLOAD_BYTES defaults to 500MB, and
+    # that upload lands on this same tmpfs - which is RAM, not disk - so the
+    # old 1g cap could not hold one such upload AND the LibreOffice/pdf_engine
+    # budget above at the same time. MAX_CONCURRENT_MEDIA_JOBS defaults to 1
+    # or exactly the same reason MAX_CONCURRENT_CONVERSIONS is bounded: two
+    # video transcodes at once is not a target this limit is sized for.
+    # Re-verify against a real large upload before raising
+    # MEDIA_MAX_UPLOAD_BYTES or MAX_CONCURRENT_MEDIA_JOBS in production, the
+    # same way the OCR note above asks for the document-conversion budget.
+    mem_limit: 3g
+    memswap_limit: 3g
     cpus: 2
     pids_limit: 256
 
@@ -77,10 +88,15 @@ services:
     # Nothing the service does needs to write to its own image, so the root
     # filesystem is read-only. /tmp is the one writable path, and it is the
     # only place the service ever writes: per-request workspaces holding the
-    # upload, that request's LibreOffice profile, and the output.
+    # upload, that request's LibreOffice profile, and the output - plus, since
+    # Phase 5, one media job's workspace at a time under MEDIA_TEMP_ROOT (a
+    # sibling of TEMP_ROOT, still under /tmp - see that constant's own
+    # comment in config.ts for why it is not nested under TEMP_ROOT itself).
+    # 2g leaves room for a 500MB upload plus its converted output alongside
+    # the document-conversion workspaces this size was already covering.
     read_only: true
     tmpfs:
-      - /tmp:size=1g,mode=1777
+      - /tmp:size=2g,mode=1777
 
     # --- Privileges ---------------------------------------------------------
     # soffice parses untrusted documents, and that parser is the entire attack

@@ -71,6 +71,18 @@ export const MAX_DOWNLOAD_NAME_LENGTH = intFromEnv('MAX_DOWNLOAD_NAME_LENGTH', 1
 export const TEMP_ROOT = process.env.TEMP_ROOT ?? join(tmpdir(), 'converterapi');
 
 /**
+ * Root for media-job workspaces - a SIBLING of `TEMP_ROOT`, deliberately not
+ * a subdirectory of it. `sweepStaleWorkspaces` walks `TEMP_ROOT` and deletes
+ * whatever direct child looks stale by its own mtime; a media job can
+ * legitimately run for `MEDIA_CONVERT_TIMEOUT_MS` (minutes), so nesting its
+ * workspace under `TEMP_ROOT` would risk the generic sweep deleting an
+ * entire in-progress job the moment its container directory's mtime looked
+ * old enough - a single shared root cannot serve two very different
+ * staleness thresholds safely. See `media-jobs.service.ts`.
+ */
+export const MEDIA_TEMP_ROOT = process.env.MEDIA_TEMP_ROOT ?? join(tmpdir(), 'converterapi-media');
+
+/**
  * A workspace older than this is assumed to belong to a crashed process.
  * Must be comfortably larger than CONVERT_TIMEOUT_MS so a slow-but-alive
  * conversion is never swept out from under itself.
@@ -311,6 +323,50 @@ export const MAX_ARCHIVE_UNCOMPRESSED_BYTES = intFromEnv(
   512 * MB,
   1024,
 );
+
+/**
+ * Audio/video conversion (`POST /media/{target}`) - Phase 5, deliberately
+ * NOT part of `/convert/{target}`'s synchronous contract. Everything below
+ * exists because real audio/video work breaks three assumptions the rest of
+ * this service depends on: `CONVERT_TIMEOUT_MS` (a real transcode routinely
+ * exceeds 90s), `MAX_UPLOAD_BYTES` (25MB, pinned to the Android client's
+ * wire contract - video needs an order of magnitude more), and the
+ * synchronous one-request-one-file model (a client cannot hold a connection
+ * open for a transcode that may take minutes). See `media-jobs.service.ts`
+ * and the README's own section on this endpoint for the full reasoning.
+ */
+
+/** The upload ceiling for `/media/{target}` - MAX_UPLOAD_BYTES exists for a wire
+ * contract this endpoint is not part of, so it gets its own, much larger one. */
+export const MEDIA_MAX_UPLOAD_BYTES = intFromEnv('MEDIA_MAX_UPLOAD_BYTES', 500 * MB, 1024);
+
+/**
+ * How long one media job may run before it is killed and reported as
+ * `E_TIMEOUT`. Minutes, not seconds - unlike `CONVERT_TIMEOUT_MS`, nothing
+ * here is rationing a live client connection, so the only real constraint is
+ * "eventually give up on a wedged or pathological file".
+ */
+export const MEDIA_CONVERT_TIMEOUT_MS = intFromEnv('MEDIA_CONVERT_TIMEOUT_MS', 30 * 60_000, 1_000);
+
+/**
+ * How long a finished job's result stays downloadable after it completes.
+ * A job (and its workspace) is swept once this elapses, the same "clean up
+ * what nobody came back for" idea `STALE_WORKSPACE_MS` already applies to a
+ * crashed request's leftovers - see `sweepMediaJobs`.
+ */
+export const MEDIA_JOB_TTL_MS = intFromEnv('MEDIA_JOB_TTL_MS', 30 * 60_000, 60_000);
+
+/**
+ * Separate, small concurrency pool from `MAX_CONCURRENT_CONVERSIONS`. A
+ * video transcode is a heavier, much longer-running neighbour than a
+ * document conversion, and the two must not compete for the same slots -
+ * two of these running at once must not be able to starve every ordinary
+ * `/convert/{target}` request for the next twenty minutes.
+ */
+export const MAX_CONCURRENT_MEDIA_JOBS = intFromEnv('MAX_CONCURRENT_MEDIA_JOBS', 1, 1);
+
+/** How many media jobs may sit queued before `POST /media/{target}` answers 503. */
+export const MAX_QUEUED_MEDIA_JOBS = intFromEnv('MAX_QUEUED_MEDIA_JOBS', 4, 0);
 
 /**
  * The page-manipulation endpoints (`/pdf/merge`, `/pdf/split`, `/pdf/

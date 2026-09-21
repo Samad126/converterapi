@@ -98,6 +98,11 @@ servers:
 tags:
   - name: convert
     description: Document conversion.
+  - name: media
+    description: |
+      Asynchronous audio/video conversion. Deliberately not part of
+      `/convert/{target}`'s synchronous contract - see `POST /media/{target}`'s
+      own description for why.
   - name: pages
     description: Page-level PDF operations - merge, split, remove, extract, reorder, scan.
   - name: discovery
@@ -163,6 +168,138 @@ paths:
           $ref: '#/components/responses/ConvertFailed'
         '503':
           $ref: '#/components/responses/Busy'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /media/{target}:
+    post:
+      tags: [media]
+      operationId: convertMediaToFormat
+      summary: Start an asynchronous audio/video conversion job
+      description: |
+        Accepts one audio or video file and starts converting it to `target`
+        in the background, answering `202` with a job id the moment the
+        upload is validated - it does NOT wait for the conversion to finish.
+        Poll `GET /media/jobs/{id}` for status, and
+        `GET /media/jobs/{id}/download` once it reports `done`.
+
+        This is a separate endpoint from `POST /convert/{target}` on purpose:
+        a real audio/video transcode routinely runs far longer than that
+        endpoint's deadline, and needs an upload ceiling far above the 25MB
+        the Android client's wire contract fixes for `/convert`. Nothing
+        about `/convert/{target}`'s existing contract changes because of this
+        endpoint.
+
+        `target` and the source extension must be the same KIND (audio to
+        audio, video to video) and must differ from one another - converting
+        a file to its own format is refused the same way it is everywhere
+        else in this service.
+
+        Audio: `mp3`, `wav`, `flac`, `ogg`, `aac`, `m4a`, `wma`.
+        Video: `mp4`, `webm`, `mkv`, `avi`, `mov`, `flv`. This is a smaller
+        set than audio/video formats could in principle cover - see
+        `formats-media.ts`'s own comment for the reasoning and the wider list
+        a future pass could verify and add.
+      x-max-upload-bytes: 524288000
+      parameters:
+        - name: target
+          in: path
+          required: true
+          description: One of the audio/video target ids listed above. Case-sensitive.
+          schema:
+            $ref: '#/components/schemas/MediaTargetId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: string
+                  format: binary
+                  description: Exactly one audio or video file.
+      responses:
+        '202':
+          description: The job was accepted and is now queued or running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaJobAccepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: |
+            `target` is not a recognised audio/video format id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                error:
+                  code: E_UNKNOWN_TARGET
+                  message: That is not an audio/video format this converter can produce.
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedTarget'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Busy'
+
+  /media/jobs/{id}:
+    get:
+      tags: [media]
+      operationId: getMediaJobStatus
+      summary: Get the status of an asynchronous media job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The job's current status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaJobStatus'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /media/jobs/{id}/download:
+    get:
+      tags: [media]
+      operationId: downloadMediaJobResult
+      summary: Download a finished media job's result
+      description: |
+        Returns the converted file once the job's status is `done`. A job
+        whose status is `queued`/`running` answers `409`; one whose status
+        is `failed` answers with the same error envelope its own status
+        response carries, at the status code that failure would have used
+        had it happened synchronously (`500` for `E_CONVERT_FAILED`, `504`
+        for `E_TIMEOUT`, and so on).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The converted audio/video file.
+          content:
+            audio/*: {}
+            video/*: {}
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+        '409':
+          $ref: '#/components/responses/JobNotReady'
+        '500':
+          $ref: '#/components/responses/ConvertFailed'
         '504':
           $ref: '#/components/responses/Timeout'
 
@@ -1665,6 +1802,64 @@ components:
       enum:
         [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa, markdown, zip, tar, "tar.gz", "tar.bz2", "7z", bmp, gif, tiff, webp, avif, ico]
 
+    MediaTargetId:
+      type: string
+      description: |
+        Identifier of an audio/video output format, as used in the
+        `/media/{target}` path - a separate id space from `TargetId`, since
+        this is a separate matrix (`formats-media.ts`), not an extension of
+        the main one.
+      enum: [mp3, wav, flac, ogg, aac, m4a, wma, mp4, webm, mkv, avi, mov, flv]
+
+    MediaJobStatusValue:
+      type: string
+      enum: [queued, running, done, failed]
+
+    MediaJobAccepted:
+      type: object
+      required: [id, status, statusUrl]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: The job id - pass this to `GET /media/jobs/{id}` and its `/download`.
+        status:
+          $ref: '#/components/schemas/MediaJobStatusValue'
+        statusUrl:
+          type: string
+          description: Always `/media/jobs/{id}`, given back so a client does not have to build it itself.
+
+    MediaJobStatus:
+      type: object
+      required: [id, status, target]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/MediaJobStatusValue'
+        target:
+          $ref: '#/components/schemas/MediaTargetId'
+        downloadUrl:
+          type: string
+          description: Present only when `status` is `done`.
+        bytes:
+          type: integer
+          description: The converted file's size, in bytes. Present only when `status` is `done`.
+        error:
+          type: object
+          description: |
+            Present only when `status` is `failed` - the same `{code,
+            message}` shape `ErrorEnvelope.error` carries, not wrapped in a
+            second `error` key.
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+
     ErrorCode:
       type: string
       description: |
@@ -1688,6 +1883,8 @@ components:
         - E_BAD_REQUEST
         - E_RATE_LIMITED
         - E_INTERNAL
+        - E_JOB_NOT_FOUND
+        - E_JOB_NOT_READY
 
     ErrorEnvelope:
       type: object
@@ -2158,6 +2355,34 @@ components:
             error:
               code: E_WRONG_PASSWORD
               message: That password does not unlock this PDF.
+
+    JobNotFound:
+      description: |
+        `GET /media/jobs/{id}` (or its `/download`) named a job id that does
+        not exist - never did, or was removed after `MEDIA_JOB_TTL_MS` past
+        completion.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_JOB_NOT_FOUND
+              message: That conversion job does not exist.
+
+    JobNotReady:
+      description: |
+        `GET /media/jobs/{id}/download` was called before the job reached
+        `done`. Poll `GET /media/jobs/{id}` until its `status` is `done` (or
+        `failed`) before downloading.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: E_JOB_NOT_READY
+              message: This conversion is still in progress. Check back in a moment.
 
     RateLimited:
       description: |
