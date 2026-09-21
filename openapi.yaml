@@ -1809,7 +1809,7 @@ components:
         `/media/{target}` path - a separate id space from `TargetId`, since
         this is a separate matrix (`formats-media.ts`), not an extension of
         the main one.
-      enum: [mp3, wav, flac, ogg, aac, m4a, wma, opus, aiff, m4b, mp4, webm, mkv, avi, mov, flv]
+      enum: [mp3, wav, flac, ogg, aac, m4a, wma, opus, aiff, m4b, ac3, au, caf, oga, voc, mp4, webm, mkv, avi, mov, flv, asf, f4v, m4v, mpeg, ogv, ts, wmv]
 
     MediaJobStatusValue:
       type: string

@@ -93,6 +93,27 @@ describe('POST /media/{target} - audio', () => {
     // An MP4-family container: 'ftyp' box tag sits at byte offset 4.
     assert.equal(download.body.subarray(4, 8).toString('ascii'), 'ftyp');
   });
+
+  it('converts WAV to AC3', async () => {
+    const wav = await buildMediaFixture('audio', 'wav');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.wav', wav, 'ac3');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'audio/ac3');
+  });
+
+  it('converts WAV to CAF', async () => {
+    const wav = await buildMediaFixture('audio', 'wav');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.wav', wav, 'caf');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'audio/x-caf');
+    assert.equal(download.body.subarray(0, 4).toString('ascii'), 'caff');
+  });
 });
 
 describe('POST /media/{target} - video', () => {
@@ -118,6 +139,28 @@ describe('POST /media/{target} - video', () => {
     assert.equal(finished.status, 'done');
     const download = await downloadMediaJob(server.baseUrl, body.id as string);
     assert.equal(download.contentType, 'video/x-matroska');
+  });
+
+  it('converts MP4 to WMV', async () => {
+    const mp4 = await buildMediaFixture('video', 'mp4');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.mp4', mp4, 'wmv');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'video/x-ms-wmv');
+  });
+
+  it('converts MP4 to TS', async () => {
+    const mp4 = await buildMediaFixture('video', 'mp4');
+    const { body } = await uploadMedia(server.baseUrl, 'clip.mp4', mp4, 'ts');
+    const finished = await pollMediaJob(server.baseUrl, body.id as string);
+    assert.equal(finished.status, 'done');
+    const download = await downloadMediaJob(server.baseUrl, body.id as string);
+    assert.equal(download.status, 200);
+    assert.equal(download.contentType, 'video/mp2t');
+    // MPEG-TS packets are 188 bytes, and every one starts with sync byte 0x47.
+    assert.equal(download.body[0], 0x47);
   });
 });
 

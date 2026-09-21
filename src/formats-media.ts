@@ -17,17 +17,25 @@
  * the exact zero-flags `-y -i in out` command `runFfmpegMedia` actually
  * issues (no per-pair codec/rate args exist to paper over a default that
  * fails) - before being added, the same standard every other format in this
- * service is held to. `.3gp` was tried and deliberately left out this pass:
- * ffmpeg's default muxer for it picks `libopencore_amrnb`, which hard-fails
- * on anything but an 8kHz source, and this engine has no per-pair resampling
- * to fix that with. The remaining CloudConvert-catalogue formats not yet
- * here (`ac3`/`amr`/`au`/`caf`/`oga`/`voc`/`weba` for audio;
- * `avi`/`flv`/`m4v`/`mpeg`/`mpg`/`ogv`/`rm`/`rmvb`/`swf`/`ts`/`vob`/`wmv` and
- * the rarer `3g2`/`cavs`/`dv`/`m2ts`/`mod`/`mts`/`mxf`/`wtv` for video) are
- * all, in principle, formats this same generic `ffmpeg` mechanism could
- * reach - adding one is a single line in the relevant list below, verified
- * against a real file the same way every entry here already was, not a new
- * engine or a new code path.
+ * service is held to.
+ *
+ * TRIED AND DELIBERATELY LEFT OUT, because the zero-flag default fails for
+ * each of them on this build:
+ *   - `.3gp`/`.3g2`/`.amr` - the default audio codec is `libopencore_amrnb`,
+ *     which hard-fails on anything but an 8kHz source, and this engine has
+ *     no per-pair resampling to fix that with.
+ *   - `.weba` - ffmpeg has no muxer registered for the bare `.weba`
+ *     extension (it writes fine as `.webm`, or with an explicit `-f webm`,
+ *     neither of which a flag-free per-pair engine can express).
+ *   - `.mxf`/`.dv`/`.mod`/`.cavs` - each needs a specific codec/profile
+ *     (`.cavs` has no encoder in this build at all) that the default
+ *     muxer's own codec choice does not satisfy.
+ * The remaining CloudConvert-catalogue formats not yet here (`amr`/`weba`
+ * for audio already covered above; `rm`/`rmvb`/`swf` for video) are, in
+ * principle, formats this same generic `ffmpeg` mechanism could reach if a
+ * future build's defaults changed - adding one is a single line in the
+ * relevant list below, verified against a real file the same way every
+ * entry here already was, not a new engine or a new code path.
  */
 
 export type MediaKind = 'audio' | 'video';
@@ -43,12 +51,24 @@ export type MediaExtension =
   | '.opus'
   | '.aiff'
   | '.m4b'
+  | '.ac3'
+  | '.au'
+  | '.caf'
+  | '.oga'
+  | '.voc'
   | '.mp4'
   | '.webm'
   | '.mkv'
   | '.avi'
   | '.mov'
-  | '.flv';
+  | '.flv'
+  | '.asf'
+  | '.f4v'
+  | '.m4v'
+  | '.mpeg'
+  | '.ogv'
+  | '.ts'
+  | '.wmv';
 
 export type MediaTargetId =
   | 'mp3'
@@ -61,12 +81,24 @@ export type MediaTargetId =
   | 'opus'
   | 'aiff'
   | 'm4b'
+  | 'ac3'
+  | 'au'
+  | 'caf'
+  | 'oga'
+  | 'voc'
   | 'mp4'
   | 'webm'
   | 'mkv'
   | 'avi'
   | 'mov'
-  | 'flv';
+  | 'flv'
+  | 'asf'
+  | 'f4v'
+  | 'm4v'
+  | 'mpeg'
+  | 'ogv'
+  | 'ts'
+  | 'wmv';
 
 interface MediaFormat {
   extension: MediaExtension;
@@ -94,6 +126,11 @@ const MEDIA_FORMATS: Readonly<Record<MediaTargetId, MediaFormat>> = {
   opus: { extension: '.opus', id: 'opus', kind: 'audio', mediaType: 'audio/opus', label: 'OPUS' },
   aiff: { extension: '.aiff', id: 'aiff', kind: 'audio', mediaType: 'audio/aiff', label: 'AIFF' },
   m4b: { extension: '.m4b', id: 'm4b', kind: 'audio', mediaType: 'audio/mp4', label: 'M4B' },
+  ac3: { extension: '.ac3', id: 'ac3', kind: 'audio', mediaType: 'audio/ac3', label: 'AC3' },
+  au: { extension: '.au', id: 'au', kind: 'audio', mediaType: 'audio/basic', label: 'AU' },
+  caf: { extension: '.caf', id: 'caf', kind: 'audio', mediaType: 'audio/x-caf', label: 'CAF' },
+  oga: { extension: '.oga', id: 'oga', kind: 'audio', mediaType: 'audio/ogg', label: 'OGA' },
+  voc: { extension: '.voc', id: 'voc', kind: 'audio', mediaType: 'audio/x-voc', label: 'VOC' },
   mp4: { extension: '.mp4', id: 'mp4', kind: 'video', mediaType: 'video/mp4', label: 'MP4' },
   webm: { extension: '.webm', id: 'webm', kind: 'video', mediaType: 'video/webm', label: 'WEBM' },
   mkv: {
@@ -112,6 +149,13 @@ const MEDIA_FORMATS: Readonly<Record<MediaTargetId, MediaFormat>> = {
     mediaType: 'video/x-flv',
     label: 'FLV',
   },
+  asf: { extension: '.asf', id: 'asf', kind: 'video', mediaType: 'video/x-ms-asf', label: 'ASF' },
+  f4v: { extension: '.f4v', id: 'f4v', kind: 'video', mediaType: 'video/mp4', label: 'F4V' },
+  m4v: { extension: '.m4v', id: 'm4v', kind: 'video', mediaType: 'video/x-m4v', label: 'M4V' },
+  mpeg: { extension: '.mpeg', id: 'mpeg', kind: 'video', mediaType: 'video/mpeg', label: 'MPEG' },
+  ogv: { extension: '.ogv', id: 'ogv', kind: 'video', mediaType: 'video/ogg', label: 'OGV' },
+  ts: { extension: '.ts', id: 'ts', kind: 'video', mediaType: 'video/mp2t', label: 'TS' },
+  wmv: { extension: '.wmv', id: 'wmv', kind: 'video', mediaType: 'video/x-ms-wmv', label: 'WMV' },
 };
 
 export const MEDIA_EXTENSIONS = Object.values(MEDIA_FORMATS).map((f) => f.extension) as MediaExtension[];

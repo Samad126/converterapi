@@ -679,7 +679,8 @@ curl https://converterapi.example.com/media/jobs/<id>/download -o lecture.mp3
 ```
 
 **Formats.** Audio: `mp3`, `wav`, `flac`, `ogg`, `aac`, `m4a`, `wma`, `opus`,
-`aiff`, `m4b`. Video: `mp4`, `webm`, `mkv`, `avi`, `mov`, `flv`. A source only ever reaches a
+`aiff`, `m4b`, `ac3`, `au`, `caf`, `oga`, `voc`. Video: `mp4`, `webm`, `mkv`,
+`avi`, `mov`, `flv`, `asf`, `f4v`, `m4v`, `mpeg`, `ogv`, `ts`, `wmv`. A source only ever reaches a
 target of the SAME kind (audio to audio, video to video) — extracting an
 audio track from a video file is a real, different feature this endpoint
 does not offer. This list is deliberately smaller than audio/video support
