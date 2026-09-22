@@ -45,6 +45,8 @@ import {
 import { ClientGoneError, Errors } from '../errors.ts';
 import {
   archivesFiles,
+  ARROW_EXTENSIONS,
+  ARROW_TARGETS,
   pdfFilterFor,
   type AllowedExtension,
   type ResolvedConversion,
@@ -57,9 +59,15 @@ import { extractLayers, MANIFEST_FILENAME, manifestJson } from '../lib/psd-layer
 import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
 import { zipDeflated } from '../lib/zip.ts';
-import { collectTreeFiles, createArchive, extractArchiveTree } from './archive.service.ts';
-import { parseDataSource, serializeDataTarget } from './data.service.ts';
+import { collectTreeFiles, createArchive, decompressZstd, extractArchiveTree } from './archive.service.ts';
+import { parseArrowSource, serializeArrowTarget } from './arrow.service.ts';
+import { runAssimpExport } from './assimp.service.ts';
+import { parseDataSource, parseSqliteSource, serializeDataTarget, serializeSqliteTarget } from './data.service.ts';
+import { runEbookConvert } from './ebook.service.ts';
+import { renderEmailAsHtml, renderEmailAsText } from './email.service.ts';
 import { runFfmpeg } from './ffmpeg.service.ts';
+import { runFontConvert } from './font.service.ts';
+import { runHeifDecode, runHeifEncode } from './heif.service.ts';
 import { PANDOC_WRITERS, runPandoc } from './pandoc.service.ts';
 import {
   PDF_ENGINE_NO_TABLES_EXIT_CODE,
@@ -161,11 +169,44 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
       case 'extract':
         return runExtractPipeline({ inputPath, target, signal, deadline });
       case 'data':
-        return runDataPipeline({ inputPath, sourceExtension: source.extension, target, signal });
+        return runDataPipeline({
+          inputPath,
+          sourceExtension: source.extension,
+          target,
+          workspace,
+          deadline,
+          signal,
+        });
       case 'archive':
-        return runArchivePipeline({ inputPath, outDir, workspace, target, signal, deadline });
+        return runArchivePipeline({
+          inputPath,
+          outDir,
+          workspace,
+          sourceExtension: source.extension,
+          target,
+          signal,
+          deadline,
+        });
       case 'ffmpeg':
         return runFfmpegPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+      case 'heif':
+        return runHeifPipeline({
+          inputPath,
+          outDir,
+          workspace,
+          sourceExtension: source.extension,
+          target,
+          signal,
+          deadline,
+        });
+      case 'assimp':
+        return runAssimpPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+      case 'ebook':
+        return runEbookPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+      case 'font':
+        return runFontPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+      case 'email':
+        return runEmailPipeline({ inputPath, target, signal });
       case 'soffice':
         return target.mode === 'raster'
           ? runRasterPipeline({
@@ -575,15 +616,38 @@ async function runDataPipeline(run: {
   inputPath: string;
   sourceExtension: AllowedExtension;
   target: TargetFormat;
+  workspace: string;
+  deadline: number;
   signal?: AbortSignal;
 }): Promise<ProducedFile[]> {
-  const { inputPath, sourceExtension, target, signal } = run;
+  const { inputPath, sourceExtension, target, workspace, deadline, signal } = run;
   if (signal?.aborted) throw new ClientGoneError();
 
-  const text = await fsp.readFile(inputPath, 'utf8');
-  const value = parseDataSource(sourceExtension, text);
-  const serialized = serializeDataTarget(target.id, value);
+  // Two members of this group are bytes, not UTF-8 text - `.sqlite` (pure
+  // JS, `node:sqlite`) and `.parquet`/`.orc`/`.feather` (a real subprocess,
+  // `arrow_engine.py` via `arrow.service.ts` - see `ARROW_TARGETS`'s own
+  // comment in `formats.ts`). READING is resolved first, independently of
+  // what the target turns out to be, into the exact same common JS value
+  // every text member already produces; WRITING is resolved from that value
+  // afterwards, independently of what the source was. Multiplying the two
+  // out as one branch per (source kind x target kind) would be the same
+  // logic four times over - this is the same value the rest of the group
+  // shares, just read and written through a different door for these three
+  // extensions/targets.
+  const value = ARROW_EXTENSIONS.has(sourceExtension)
+    ? await parseArrowSource(inputPath, { workspace, deadline, signal })
+    : sourceExtension === '.sqlite'
+      ? parseSqliteSource(await fsp.readFile(inputPath))
+      : parseDataSource(sourceExtension, await fsp.readFile(inputPath, 'utf8'));
 
+  if (ARROW_TARGETS.has(target.id)) {
+    const data = await serializeArrowTarget(target.id, value, { workspace, deadline, signal });
+    return [{ name: `converted${target.extension}`, data }];
+  }
+  if (target.id === 'sqlite') {
+    return [{ name: `converted${target.extension}`, data: serializeSqliteTarget(value) }];
+  }
+  const serialized = serializeDataTarget(target.id, value);
   return [{ name: `converted${target.extension}`, data: Buffer.from(serialized, 'utf8') }];
 }
 
@@ -719,11 +783,12 @@ async function runArchivePipeline(run: {
   inputPath: string;
   outDir: string;
   workspace: string;
+  sourceExtension: AllowedExtension;
   target: TargetFormat;
   deadline: number;
   signal?: AbortSignal;
 }): Promise<ProducedFile[]> {
-  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+  const { inputPath, outDir, workspace, sourceExtension, target, deadline, signal } = run;
   const writer = target.archiveWriter;
   if (!writer) {
     // Unreachable as the matrix stands - `validateMatrix` refuses an
@@ -733,9 +798,36 @@ async function runArchivePipeline(run: {
     throw Errors.convertFailed(`no archiveWriter registered for target "${target.id}"`);
   }
 
+  // `.zst` needs its outer Zstandard layer undone by the standalone `zstd`
+  // CLI before `extractArchiveTree` ever runs `7z l` on it - `7z` has no
+  // Zstandard codec in this build at all (see `ZSTD_BIN`'s own comment in
+  // `config.ts`), unlike gzip/bzip2/xz, which `extractArchiveTree` already
+  // reads natively through plain `7z`. The decompressed file then goes
+  // through the EXACT SAME path a `.tar` upload would - if it is itself a
+  // tarball (`report.tar.zst`, the common case), `extractArchiveTree`'s own
+  // `7z l` on it just works; if it is a single non-tar file (`.zst` used the
+  // way `gzip -k` compresses one document), the same "not an archive"
+  // failure a bare `.zst` of a text file already gets from `7z l` today.
+  const archivePath =
+    sourceExtension === '.zst'
+      ? await (async () => {
+          const decompressedPath = join(workspace, 'archive-zst-decompressed');
+          const outcome = await decompressZstd({
+            inputPath,
+            outputPath: decompressedPath,
+            workspace,
+            deadline,
+            signal,
+          });
+          throwForOutcome(outcome);
+          throwForNonZeroExit(outcome, 'zstd');
+          return decompressedPath;
+        })()
+      : inputPath;
+
   const extractDir = join(workspace, 'archive-extracted');
   const tree = await extractArchiveTree({
-    archivePath: inputPath,
+    archivePath,
     workspace,
     outDir: extractDir,
     deadline,
@@ -798,6 +890,268 @@ async function runFfmpegPipeline(run: {
       `ffmpeg produced no ${target.extension} file ` +
         `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
     );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: a 3D-model source asking for another 3D format, answered by
+// assimp - see assimp.service.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `assimp` for a source/target pair `formats.ts` marks `mode: '3d'`.
+ * Shaped exactly like `runFfmpegPipeline` above - one process, one output
+ * file expected in `outDir` (a `.obj` target's incidental companion `.mtl`
+ * simply does not match `target.extension` and is left unread, same as any
+ * other engine's extra output file - see `assimp.service.ts`'s own header
+ * comment).
+ */
+async function runAssimpPipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+  await fsp.mkdir(outDir, { recursive: true });
+
+  const outcome = await runAssimpExport({ inputPath, outputPath, workspace, deadline, signal });
+  throwForOutcome(outcome);
+  throwForNonZeroExit(outcome, 'assimp');
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(
+      `assimp produced no ${target.extension} file ` +
+        `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
+    );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: an ebook source asking for another ebook format, answered by
+// ebook-convert (Calibre) - see ebook.service.ts
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `ebook-convert` for a `mode: 'ebook'` target, or for the
+ * `engineFrom.ebook` route into `epub` - both land here, same as
+ * `runHeifPipeline` serves both a `heic`/`heif` target and a `.heic`/`.heif`
+ * SOURCE reaching an ordinary transcode target. Shaped exactly like
+ * `runFfmpegPipeline`/`runAssimpPipeline` above - one process, one output
+ * file.
+ */
+async function runEbookPipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+  await fsp.mkdir(outDir, { recursive: true });
+
+  const outcome = await runEbookConvert({ inputPath, outputPath, workspace, deadline, signal });
+  throwForOutcome(outcome);
+  throwForNonZeroExit(outcome, 'ebook-convert');
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(
+      `ebook-convert produced no ${target.extension} file ` +
+        `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
+    );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: a font source asking for another font format, answered by
+// font_engine.py (fontTools) - see font.service.ts
+// ---------------------------------------------------------------------------
+
+async function runFontPipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+  await fsp.mkdir(outDir, { recursive: true });
+
+  const outcome = await runFontConvert({ inputPath, outputPath, workspace, deadline, signal });
+  throwForOutcome(outcome);
+  throwForNonZeroExit(outcome, 'font_engine.py');
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(
+      `font_engine.py produced no ${target.extension} file ` +
+        `(exit=${outcome.exitCode} signal=${outcome.signal ?? 'none'} stderr=${outcome.stderr})`,
+    );
+  }
+
+  return [{ name: outputName, data: file.data }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: `.eml` reaching the existing txt/html targets - see
+// email.service.ts. Pure JS, no subprocess, shaped like runExtractPipeline.
+// ---------------------------------------------------------------------------
+
+async function runEmailPipeline(run: {
+  inputPath: string;
+  target: TargetFormat;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, target, signal } = run;
+  if (signal?.aborted) throw new ClientGoneError();
+
+  const bytes = await fsp.readFile(inputPath);
+  const text = target.id === 'html' ? await renderEmailAsHtml(bytes) : await renderEmailAsText(bytes);
+
+  return [{ name: `converted${target.extension}`, data: Buffer.from(text, 'utf8') }];
+}
+
+// ---------------------------------------------------------------------------
+// engine: `.heic`/`.heif` in either direction - see `heif.service.ts`
+// ---------------------------------------------------------------------------
+
+/**
+ * Every extension `heif-convert` writes directly from a `.heic`/`.heif`
+ * source - verified by hand against a real HEIC file. Everything else in
+ * `TRANSCODE_TARGETS` (`bmp`/`gif`/`webp`/`avif`/`ico`) goes through an
+ * intermediate PNG instead - see `runHeifPipeline` below.
+ */
+const HEIF_CONVERT_DIRECT_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff']);
+
+/**
+ * Run the `heif` engine for a pair `formats.ts` marks `mode: 'heif'` (a
+ * `.heic`/`.heif` target) OR an ordinary `transcode` pair whose SOURCE is
+ * `.heic`/`.heif` (see `resolveConversion`'s own `heif`-before-`transcode`
+ * branch). Both directions land here because both need the same two tools,
+ * just in whichever order the pair actually calls for - see this file's own
+ * `heif.service.ts` header comment for why neither `ffmpeg` nor a single
+ * subprocess can do this alone.
+ */
+async function runHeifPipeline(run: {
+  inputPath: string;
+  outDir: string;
+  workspace: string;
+  sourceExtension: AllowedExtension;
+  target: TargetFormat;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProducedFile[]> {
+  const { inputPath, outDir, workspace, sourceExtension, target, deadline, signal } = run;
+  await fsp.mkdir(outDir, { recursive: true });
+
+  const sourceIsHeif = sourceExtension === '.heic' || sourceExtension === '.heif';
+  const targetIsHeif = target.id === 'heic' || target.id === 'heif';
+
+  const outputName = `converted${target.extension}`;
+  const outputPath = join(outDir, outputName);
+
+  if (sourceIsHeif && !targetIsHeif && HEIF_CONVERT_DIRECT_EXTENSIONS.has(target.extension)) {
+    // `heif-convert` writes this target's extension itself - one process.
+    const outcome = await runHeifDecode({ inputPath, outputPath, workspace, deadline, signal });
+    throwForOutcome(outcome);
+    throwForNonZeroExit(outcome, 'heif-convert');
+  } else if (sourceIsHeif) {
+    // Decode to an intermediate PNG first, then finish with whichever engine
+    // the target actually needs - `heif-enc` for a `.heic`/`.heif` target
+    // (a HEIC->HEIF repackage, e.g.), `ffmpeg` for anything else.
+    const intermediatePath = join(workspace, 'heif-intermediate.png');
+    const decodeOutcome = await runHeifDecode({
+      inputPath,
+      outputPath: intermediatePath,
+      workspace,
+      deadline,
+      signal,
+    });
+    throwForOutcome(decodeOutcome);
+    throwForNonZeroExit(decodeOutcome, 'heif-convert');
+
+    if (targetIsHeif) {
+      const encodeOutcome = await runHeifEncode({
+        inputPath: intermediatePath,
+        outputPath,
+        workspace,
+        deadline,
+        signal,
+      });
+      throwForOutcome(encodeOutcome);
+      throwForNonZeroExit(encodeOutcome, 'heif-enc');
+    } else {
+      const ffmpegOutcome = await runFfmpeg({
+        inputPath: intermediatePath,
+        outputPath,
+        workspace,
+        deadline,
+        signal,
+      });
+      throwForOutcome(ffmpegOutcome);
+      throwForNonZeroExit(ffmpegOutcome, 'ffmpeg');
+    }
+  } else {
+    // An ordinary image source asking for `heic`/`heif`. `heif-enc` only
+    // reads PNG/JPEG (verified by hand), so anything else is transcoded to
+    // an intermediate PNG by `ffmpeg` first - the same step every other
+    // `TRANSCODE_TARGETS` source already goes through, just run one step
+    // earlier.
+    const canEncodeDirectly =
+      sourceExtension === '.png' || sourceExtension === '.jpg' || sourceExtension === '.jpeg';
+    const encodeInputPath = canEncodeDirectly ? inputPath : join(workspace, 'heif-intermediate.png');
+
+    if (!canEncodeDirectly) {
+      const ffmpegOutcome = await runFfmpeg({
+        inputPath,
+        outputPath: encodeInputPath,
+        workspace,
+        deadline,
+        signal,
+      });
+      throwForOutcome(ffmpegOutcome);
+      throwForNonZeroExit(ffmpegOutcome, 'ffmpeg');
+    }
+
+    const encodeOutcome = await runHeifEncode({
+      inputPath: encodeInputPath,
+      outputPath,
+      workspace,
+      deadline,
+      signal,
+    });
+    throwForOutcome(encodeOutcome);
+    throwForNonZeroExit(encodeOutcome, 'heif-enc');
+  }
+
+  const produced = await collectProducedFiles(outDir, target.extension);
+  const file = produced.find((entry) => entry.name === outputName) ?? produced[0];
+  if (!file) {
+    throw Errors.convertFailed(`heif engine produced no ${target.extension} file`);
   }
 
   return [{ name: outputName, data: file.data }];

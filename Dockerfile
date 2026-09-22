@@ -141,11 +141,100 @@ FROM node:22-bookworm-slim AS runtime
 #     contract can be changed to accommodate without breaking it for every
 #     other target.
 #
+# libheif-examples provides `heif-convert`/`heif-enc`, the `.heic`/`.heif`
+# engine - a SEVENTH conversion engine, needed because this build's `ffmpeg`
+# has no HEIF demuxer or encoder at all (verified by hand against the
+# development machine's ffmpeg; Debian's package has never been checked for
+# it either, which is exactly what `assertHeifPresent`'s boot-time check
+# below exists to catch before a real request does). See `heif.service.ts`.
+#
+# `.svg` needs NO new package: it rides the two engines already here.
+# LibreOffice opens an SVG as a Draw document directly (`draw_svg_Import`/
+# `draw_svg_Export`, verified by hand against a real file), which is how it
+# reaches `pdf`/`svg`; the development machine's `ffmpeg` also decodes `.svg`
+# itself (an `--enable-librsvg` build - verified by hand), which is how it
+# reaches the ordinary image targets (`bmp`/`gif`/etc). THIS IS THE ONE
+# UNVERIFIED ASSUMPTION IN THIS FILE: Debian bookworm's own `ffmpeg` package
+# may or may not be built with `librsvg` support, and nothing in this
+# Dockerfile proves it either way - only `assertFfmpegPresent`'s "can it run
+# at all" check runs at boot, not "can it decode an SVG". If an `.svg` ->
+# `bmp`/`gif`/etc request fails in production where it worked in
+# development, this is where to look first: either add `librsvg2-bin`
+# and route that class of source through it instead, or accept that `.svg`
+# only reaches `pdf`/`svg` (the LibreOffice route) in this image.
+#
+# `.emf`/`.wmf`/`.eps` also need NO new package - same Draw route as `.svg`
+# above (`draw_emf_Import`/`draw_emf_Export` etc, verified by hand both
+# directions for all three). They do NOT ride `ffmpeg` the way `.svg` does:
+# this build's `ffmpeg` has no decoder for any of the three, so they reach
+# only `pdf`/`svg`/each other, never the ordinary raster/transcode targets.
+#
+# `zstd` is a SEVENTH new package (alongside `libheif-examples`), needed for
+# `.zst`/`tar.zst` - `7z` has no Zstandard codec in this build at all
+# (verified by hand: `7z l`/`7z a -tzstd` both fail with "Unsupported
+# archive type"), unlike gzip/bzip2/xz, which it handles natively. See
+# `archive.service.ts`.
+#
+# `.jxl`/`.jp2`/`.qoi`/`.tga`/`.pcx`/`.apng` need NO new package either -
+# they ride the SAME `ffmpeg` `TRANSCODE_TARGETS` route `.bmp`/`.gif`/etc
+# already do. `.qoi`/`.tga`/`.pcx`/`.apng` are native `ffmpeg` codecs (no
+# `--enable-*` build flag of their own), so as safe a bet on Debian's
+# package as `.bmp`/`.gif` already are; `.jxl`/`.jp2` need
+# `--enable-libjxl`/`--enable-libopenjpeg` respectively, which is the SAME
+# unverified-on-Debian risk `.svg`'s own `librsvg` flag carries above -
+# `assertFfmpegPresent`'s boot check proves `ffmpeg` runs, not that these
+# specific codecs are compiled in.
+#
+# `assimp-utils` is an EIGHTH new package - the 3D-model engine
+# (`.obj`/`.stl`/`.ply`/`.glb`/`.3mf`/`.off`). Small (~10MB installed,
+# 3 packages) - `assimp export <in> <out>` picks both reader and writer from
+# each path's own extension, verified by hand for the full 6x5 matrix this
+# service advertises. `.off` is a real, verified source (`assimp listext`
+# reads it) but NOT a write target - `assimp listexport` does not list it at
+# all, and asking for it fails outright. See `assimp.service.ts`.
+#
+# `calibre` is a NINTH new package - the ebook engine (`.epub`/`.mobi`/
+# `.azw3`/`.fb2`/`.lrf`/`.pdb`/`.snb`/KEPUB). By far the heaviest single
+# addition in this file (~489MB installed, 80 packages - mostly its own
+# Qt6/Python stack), because `ebook-convert` is Calibre's CLI, not a
+# separate lightweight tool. Verified by hand for the full matrix (six
+# readable sources into all eight targets, sixty pairs, zero failures).
+# `.snb` is a write target but NOT a read source - this build's SNB reader
+# plugin never populates a document's title, which crashes nearly every
+# writer trying to read one back out (verified by hand). See
+# `ebook.service.ts`'s own header comment for both asymmetries in full, and
+# `kepub`'s own `TargetFormat` entry in `formats.ts` for why its OUTPUT
+# path needs the literal double extension `.kepub.epub`, not a bare
+# `.kepub`.
+#
+# `python3-fonttools` is a TENTH new package - the font engine (`.ttf`/
+# `.otf`/`.woff`/`.woff2`), run through `scripts/font_engine.py` the same
+# way `pdf_engine.py` already runs. Small, verified by hand round-tripped
+# through all four against a real font (`assets/fonts/DancingScript.ttf`).
+# `.ttf`<->`.otf` is a container swap, not a real outline conversion -
+# `fontTools` does not do that, and neither does this feature; see
+# `font_engine.py`'s own header comment.
+#
+# `pyarrow` (pip, no Debian package - an ELEVENTH new dependency) is the
+# columnar-data engine (`.parquet`/`.orc`/`.feather`), run through
+# `scripts/arrow_engine.py`. The heaviest pip addition here (~50MB wheel)
+# but the only real option - no comparable JS library exists for any of the
+# three formats, unlike `.xml`/`.toml`/`.ini` earlier. Bridges into
+# `data.service.ts`'s own pure-JS CSV/TSV/JSON/etc group through JSON, not a
+# format of its own - see `arrow_engine.py`'s own header comment.
+#
+# `.eml` needs NO new package at all - `mailparser` (npm) is pure JS. `.msg`
+# (proprietary OLE/MAPI) stays out of this matrix entirely: there is no
+# legal way to author a real `.msg` fixture without Outlook, the same rule
+# that already excludes `.rar`.
+#
 # The service refuses to boot without any of this. Preflight checks soffice,
-# `pdftoppm`, `pandoc`, `7z`, `ffmpeg` and the fonts, and then converts one
-# real document per family (plus one pandoc case, one archive case and one
-# ffmpeg case) before it listens - so a missing module fails loudly at
-# startup rather than on some user's first spreadsheet, days later.
+# `pdftoppm`, `pandoc`, `7z`, `ffmpeg`, `heif-convert`/`heif-enc`, `zstd`,
+# `assimp`, `ebook-convert`, `fontTools`, `pyarrow` and the fonts, and then
+# converts one real document per family (plus one pandoc case, one archive
+# case and one ffmpeg case) before it listens - so a missing module fails
+# loudly at startup rather than on some user's first spreadsheet, days
+# later.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer \
@@ -166,6 +255,11 @@ RUN apt-get update \
       pandoc \
       p7zip-full \
       ffmpeg \
+      libheif-examples \
+      zstd \
+      assimp-utils \
+      calibre \
+      python3-fonttools \
       tesseract-ocr \
       tesseract-ocr-eng \
       tesseract-ocr-aze \
@@ -179,6 +273,7 @@ RUN apt-get update \
       openpyxl \
       python-docx \
       ocrmypdf \
+      pyarrow \
  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \

@@ -70,18 +70,27 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.txt` | PDF, DOCX, ODT, HTML, RTF, EPUB |
 | `.html` `.htm` | PDF, DOCX, ODT, TXT, RTF, EPUB |
 | `.rtf` | DOCX, PDF, ODT, TXT, HTML, EPUB |
-| `.png` `.jpg` `.jpeg` | PDF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/PNG (image)/JPG (image) (see below) |
+| `.png` `.jpg` `.jpeg` | PDF, SVG, EMF, WMF, EPS, HEIC, HEIF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG/PNG (image)/JPG (image) (see below) |
 | `.psd` | PNG (one image per layer) |
-| `.pdf` | PDF/A, PNG/JPG (one image per page), DOCX/PPTX/XLSX/Markdown (see below) |
+| `.pdf` | PDF/A, PNG/JPG (one image per page), SVG, EMF, WMF, EPS, DOCX/PPTX/XLSX/Markdown (see below) |
+| `.svg` | PDF, EMF, WMF, EPS, HEIC, HEIF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG/PNG (image)/JPG (image) (LibreOffice opens an SVG as a Draw document for PDF/SVG/EMF/WMF/EPS; `ffmpeg`'s own `librsvg` decoder reads it directly for the rest) |
+| `.emf` `.wmf` `.eps` | PDF, SVG, plus each other (minus whichever is its own format) - LibreOffice Draw only; no `ffmpeg` decoder for any of the three in this build, so no raster/transcode targets |
+| `.heic` `.heif` | HEIC/HEIF (minus whichever is its own format), plus BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG/PNG (image)/JPG (image) (`libheif`'s `heif-convert`/`heif-enc` - the one pair `ffmpeg` cannot read or write at all in this build) |
 | `.rst` `.tex` `.textile` `.org` `.opml` `.muse` `.ipynb` | DOCX, HTML, ODT, RTF, TXT, Markdown |
 | `.md` | DOCX, HTML, ODT, RTF, TXT |
-| `.zip` | TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ |
-| `.tar` `.tgz` `.tbz2` `.txz` `.gz` `.bz2` `.xz` `.iso` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ (minus whichever is its own format) |
-| `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2, CBZ |
-| `.cbz` | ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z (a CBZ is a plain ZIP of page images under a comic-reader extension, so it rides the same archive engine) |
-| `.bmp` `.gif` `.tiff` `.webp` `.avif` `.ico` | BMP/GIF/TIFF/WEBP/AVIF/ICO (minus whichever is its own format) |
+| `.zip` | TAR, TAR.GZ, TAR.BZ2, TAR.ZST, 7Z, CBZ |
+| `.tar` `.tgz` `.tbz2` `.txz` `.gz` `.bz2` `.xz` `.zst` `.iso` | ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.ZST, 7Z, CBZ (minus whichever is its own format; `.zst` alone needs the standalone `zstd` CLI to undo its outer layer, since `7z` has no Zstandard codec) |
+| `.7z` | ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.ZST, CBZ |
+| `.cbz` | ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.ZST, 7Z (a CBZ is a plain ZIP of page images under a comic-reader extension, so it rides the same archive engine) |
+| `.bmp` `.gif` `.tiff` `.webp` `.avif` `.ico` `.jxl` `.jp2` `.qoi` `.tga` `.pcx` `.apng` | BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG (minus whichever is its own format), plus HEIC/HEIF |
 | `.srt` `.vtt` `.ass` `.ssa` | SRT/VTT/ASS/SSA (minus whichever is its own format) |
-| `.tsv` `.json` `.yaml` `.yml` `.jsonl` | CSV, plus TSV/JSON/YAML/JSONL (minus whichever is its own format) |
+| `.tsv` `.json` `.yaml` `.yml` `.jsonl` `.xml` `.toml` `.ini` `.sqlite` `.parquet` `.orc` `.feather` | CSV, plus TSV/JSON/YAML/JSONL/XML/TOML/INI/SQLite/Parquet/ORC/Feather (minus whichever is its own format; `.sqlite`/`.parquet`/`.orc`/`.feather` are bytes, not text - see below) |
+| `.obj` `.stl` `.ply` `.glb` `.3mf` | OBJ, STL, PLY, GLB, 3MF (minus whichever is its own format) - `assimp`, a ninth engine |
+| `.off` | OBJ, STL, PLY, GLB, 3MF - read-only: `assimp` has no OFF writer at all (see below) |
+| `.epub` `.mobi` `.azw3` `.fb2` `.lrf` `.pdb` | EPUB, MOBI, AZW3, FB2, LRF, PDB, SNB, KEPUB (minus whichever is its own format) - Calibre's `ebook-convert`, a tenth engine |
+| `.ttf` `.otf` `.woff` `.woff2` | TTF, OTF, WOFF, WOFF2 (minus whichever is its own format) - `fontTools`, an eleventh engine |
+| `.parquet` `.orc` `.feather` | CSV, plus TSV/JSON/YAML/JSONL/XML/TOML/INI/SQLite/Parquet/ORC/Feather (minus whichever is its own format) - `pyarrow`, a twelfth engine, bridged into the data engine's common model (see below) |
+| `.eml` | TXT, HTML (a short From/To/Subject/Date header block plus the body) - `mailparser`, pure JS, no subprocess |
 
 `.ppt`/`.pps`/`.pot` and their `x` siblings, `.dot`/`.dotx`, and `.xls`/
 `.xlsm` are legacy or variant extensions LibreOffice already opens through
@@ -286,6 +295,261 @@ than being auto-resized.
 A request for a target that exists but is not reachable from your source is a
 `415` whose message lists what that source *can* become. A target that does not
 exist at all is a `404`.
+
+### `.svg`: no new engine, two existing ones
+
+`.svg` needed no new dependency. LibreOffice opens an SVG as a Draw document
+directly, the same way `.png`/`.jpg` already do - verified by hand
+(`draw_svg_Import`/`draw_svg_Export`, the same filter id `soffice`'s own log
+line names for the export direction, against both a real PDF and a real PNG)
+- which is what lets `.svg` reach `pdf`/`svg` the ordinary `direct`-mode way.
+Separately, this build's `ffmpeg` also decodes SVG itself (an
+`--enable-librsvg` build - verified by hand), which is what lets `.svg`
+reach the ordinary `bmp`/`gif`/`tiff`/`webp`/`avif`/`ico`/`png-image`/
+`jpg-image` targets the same flat way every other image source does. There
+is no SVG *encoder* in this `ffmpeg` build or a plausible one to add - a
+raster image becoming genuine vector art is not a real conversion - so `svg`
+as a target is reached only through the LibreOffice route, from sources
+whose family is `draw` (`.png`/`.jpg`/`.jpeg`/`.pdf`/`.svg` itself excluded).
+
+**Debian's `ffmpeg` package build was not verified for `librsvg` support** -
+only the development machine's was. See the Dockerfile's own comment above
+the `libheif-examples` line for what to do if an `.svg` -> raster request
+fails in production where it worked in development.
+
+### `.heic`/`.heif`: a seventh engine, because `ffmpeg` cannot read either one
+
+This build's `ffmpeg` has no HEIF demuxer or encoder at all (verified by
+hand: `ffmpeg -demuxers`/`-decoders` list no `heif` entry), so `.heic`/
+`.heif` needed a real seventh conversion engine -
+[`heif.service.ts`](src/services/heif.service.ts), running `libheif`'s own
+`heif-convert`/`heif-enc` CLIs (Debian/Ubuntu package: `libheif-examples`)
+as subprocesses, exactly like `ffmpeg` itself is run.
+
+`heif-convert` decodes a `.heic`/`.heif` source, and writes `jpg`/`jpeg`/
+`png`/`tif`/`tiff` directly from it - covering `tiff`/`png-image`/
+`jpg-image` in one process. The other four transcode targets (`bmp`/`gif`/
+`webp`/`avif`/`ico`) go through an intermediate PNG that `ffmpeg` then
+transcodes onward, same as any other `transcode` pair.
+
+`heif-enc` encodes a `.heic`/`.heif` target, but only reads PNG or JPEG
+(verified by hand: a `.bmp` input fails with `Not a JPEG file`) - so
+producing `heic`/`heif` from any other image source (`.bmp`/`.gif`/`.tiff`/
+`.webp`/`.avif`/`.ico`/`.svg`) first runs that source through the ordinary
+`ffmpeg` transcode to an intermediate PNG, exactly the step every one of
+those sources already takes to reach any other target.
+
+Both tools are checked at boot the same way `ffmpeg`/pandoc/7z are -
+`assertHeifPresent` in [`preflight.service.ts`](src/services/preflight.service.ts)
+- so a container missing `libheif-examples` fails loudly at startup rather
+than on someone's first HEIC upload.
+
+### `.emf`/`.wmf`/`.eps`: the same Draw route as `.svg`, minus the `ffmpeg` half
+
+No new engine and no new package. LibreOffice opens all three the same way it
+opens an SVG - as a Draw document - and both directions were verified by hand
+against real files (`draw_emf_Import`/`draw_emf_Export`,
+`draw_wmf_Import`/`draw_wmf_Export`, `draw_eps_Import`/`draw_eps_Export`).
+That gets them `pdf`/`svg`/each other, the same `direct`-mode route `svg`
+itself uses.
+
+What they do **not** get is `.svg`'s other half: this build's `ffmpeg` has no
+decoder for EMF, WMF or EPS at all, so none of the three reaches
+`TRANSCODE_TARGETS` (`bmp`/`gif`/`jxl`/etc) or `heic`/`heif` the way `.svg`
+does. They also do not reach the raster `png`/`jpg` targets - those are
+reserved for sources with real pages to split one image per page from (a
+presentation, or a PDF), which a single-page vector format is not; a plain
+image "converting" to a raster target is exactly the confusion
+`png-image`/`jpg-image` already exist to avoid, and `test/unit.test.ts`'s own
+`routes only presentations and PDFs to the raster pipeline` check enforces it
+for every source in the matrix, not just these three.
+
+### `.jxl`/`.jp2`/`.qoi`/`.tga`/`.pcx`/`.apng`: six more `ffmpeg` transcode targets
+
+Same engine as `.bmp`/`.gif`/`.tiff`/`.webp`/`.avif`/`.ico` - appended to
+`TRANSCODE_TARGETS` in [`formats.ts`](src/formats.ts), which is what makes
+every existing `TRANSCODE_TARGETS` source (and `.svg`/`.heic`/`.heif`, which
+reach that list through their own routes) gain all six for free, with no
+per-source edit needed. All six were verified by hand, both directions.
+
+`.qoi`/`.tga`/`.pcx`/`.apng` are native `ffmpeg` codecs - no `--enable-*`
+build flag of their own, so as safe a bet on a different `ffmpeg` build as
+`.bmp`/`.gif` already are. `.jxl`/`.jp2` need `--enable-libjxl`/
+`--enable-libopenjpeg` respectively, the same unverified-on-Debian risk
+`.svg`'s own `librsvg` flag carries - see the Dockerfile's own comment.
+
+### `.xml`/`.toml`/`.ini`/`.sqlite`: four more members of the data engine
+
+Same `data.service.ts` engine CSV/TSV/JSON/JSONL/YAML already use - one
+common JS value, every source read into it, every target written from it.
+Three small libraries were added for this (`xml-js`, `smol-toml`, `ini`),
+held to the same bar `yaml` already was: the standard tool for its format,
+with at most one dependency of its own.
+
+XML and INI need a shape check **this engine performs itself**, because
+neither library refuses a bad top-level shape on its own (verified by hand:
+both silently turn a scalar's characters or an array's indices into garbage
+keys instead of throwing) - XML additionally needs exactly one top-level key,
+since a document can have only one root element. TOML's own library already
+throws a clear error for a non-object value, so that one is passed through
+rather than duplicated.
+
+`.sqlite` is the one member of this group that is bytes, not text - read and
+written through `node:sqlite`'s `DatabaseSync` (a Node **built-in** since
+22.5, not a dependency - verified by hand against the exact
+`node:22-bookworm-slim` image this service's own Dockerfile builds from,
+`serialize()`/`deserialize()` included). Reading takes the first user table's
+rows as flat records, the same shape CSV/TSV already produce; writing creates
+one table named `data`. A multi-table `.sqlite` file is a real shape this
+direction cannot reconstruct, the same honest limitation `layers`/`raster`
+already have for source shapes they were never meant to produce.
+
+### `tar.zst`: the one archive format `7z` cannot touch at all
+
+`7z` reads and writes gzip/bzip2/xz natively, but has no Zstandard codec in
+this build whatsoever - verified by hand, both `7z l` on a real `.zst` file
+and `7z a -tzstd` fail with `Unsupported archive type`. So `.zst`/`tar.zst`
+route through the standalone `zstd` CLI instead (Debian/Ubuntu package:
+`zstd`), in both directions: a `.zst` source has its outer layer undone by
+`zstd -d` before `extractArchiveTree` ever runs `7z l` on what's left (which
+then goes through the exact same path a plain `.tar` upload would), and a
+`tar.zst` target is built the same two-step way `tar.gz`/`tar.bz2` already
+are - an intermediate `.tar` from `7z`, then compressed - just with `zstd`
+doing the compression step instead of a second `7z a` call.
+
+### `.obj`/`.stl`/`.ply`/`.glb`/`.3mf`/`.off`: a ninth engine, `assimp`
+
+A flat format-to-format tool like `ffmpeg` - `assimp export <in> <out>`
+picks both the reader and the writer from each path's own extension, no
+per-pair flag needed. Verified by hand for the full matrix this service
+advertises (every one of the five write targets, from every one of the six
+sources, chained end to end: `obj -> stl -> glb -> ply -> 3mf -> obj`).
+
+`.off` reads but does not write - not an oversight. `assimp listext` lists
+it as a real import format; `assimp listexport` does not list it at all, and
+asking for it anyway fails outright with "no output format specified and I
+failed to guess it". The same asymmetric "one direction is a real, tested
+filter and the other is not" shape `.rar` already has elsewhere in this
+service (there, read-only for a different reason - no legal way to author a
+`.rar` fixture at all).
+
+A `.obj` *target* writes a companion `.mtl` file alongside it, even from a
+source with no materials (verified by hand) - Calibre's writer does this
+unconditionally, with no flag to suppress it. This service does nothing
+special for it: `collectProducedFiles` already filters by the requested
+extension, so the `.mtl` simply never matches and is left behind unread, the
+same as any other engine's incidental output file.
+
+Checked at boot the same way `ffmpeg`/`zstd` are - `assertAssimpPresent` in
+[`preflight.service.ts`](src/services/preflight.service.ts) - so a container
+missing `assimp-utils` (~10MB installed, 3 packages: small) fails loudly at
+startup.
+
+### `.epub`/`.mobi`/`.azw3`/`.fb2`/`.lrf`/`.pdb`/`.snb`/KEPUB: a tenth engine, Calibre
+
+The heaviest single addition to this image: `calibre` pulls in ~489MB across
+80 packages (mostly its own bundled Qt6/Python stack), because
+`ebook-convert` is Calibre's own CLI, not a small standalone tool the way
+`heif-convert`/`assimp`/`zstd` are. Verified by hand for the full matrix -
+six readable sources into all eight targets, sixty pairs, zero failures.
+
+`epub` itself is NOT a new target id - it already existed, written by
+LibreOffice's own Writer EPUB filter for every writer-family source. The
+five ebook sources reach that SAME id through a second, non-LibreOffice
+route (`engineFrom.ebook`), the identical shape a PDF already uses to reach
+`docx`/`pptx`/`xlsx` through `pdf_engine.py` instead of a LibreOffice filter
+that does not exist for it.
+
+`.snb` writes but does not read - not an oversight, and the mirror image of
+`.off` above. This build's SNB *reader* plugin never populates a document's
+title metadata, which crashes nearly every writer trying to read one back
+out (`IndexError: list index out of range`, verified by hand against `mobi`/
+`azw3`/`lrf`/`fb2`'s own writers - `pdb` is the one exception, since it
+happens not to need a title at all). Writing `.snb` from every other source
+works fine, which is exactly why there is no `.snb` entry in
+`AllowedExtension` at all, only in the target list.
+
+`kepub` needs its OUTPUT path to carry the literal double extension
+`.kepub.epub`, not a bare `.kepub` - Calibre's KEPUB writer plugin is only
+selected by that exact suffix (verified by hand: the bare form fails with
+"No plugin to handle output format: kepub"), the same shape
+`tar.gz`/`tar.bz2`/`tar.zst` already use for a genuinely two-part extension.
+It needs no SOURCE extension of its own for the read direction: a
+`.kepub.epub` upload IS a real EPUB container underneath (verified by hand,
+feeding one back into `ebook-convert`), so it already reads correctly under
+the ordinary `.epub` bucket `extname()` truncates it to - the same way
+`.tar.gz` already reads as a plain `.gz` elsewhere in this matrix.
+
+Checked at boot the same way every other engine is - `assertEbookConvertPresent`
+in [`preflight.service.ts`](src/services/preflight.service.ts).
+
+### `.ttf`/`.otf`/`.woff`/`.woff2`: an eleventh engine, `fontTools`
+
+A flat format-to-format tool like `ffmpeg`/`assimp`/`ebook-convert` -
+[`scripts/font_engine.py`](scripts/font_engine.py) opens any of the four with
+`fontTools.ttLib.TTFont` and writes any other by setting `.flavor` before
+`.save()` (`None` for `.ttf`/`.otf`, `'woff'`/`'woff2'` for the other two).
+Verified by hand, round-tripped through all four against a real font already
+in this repo (`assets/fonts/DancingScript.ttf`, a dependency of the PDF
+signature feature).
+
+`.ttf` -> `.otf` (and back) is a CONTAINER swap, not a real TrueType-to-CFF
+outline conversion - `fontTools` does not do that implicitly, and this
+feature does not claim to. The glyph outlines stay exactly what they were;
+only the `sfnt` wrapper's declared flavor changes, which is still a real,
+useful conversion (a renderer that insists on the `.otf` extension opens the
+result correctly - verified by hand).
+
+Installed via `python3-fonttools` (apt), not pip - the one Python engine in
+this service that is. Checked at boot the same shape `assertPdfEnginePresent`
+already uses for `pdf_engine.py`'s own dependencies: run `python3 -c "import
+fontTools"` and fail loudly if it cannot.
+
+### `.parquet`/`.orc`/`.feather`: a twelfth engine, `pyarrow`, bridged into the data engine
+
+Unlike `.xml`/`.toml`/`.ini` earlier, no comparable JS library exists for any
+of these three formats worth trusting the way `xml-js`/`smol-toml`/`ini`
+were - so [`scripts/arrow_engine.py`](scripts/arrow_engine.py) (`pyarrow`,
+installed via pip - no Debian package exists) is a real subprocess, the same
+shape `pdf_engine.py` already is for `docx`/`pptx`/`xlsx`. What makes it
+different from every OTHER subprocess engine in this service is where the
+bridge sits: not a document format, but JSON - the script reads a `.parquet`/
+`.orc`/`.feather` source and writes a JSON array of flat row objects (the
+exact shape CSV/TSV's own reader already produces), or the reverse, so
+`data.service.ts`'s own common-JS-value model absorbs all three without ever
+knowing a subprocess was involved. `arrow.service.ts` is the thin Node-side
+wrapper that writes/reads the intermediate JSON file and shells out to the
+script; `runDataPipeline` in `conversion.service.ts` is what decides, per
+request, whether a source/target needs that door or the ordinary text one.
+
+Verified by hand for the full round trip: CSV -> Parquet -> ORC -> Feather ->
+CSV, byte-for-byte the same rows at the end. Checked at boot the same shape
+`fontTools` is: `python3 -c "import pyarrow, pyarrow.parquet, pyarrow.orc,
+pyarrow.feather"`.
+
+### `.eml`: reaching the existing `txt`/`html` targets, no new engine mode
+
+`.eml` is RFC 822 plain text - unlike `.msg` (proprietary OLE/MAPI, see
+below), a real, hand-authorable, verified source. Read by `mailparser`
+(pure JS, no subprocess - [`email.service.ts`](src/services/email.service.ts)),
+already the standard tool for this in the `nodemailer` ecosystem, the same
+bar `yaml`/`xml-js`/`smol-toml` were held to when they were added.
+
+`.eml` reaches the EXISTING `txt`/`html` target ids through
+`engineFrom.email` - the identical second-route shape a PDF already uses for
+`docx`/`pptx`/`xlsx`, or the ebook sources use for `epub`. `txt` is the
+message's own plain-text part, or `mailparser`'s own HTML-to-text fallback
+if it only has an HTML part (verified by hand); `html` is the message's own
+HTML part, or a minimal wrapper around the plain text if it has none. Both
+are prefixed with a short From/To/Subject/Date header block - an email with
+no indication of who sent it or when is not a faithful rendering of one.
+
+**`.msg` is NOT in this matrix at all** - not an oversight, the same rule
+that already excludes `.rar`. `.msg` is Outlook's proprietary OLE/MAPI
+container, and there is no legal way to author a real one to test against
+without Outlook itself (extract-msg, the standard Python reader for it, was
+confirmed installable, but confirming it actually WORKS needs a real `.msg`
+file this project has no way to produce or obtain).
 
 ### The two targets LibreOffice does not produce
 

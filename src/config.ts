@@ -115,6 +115,39 @@ export const PANDOC_BIN = process.env.PANDOC_BIN ?? 'pandoc';
 export const FFMPEG_BIN = process.env.FFMPEG_BIN ?? 'ffmpeg';
 
 /**
+ * The `.heic`/`.heif` engine - a sixth conversion engine, running
+ * `libheif`'s own `heif-convert`/`heif-enc` CLIs (Debian package:
+ * `libheif-examples`) as subprocesses, exactly like `ffmpeg` above but for
+ * the one pair this build's `ffmpeg` cannot reach at all (no HEIF demuxer or
+ * encoder in it - verified by hand). See `services/heif.service.ts`.
+ */
+export const HEIF_CONVERT_BIN = process.env.HEIF_CONVERT_BIN ?? 'heif-convert';
+export const HEIF_ENC_BIN = process.env.HEIF_ENC_BIN ?? 'heif-enc';
+
+/**
+ * `zstd`, needed for `.zst`/`tar.zst` in either direction - `7z` has no
+ * Zstandard codec in this build at all (verified by hand: `7z a -tzstd`
+ * fails with "Unsupported archive type", and `7z l` on a real `.zst` file
+ * fails with "Unsupported archive type" too, unlike gzip/bzip2/xz, which it
+ * reads and writes natively). See `archive.service.ts`.
+ */
+export const ZSTD_BIN = process.env.ZSTD_BIN ?? 'zstd';
+
+/**
+ * The 3D-model engine (`.obj`/`.stl`/`.ply`/`.glb`/`.3mf`/`.off`), an eighth
+ * conversion engine, running `assimp` (Debian/Ubuntu package:
+ * `assimp-utils`) as a subprocess. See `assimp.service.ts`.
+ */
+export const ASSIMP_BIN = process.env.ASSIMP_BIN ?? 'assimp';
+
+/**
+ * The ebook engine (`.epub`/`.mobi`/`.azw3`/`.fb2`/`.lrf`/`.pdb`/`.snb`/
+ * KEPUB), a ninth conversion engine, running Calibre's `ebook-convert`
+ * (Debian/Ubuntu package: `calibre`) as a subprocess. See `ebook.service.ts`.
+ */
+export const EBOOK_CONVERT_BIN = process.env.EBOOK_CONVERT_BIN ?? 'ebook-convert';
+
+/**
  * Rasteriser for the PNG/JPG targets (Debian package: poppler-utils).
  *
  * A separate binary because LibreOffice cannot do this job: its command-line
@@ -151,6 +184,24 @@ export const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3';
 
 /** Absolute path to the PDF engine script, resolved once at import. */
 export const PDF_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'pdf_engine.py');
+
+/**
+ * The font engine (`.ttf`/`.otf`/`.woff`/`.woff2`), an eleventh conversion
+ * engine, running `scripts/font_engine.py` (`fontTools`, Debian/Ubuntu
+ * package: `python3-fonttools`) the same way `pdf_engine.py` runs above.
+ * See `font.service.ts`.
+ */
+export const FONT_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'font_engine.py');
+
+/**
+ * The columnar-data engine (`.parquet`/`.orc`/`.feather`), a twelfth
+ * conversion engine, running `scripts/arrow_engine.py` (`pyarrow`, installed
+ * via pip - no Debian package exists) the same way `pdf_engine.py` runs
+ * above. Joins `data.service.ts`'s own pure-JS group through a JSON bridge
+ * rather than a subprocess-per-request text pipe - see `arrow.service.ts`
+ * and `arrow_engine.py`'s own header comments.
+ */
+export const ARROW_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'arrow_engine.py');
 
 /**
  * `qpdf`, for `/pdf/protect` and `/pdf/unlock`.

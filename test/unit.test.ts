@@ -65,7 +65,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 63);
+    assert.equal(ALLOWED_EXTENSIONS.length, 100);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
@@ -88,20 +88,76 @@ describe('conversion matrix', () => {
         assert.ok(resolved, `${extension} -> ${target} does not resolve`);
 
         const isDataEngineFromRoute = resolved.engine === 'data' && TARGETS[target].mode !== 'data';
-        if (resolved.engine === 'pdf-engine' || resolved.engine === 'pandoc' || isDataEngineFromRoute) {
+        const isEbookEngineFromRoute = resolved.engine === 'ebook' && TARGETS[target].mode !== 'ebook';
+        const isEmailEngineFromRoute = resolved.engine === 'email';
+        if (
+          resolved.engine === 'pdf-engine' ||
+          resolved.engine === 'pandoc' ||
+          isDataEngineFromRoute ||
+          isEbookEngineFromRoute ||
+          isEmailEngineFromRoute
+        ) {
           // A second, non-LibreOffice route to this target id - see
           // `engineFrom`'s doc comment. Checked before `mode`, because `mode`
           // describes how every OTHER source reaches this same id. The
-          // `data` engine is only ever this kind of route for `csv` (whose
-          // own `mode` stays `'direct'`) - see `DATA_TARGETS`'s own
-          // comment; every OTHER data target is `mode: 'data'` itself and
-          // is checked further down instead.
+          // `data`/`ebook` engines are only ever this kind of route for
+          // `csv`/`epub` (whose own `mode` stays `'direct'`) - see
+          // `DATA_TARGETS`'s/`EBOOK_TARGETS`'s own comments; every OTHER
+          // data/ebook target is `mode: 'data'`/`'ebook'` itself and is
+          // checked further down instead. `email` has no `mode` of its own
+          // at all - `.eml` only ever reaches `txt`/`html`, both EXISTING
+          // `direct` targets, so this route is unconditional for it.
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
-          const key = resolved.engine === 'pdf-engine' ? 'pdf' : resolved.engine === 'pandoc' ? 'pandoc' : 'data';
+          const key =
+            resolved.engine === 'pdf-engine'
+              ? 'pdf'
+              : resolved.engine === 'pandoc'
+                ? 'pandoc'
+                : resolved.engine === 'ebook'
+                  ? 'ebook'
+                  : resolved.engine === 'email'
+                    ? 'email'
+                    : 'data';
           assert.ok(
             TARGETS[target].engineFrom?.[key]?.includes(extension),
             `${extension} -> ${target}, but the target does not list it under "${key}" as an engine source`,
           );
+          continue;
+        }
+
+        if (TARGETS[target].mode === 'heif' || extension === '.heic' || extension === '.heif') {
+          // `libheif`'s own tools, not LibreOffice, read/write every
+          // `.heic`/`.heif` pair - no filter, no family - see
+          // `heif.service.ts`. Checked before `mode === 'transcode'` below:
+          // a `.heic`/`.heif` SOURCE reaching an ordinary transcode target
+          // (`bmp`/`gif`/etc) still needs this engine, not bare `ffmpeg`,
+          // which cannot read it at all - see `resolveConversion`'s own
+          // `heif`-before-`transcode` branch.
+          assert.equal(resolved.engine, 'heif', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          continue;
+        }
+
+        if (TARGETS[target].mode === '3d') {
+          // `assimp`, family-less like `heif` above - see `assimp.service.ts`.
+          assert.equal(resolved.engine, 'assimp', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          continue;
+        }
+
+        if (TARGETS[target].mode === 'ebook') {
+          // `ebook-convert`, family-less like `heif` above - see
+          // `ebook.service.ts`.
+          assert.equal(resolved.engine, 'ebook', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
+          continue;
+        }
+
+        if (TARGETS[target].mode === 'font') {
+          // `font_engine.py`, family-less like `heif` above - see
+          // `font.service.ts`.
+          assert.equal(resolved.engine, 'font', `${extension} -> ${target} used the wrong engine`);
+          assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
         }
 

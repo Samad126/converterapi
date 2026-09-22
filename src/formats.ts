@@ -84,7 +84,43 @@ export type TargetId =
   | 'json'
   | 'yaml'
   | 'tsv'
-  | 'jsonl';
+  | 'jsonl'
+  | 'svg'
+  | 'heic'
+  | 'heif'
+  | 'emf'
+  | 'wmf'
+  | 'eps'
+  | 'jxl'
+  | 'jp2'
+  | 'qoi'
+  | 'tga'
+  | 'pcx'
+  | 'apng'
+  | 'xml'
+  | 'toml'
+  | 'ini'
+  | 'sqlite'
+  | 'tar.zst'
+  | 'obj'
+  | 'stl'
+  | 'ply'
+  | 'glb'
+  | '3mf'
+  | 'mobi'
+  | 'azw3'
+  | 'fb2'
+  | 'lrf'
+  | 'pdb'
+  | 'snb'
+  | 'kepub'
+  | 'ttf'
+  | 'otf'
+  | 'woff'
+  | 'woff2'
+  | 'parquet'
+  | 'orc'
+  | 'feather';
 
 /** Every extension we accept as an upload. */
 export type AllowedExtension =
@@ -150,7 +186,44 @@ export type AllowedExtension =
   | '.yaml'
   | '.yml'
   | '.tsv'
-  | '.jsonl';
+  | '.jsonl'
+  | '.svg'
+  | '.heic'
+  | '.heif'
+  | '.emf'
+  | '.wmf'
+  | '.eps'
+  | '.jxl'
+  | '.jp2'
+  | '.qoi'
+  | '.tga'
+  | '.pcx'
+  | '.apng'
+  | '.xml'
+  | '.toml'
+  | '.ini'
+  | '.sqlite'
+  | '.zst'
+  | '.obj'
+  | '.stl'
+  | '.ply'
+  | '.glb'
+  | '.3mf'
+  | '.off'
+  | '.epub'
+  | '.mobi'
+  | '.azw3'
+  | '.fb2'
+  | '.lrf'
+  | '.pdb'
+  | '.ttf'
+  | '.otf'
+  | '.woff'
+  | '.woff2'
+  | '.parquet'
+  | '.orc'
+  | '.feather'
+  | '.eml';
 
 /**
  * `png-image`/`jpg-image` reach a single transcoded PNG/JPEG file - and are
@@ -258,6 +331,12 @@ const TRANSCODE_TARGETS: readonly TargetId[] = [
   'ico',
   'png-image',
   'jpg-image',
+  'jxl',
+  'jp2',
+  'qoi',
+  'tga',
+  'pcx',
+  'apng',
 ];
 
 /**
@@ -291,6 +370,63 @@ const TRANSCODE_TARGETS: readonly TargetId[] = [
 const SUBTITLE_TRANSCODE_TARGETS: readonly TargetId[] = ['srt', 'vtt', 'ass', 'ssa'];
 
 /**
+ * The `heif`-engine target ids - `heic` and `heif`, reachable from every
+ * ordinary image source (`TRANSCODE_TARGETS`'s own sources, plus `.png`/
+ * `.jpg`/`.jpeg`/`.svg`) the same way `TRANSCODE_TARGETS` itself is appended
+ * to each of those sources' own `targets` list, rather than folded into
+ * `TRANSCODE_TARGETS` directly - see `TargetFormat.mode`'s own `heif` bullet
+ * for why these two need a mode, and an engine, of their own.
+ */
+const HEIF_TARGETS: readonly TargetId[] = ['heic', 'heif'];
+
+/**
+ * The `font`-engine target ids and source extensions - `.ttf`/`.otf`/
+ * `.woff`/`.woff2`, flat like `TRANSCODE_TARGETS`/`ASSIMP_TARGETS` (every
+ * source reaches every OTHER target, no per-family filter). See
+ * `font.service.ts`/`font_engine.py`.
+ */
+const FONT_TARGETS: readonly TargetId[] = ['ttf', 'otf', 'woff', 'woff2'];
+
+/**
+ * The `assimp`-engine target ids - see `assimp.service.ts`. `.off` is
+ * deliberately NOT among them: it is a real, verified SOURCE (`assimp
+ * listext` reads it) but not a real export format at all (`assimp
+ * listexport` does not list it, and asking for it fails outright) - the
+ * same asymmetric "one direction is tested, the other is not" shape `.rar`
+ * has elsewhere in this service.
+ */
+const ASSIMP_TARGETS: readonly TargetId[] = ['obj', 'stl', 'ply', 'glb', '3mf'];
+
+/**
+ * The `ebook`-engine target ids - see `ebook.service.ts`. `epub` is
+ * deliberately NOT among them: it is an EXISTING `mode: 'direct'` target
+ * (LibreOffice's own `writer` EPUB filter already writes it for every
+ * writer-family source), and this group reaches that SAME id through
+ * `engineFrom.ebook` instead - the same second-route shape a PDF already
+ * uses to reach `docx`/`pptx`/`xlsx`, so `resolveConversion` never has to
+ * choose between two conflicting definitions of what `epub` means. `kepub`
+ * IS in this list despite having no dedicated SOURCE extension of its own -
+ * see its own `TargetFormat` entry for why.
+ */
+const EBOOK_TARGETS: readonly TargetId[] = ['mobi', 'azw3', 'fb2', 'lrf', 'pdb', 'snb', 'kepub'];
+
+/**
+ * Every source `ebook-convert` reads - `.snb` deliberately excluded, see
+ * `ebook.service.ts`'s own header comment for the real bug that makes it
+ * untrustworthy as a source in this build. `.epub` is included: it is a new
+ * source this feature adds (LibreOffice/pandoc only ever WROTE `.epub`
+ * before now), read by the same `ebook-convert` this whole group uses.
+ */
+const EBOOK_EXTENSIONS: readonly AllowedExtension[] = [
+  '.epub',
+  '.mobi',
+  '.azw3',
+  '.fb2',
+  '.lrf',
+  '.pdb',
+];
+
+/**
  * The data-interchange target ids - `data.service.ts`, pure JS, no
  * subprocess. A third flat list, alongside `TRANSCODE_TARGETS` and
  * `SUBTITLE_TRANSCODE_TARGETS`, for the same reason those two are kept
@@ -308,10 +444,47 @@ const SUBTITLE_TRANSCODE_TARGETS: readonly TargetId[] = ['srt', 'vtt', 'ass', 's
  * use for their PDF/pandoc engine routes - so `resolveConversion` never has
  * to choose between two conflicting definitions of what "csv" means.
  */
-const DATA_TARGETS: readonly TargetId[] = ['tsv', 'json', 'yaml', 'jsonl'];
+const DATA_TARGETS: readonly TargetId[] = [
+  'tsv',
+  'json',
+  'yaml',
+  'jsonl',
+  'xml',
+  'toml',
+  'ini',
+  'sqlite',
+  'parquet',
+  'orc',
+  'feather',
+];
 
 /** Every data-engine source extension, `csv` included - see `DATA_TARGETS`'s own comment for why `csv` the TARGET id is handled separately from `csv` the SOURCE extension. */
-const DATA_EXTENSIONS: readonly AllowedExtension[] = ['.csv', '.tsv', '.json', '.yaml', '.yml', '.jsonl'];
+const DATA_EXTENSIONS: readonly AllowedExtension[] = [
+  '.csv',
+  '.tsv',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.jsonl',
+  '.xml',
+  '.toml',
+  '.ini',
+  '.sqlite',
+  '.parquet',
+  '.orc',
+  '.feather',
+];
+
+/**
+ * The three `DATA_TARGETS`/`DATA_EXTENSIONS` members that are NOT pure JS -
+ * `arrow.service.ts` shells out to `scripts/arrow_engine.py` (`pyarrow`) for
+ * all three, the one subprocess-backed corner of an otherwise pure-JS
+ * engine. `runDataPipeline` in `conversion.service.ts` checks this set
+ * before deciding whether to call `data.service.ts`'s own synchronous
+ * parse/serialize or `arrow.service.ts`'s async ones - see its own comment.
+ */
+export const ARROW_TARGETS: ReadonlySet<TargetId> = new Set(['parquet', 'orc', 'feather']);
+export const ARROW_EXTENSIONS: ReadonlySet<AllowedExtension> = new Set(['.parquet', '.orc', '.feather']);
 
 export interface TargetFormat {
   id: TargetId;
@@ -351,6 +524,20 @@ export interface TargetFormat {
    *     `transcode`, for the same reason (no document family applies), but
    *     its own mode rather than folded into `transcode` because nothing
    *     here is `ffmpeg` - see `data.service.ts`.
+   *   - `heif` - `libheif`'s `heif-convert`/`heif-enc`, run as subprocesses,
+   *     for `heic`/`heif` in EITHER direction. Not folded into `transcode`
+   *     even though it is flat/family-less the same way: this build's
+   *     `ffmpeg` has no HEIF demuxer or encoder at all (verified by hand -
+   *     `ffmpeg -demuxers`/`-decoders` list no `heif`), so a `.heic`/`.heif`
+   *     source or target needs a second subprocess `ffmpeg` never touches.
+   *     `heif-convert` can write `.jpg`/`.jpeg`/`.png`/`.tif`/`.tiff`
+   *     directly from a HEIC/HEIF source; anything else in
+   *     `TRANSCODE_TARGETS` goes through an intermediate PNG that `ffmpeg`
+   *     then transcodes, same as any other `transcode` pair. `heif-enc` only
+   *     reads PNG/JPEG (verified by hand - a `.bmp` input fails with "Not a
+   *     JPEG file"), so producing `heic`/`heif` from any OTHER image source
+   *     first runs that source through the ordinary `ffmpeg` transcode to an
+   *     intermediate PNG. See `heif.service.ts`.
    *
    * `mode` describes the LIBREOFFICE-OR-NOT route a target normally takes.
    * `engineFrom`, below, is orthogonal to it: `docx`/`pptx`/`xlsx` are
@@ -369,13 +556,13 @@ export interface TargetFormat {
    * `tables` and `layers` are both extracts and one answers with a single
    * workbook while the other answers with an archive.
    */
-  mode: 'direct' | 'raster' | 'extract' | 'archive' | 'transcode' | 'data';
+  mode: 'direct' | 'raster' | 'extract' | 'archive' | 'transcode' | 'data' | 'heif' | '3d' | 'ebook' | 'font';
   /**
    * `mode: 'archive'` only: which writer `archive.service.ts` calls.
    * `'zip'` goes through `zip.ts`'s own `zipDeflated`, not a `7z` subprocess
    * - see `createArchive`'s own comment for why. Absent for every other mode.
    */
-  archiveWriter?: 'zip' | 'tar' | 'tar.gz' | 'tar.bz2' | '7z';
+  archiveWriter?: 'zip' | 'tar' | 'tar.gz' | 'tar.bz2' | 'tar.zst' | '7z';
   /**
    * Does this target answer with a ZIP of several files rather than one file?
    *
@@ -454,6 +641,8 @@ export interface TargetFormat {
     pdf?: readonly AllowedExtension[];
     pandoc?: readonly AllowedExtension[];
     data?: readonly AllowedExtension[];
+    ebook?: readonly AllowedExtension[];
+    email?: readonly AllowedExtension[];
   };
 }
 
@@ -520,7 +709,10 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     // writes in the process locale, which would mangle anything non-ASCII into
     // question marks while still reporting success.
     filters: { writer: 'Text (encoded):UTF8' },
-    engineFrom: { pandoc: MARKUP_EXTENSIONS },
+    // `.eml` reaches this SAME id too - see `email.service.ts`'s own header
+    // comment for what "converting" an email to plain text actually means
+    // here (a short From/To/Subject/Date header block plus the body).
+    engineFrom: { pandoc: MARKUP_EXTENSIONS, email: ['.eml'] },
   },
   html: {
     id: 'html',
@@ -530,7 +722,8 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { writer: 'HTML (StarWriter)', calc: 'HTML (StarCalc)' },
-    engineFrom: { pandoc: MARKUP_EXTENSIONS },
+    // Same `.eml` route as `txt` above.
+    engineFrom: { pandoc: MARKUP_EXTENSIONS, email: ['.eml'] },
   },
   rtf: {
     id: 'rtf',
@@ -550,6 +743,12 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mode: 'direct',
     multiple: false,
     filters: { writer: 'EPUB' },
+    // The ebook sources (`.mobi`/`.azw3`/`.fb2`/`.lrf`/`.pdb`) reach this
+    // SAME id through `ebook-convert` instead - see `EBOOK_TARGETS`'s own
+    // comment for why `epub` keeps its existing `direct` mode rather than
+    // becoming `mode: 'ebook'` outright, the same second-route shape a PDF
+    // already uses for `docx`/`pptx`/`xlsx`.
+    engineFrom: { ebook: EBOOK_EXTENSIONS.filter((ext) => ext !== '.epub') },
   },
   ods: {
     id: 'ods',
@@ -1011,6 +1210,389 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: false,
     filters: {},
   },
+  svg: {
+    id: 'svg',
+    extension: '.svg',
+    mediaType: 'image/svg+xml',
+    label: 'SVG',
+    // `direct`, one Draw export filter, exactly like `pdf`'s own `draw`
+    // filter - verified by hand against a real PDF AND a real PNG
+    // (`draw_svg_Export`, the same filter id `soffice`'s own log line names
+    // for both). Only `draw` is listed: every source that reaches this
+    // target opens as a Draw document in this pipeline (`.pdf`/`.png`/
+    // `.jpg`/`.jpeg`), so there is nothing to verify for a family that
+    // cannot reach it in the first place.
+    mode: 'direct',
+    multiple: false,
+    filters: { draw: 'draw_svg_Export' },
+  },
+  heic: {
+    id: 'heic',
+    extension: '.heic',
+    mediaType: 'image/heic',
+    label: 'HEIC',
+    mode: 'heif',
+    multiple: false,
+    filters: {},
+  },
+  heif: {
+    id: 'heif',
+    extension: '.heif',
+    mediaType: 'image/heif',
+    label: 'HEIF',
+    mode: 'heif',
+    multiple: false,
+    filters: {},
+  },
+  emf: {
+    id: 'emf',
+    extension: '.emf',
+    mediaType: 'image/emf',
+    label: 'EMF',
+    // `direct`, same Draw route as `svg` - verified by hand against a real
+    // SVG (`draw_emf_Export`, and the reverse `draw_emf_Import` reads a real
+    // EMF back into a PNG).
+    mode: 'direct',
+    multiple: false,
+    filters: { draw: 'draw_emf_Export' },
+  },
+  wmf: {
+    id: 'wmf',
+    extension: '.wmf',
+    mediaType: 'image/wmf',
+    label: 'WMF',
+    // Same as `emf` above - verified by hand both directions.
+    mode: 'direct',
+    multiple: false,
+    filters: { draw: 'draw_wmf_Export' },
+  },
+  eps: {
+    id: 'eps',
+    extension: '.eps',
+    mediaType: 'application/postscript',
+    label: 'EPS',
+    // Same as `emf`/`wmf` above - verified by hand both directions.
+    mode: 'direct',
+    multiple: false,
+    filters: { draw: 'draw_eps_Export' },
+  },
+  jxl: {
+    id: 'jxl',
+    extension: '.jxl',
+    mediaType: 'image/jxl',
+    label: 'JXL',
+    // `ffmpeg`, the same `TRANSCODE_TARGETS` route `bmp`/`gif`/etc already
+    // use - verified by hand both directions against this build's
+    // `--enable-libjxl`. UNVERIFIED against Debian's own `ffmpeg` package -
+    // see the Dockerfile's own comment above `libheif-examples`.
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  jp2: {
+    id: 'jp2',
+    extension: '.jp2',
+    mediaType: 'image/jp2',
+    label: 'JPEG 2000',
+    // Same route as `jxl` above - verified by hand both directions against
+    // this build's `--enable-libopenjpeg`, same Debian caveat.
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  qoi: {
+    id: 'qoi',
+    extension: '.qoi',
+    mediaType: 'image/qoi',
+    label: 'QOI',
+    // Same route as `jxl`/`jp2` above - a native `ffmpeg` codec (no
+    // `--enable-*` flag of its own), so lower risk than either of those two
+    // on a different `ffmpeg` build - verified by hand both directions.
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  tga: {
+    id: 'tga',
+    extension: '.tga',
+    mediaType: 'image/x-tga',
+    label: 'TGA',
+    // Native `ffmpeg` codec, same low-risk footing as `qoi` - verified by
+    // hand both directions.
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  pcx: {
+    id: 'pcx',
+    extension: '.pcx',
+    mediaType: 'image/x-pcx',
+    label: 'PCX',
+    // Native `ffmpeg` codec, same low-risk footing as `qoi`/`tga` - verified
+    // by hand both directions.
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  apng: {
+    id: 'apng',
+    extension: '.apng',
+    mediaType: 'image/apng',
+    label: 'APNG',
+    // Native `ffmpeg` muxer, same low-risk footing as `qoi`/`tga`/`pcx` -
+    // verified by hand both directions (a still source becomes a one-frame
+    // APNG, same as every other transcode target here always writes a
+    // single still image, never an animation).
+    mode: 'transcode',
+    multiple: false,
+    filters: {},
+  },
+  xml: {
+    id: 'xml',
+    extension: '.xml',
+    mediaType: 'application/xml',
+    label: 'XML',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  toml: {
+    id: 'toml',
+    extension: '.toml',
+    mediaType: 'application/toml',
+    label: 'TOML',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  ini: {
+    id: 'ini',
+    extension: '.ini',
+    mediaType: 'text/plain',
+    label: 'INI',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  sqlite: {
+    id: 'sqlite',
+    extension: '.sqlite',
+    mediaType: 'application/vnd.sqlite3',
+    label: 'SQLite',
+    // Also `mode: 'data'`, even though it is the one member of the group
+    // that is bytes rather than text - see `data.service.ts`'s own header
+    // comment. `runDataPipeline` branches on the extension/id itself, not on
+    // `mode`, so this needs no mode of its own the way `heic`/`heif` did.
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  'tar.zst': {
+    id: 'tar.zst',
+    extension: '.tar.zst',
+    mediaType: 'application/zstd',
+    label: 'TAR.ZST',
+    // Same `archive` route every other archive target uses - see
+    // `archive.service.ts`'s own `decompressZstd`/`createArchive` additions
+    // for why this one alone needs the standalone `zstd` CLI rather than
+    // `7z` itself (no Zstandard codec in this build).
+    mode: 'archive',
+    multiple: false,
+    filters: {},
+    archiveWriter: 'tar.zst',
+  },
+  obj: {
+    id: 'obj',
+    extension: '.obj',
+    mediaType: 'model/obj',
+    label: 'OBJ',
+    // `assimp`, family-less like `heic`/`heif` - see `assimp.service.ts`.
+    // Writes a companion `.mtl` alongside the requested `.obj` (verified by
+    // hand, even from a source with no materials) - left behind, unread, the
+    // same as any other engine's incidental output file; see
+    // `assimp.service.ts`'s own header comment.
+    mode: '3d',
+    multiple: false,
+    filters: {},
+  },
+  stl: {
+    id: 'stl',
+    extension: '.stl',
+    mediaType: 'model/stl',
+    label: 'STL',
+    mode: '3d',
+    multiple: false,
+    filters: {},
+  },
+  ply: {
+    id: 'ply',
+    extension: '.ply',
+    mediaType: 'model/ply',
+    label: 'PLY',
+    mode: '3d',
+    multiple: false,
+    filters: {},
+  },
+  glb: {
+    id: 'glb',
+    extension: '.glb',
+    mediaType: 'model/gltf-binary',
+    label: 'GLB',
+    mode: '3d',
+    multiple: false,
+    filters: {},
+  },
+  '3mf': {
+    id: '3mf',
+    extension: '.3mf',
+    mediaType: 'model/3mf',
+    label: '3MF',
+    mode: '3d',
+    multiple: false,
+    filters: {},
+  },
+  mobi: {
+    id: 'mobi',
+    extension: '.mobi',
+    mediaType: 'application/x-mobipocket-ebook',
+    label: 'MOBI',
+    // `ebook-convert`, family-less like `heic`/`heif` - see
+    // `ebook.service.ts`.
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  azw3: {
+    id: 'azw3',
+    extension: '.azw3',
+    mediaType: 'application/vnd.amazon.mobi8-ebook',
+    label: 'AZW3',
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  fb2: {
+    id: 'fb2',
+    extension: '.fb2',
+    mediaType: 'application/x-fictionbook+xml',
+    label: 'FB2',
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  lrf: {
+    id: 'lrf',
+    extension: '.lrf',
+    mediaType: 'application/x-sony-bbeb',
+    label: 'LRF',
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  pdb: {
+    id: 'pdb',
+    extension: '.pdb',
+    mediaType: 'application/x-pilot',
+    label: 'PDB',
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  snb: {
+    id: 'snb',
+    extension: '.snb',
+    mediaType: 'application/x-snb',
+    label: 'SNB',
+    // Write-only in this build - see `ebook.service.ts`'s own header comment
+    // for the real bug that makes reading it back untrustworthy (no source
+    // extension `.snb` exists in `AllowedExtension` at all, the same
+    // asymmetric shape `.rar` has in the other direction elsewhere in this
+    // service).
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  kepub: {
+    id: 'kepub',
+    // The literal double extension Calibre's KEPUB writer plugin requires
+    // on the OUTPUT path - see `ebook.service.ts`'s own header comment. Same
+    // shape `tar.gz`/`tar.bz2`/`tar.zst` already use for a genuinely
+    // two-part extension.
+    extension: '.kepub.epub',
+    mediaType: 'application/epub+zip',
+    label: 'KEPUB',
+    mode: 'ebook',
+    multiple: false,
+    filters: {},
+  },
+  ttf: {
+    id: 'ttf',
+    extension: '.ttf',
+    mediaType: 'font/ttf',
+    label: 'TTF',
+    // `font_engine.py` (`fontTools`), family-less like `heic`/`heif` - see
+    // `font.service.ts`.
+    mode: 'font',
+    multiple: false,
+    filters: {},
+  },
+  otf: {
+    id: 'otf',
+    extension: '.otf',
+    mediaType: 'font/otf',
+    label: 'OTF',
+    mode: 'font',
+    multiple: false,
+    filters: {},
+  },
+  woff: {
+    id: 'woff',
+    extension: '.woff',
+    mediaType: 'font/woff',
+    label: 'WOFF',
+    mode: 'font',
+    multiple: false,
+    filters: {},
+  },
+  woff2: {
+    id: 'woff2',
+    extension: '.woff2',
+    mediaType: 'font/woff2',
+    label: 'WOFF2',
+    mode: 'font',
+    multiple: false,
+    filters: {},
+  },
+  parquet: {
+    id: 'parquet',
+    extension: '.parquet',
+    mediaType: 'application/vnd.apache.parquet',
+    label: 'Parquet',
+    // Also `mode: 'data'`, even though it needs a real subprocess where the
+    // rest of that group does not - see `ARROW_TARGETS`'s own comment and
+    // `arrow.service.ts`.
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  orc: {
+    id: 'orc',
+    extension: '.orc',
+    mediaType: 'application/x-orc',
+    label: 'ORC',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
+  feather: {
+    id: 'feather',
+    extension: '.feather',
+    mediaType: 'application/vnd.apache.arrow.file',
+    label: 'Feather',
+    mode: 'data',
+    multiple: false,
+    filters: {},
+  },
 };
 
 export interface SourceFormat {
@@ -1272,20 +1854,40 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     family: 'draw',
     mediaType: 'image/png',
     importFilter: 'draw_png_Import',
-    // `pdf` via the Draw family (soffice), the rest via `ffmpeg` - two
+    // `pdf`/`svg` via the Draw family (soffice), the rest via `ffmpeg` - two
     // engines, one source, exactly like `.pdf` itself reaches `pdfa`/`png`/
     // `jpg` through Draw and `docx`/`pptx`/`xlsx`/`markdown` through a
-    // second engine entirely. `png-image` is excluded: a PNG "converting"
-    // to a single PNG is not a conversion this service should advertise.
-    targets: ['pdf', ...TRANSCODE_TARGETS.filter((id) => id !== 'png-image')],
+    // second engine entirely. `svg` export verified by hand against a real
+    // PNG (`draw_svg_Export`, same as `.pdf`'s own). `png-image` is
+    // excluded: a PNG "converting" to a single PNG is not a conversion this
+    // service should advertise.
+    targets: [
+      'pdf',
+      'svg',
+      'emf',
+      'wmf',
+      'eps',
+      ...TRANSCODE_TARGETS.filter((id) => id !== 'png-image'),
+      ...HEIF_TARGETS,
+    ],
   },
   '.jpg': {
     extension: '.jpg',
     family: 'draw',
     mediaType: 'image/jpeg',
     importFilter: 'draw_jpg_Import',
-    // Same exclusion as `.png` above, for `jpg-image` this time.
-    targets: ['pdf', ...TRANSCODE_TARGETS.filter((id) => id !== 'jpg-image')],
+    // Same exclusion as `.png` above, for `jpg-image` this time. `svg`/
+    // `emf`/`wmf`/`eps` reach this source the same way they reach `.png` -
+    // same family, same Draw export filters.
+    targets: [
+      'pdf',
+      'svg',
+      'emf',
+      'wmf',
+      'eps',
+      ...TRANSCODE_TARGETS.filter((id) => id !== 'jpg-image'),
+      ...HEIF_TARGETS,
+    ],
   },
   '.jpeg': {
     extension: '.jpeg',
@@ -1296,7 +1898,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // extensions are the same format, but `.jpeg` -> `jpg-image` is a real
     // normalising conversion (a different spelling of the extension in, a
     // `.jpg` out) rather than a source becoming its own literal extension.
-    targets: ['pdf', ...TRANSCODE_TARGETS],
+    targets: ['pdf', 'svg', 'emf', 'wmf', 'eps', ...TRANSCODE_TARGETS, ...HEIF_TARGETS],
   },
   '.psd': {
     extension: '.psd',
@@ -1330,7 +1932,11 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // `docx`/`pptx`/`xlsx`/`markdown` sit last because they are the only
     // reconstructive/extractive members of the list - `pdfa` and the raster
     // targets are LibreOffice's own faithful re-export of the same bytes.
-    targets: ['pdfa', 'png', 'jpg', 'docx', 'pptx', 'xlsx', 'markdown'],
+    // `svg` sits with them: also a faithful Draw re-export (`draw_svg_Export`
+    // - verified by hand against a real PDF), just a vector one rather than
+    // a raster one. `emf`/`wmf`/`eps` are the same faithful Draw re-export
+    // again - verified by hand.
+    targets: ['pdfa', 'png', 'jpg', 'svg', 'emf', 'wmf', 'eps', 'docx', 'pptx', 'xlsx', 'markdown'],
   },
   '.md': {
     extension: '.md',
@@ -1384,56 +1990,67 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // (caught by the matrix's own self-target check, since this extension's
     // stripped form is exactly the `zip` id).
     mediaType: 'application/zip',
-    targets: ['tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+    targets: ['tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.tar': {
     extension: '.tar',
     mediaType: 'application/x-tar',
-    targets: ['zip', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+    targets: ['zip', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.tgz': {
     extension: '.tgz',
     mediaType: 'application/gzip',
-    targets: ['zip', 'tar', 'tar.bz2', '7z', 'cbz'],
+    targets: ['zip', 'tar', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.tbz2': {
     extension: '.tbz2',
     mediaType: 'application/x-bzip2',
-    targets: ['zip', 'tar', 'tar.gz', '7z', 'cbz'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.zst', '7z', 'cbz'],
   },
   '.txz': {
     extension: '.txz',
     mediaType: 'application/x-xz',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.gz': {
     extension: '.gz',
     mediaType: 'application/gzip',
-    // A bare `.gz` (one compressed file, not a tarball) offers the same five
+    // A bare `.gz` (one compressed file, not a tarball) offers the same
     // targets as every other archive source: `archive.service.ts`'s
     // extraction is generic over "how many files came out", not specific to
     // tar's own container shape.
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.bz2': {
     extension: '.bz2',
     mediaType: 'application/x-bzip2',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.xz': {
     extension: '.xz',
     mediaType: 'application/x-xz',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
+  },
+  '.zst': {
+    extension: '.zst',
+    // `zstd` undoes the outer compression layer, not `7z` - `7z` has no
+    // Zstandard codec in this build at all (verified by hand: `7z l` on a
+    // real `.zst` file fails with "Unsupported archive type"). See
+    // `conversion.service.ts`'s `runArchivePipeline` for the pre-decompress
+    // step this needs that every other archive source here does not, and
+    // `archive.service.ts`'s `decompressZstd`.
+    mediaType: 'application/zstd',
     targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
   '.7z': {
     extension: '.7z',
     mediaType: 'application/x-7z-compressed',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'cbz'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', 'cbz'],
   },
   '.iso': {
     extension: '.iso',
     mediaType: 'application/x-iso9660-image',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.cbz': {
     extension: '.cbz',
@@ -1441,7 +2058,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // same validation, as every other archive source. Excludes `cbz` itself
     // (self-target check) but otherwise offers exactly what `.zip` does.
     mediaType: 'application/vnd.comicbook+zip',
-    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z'],
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z'],
   },
   '.bmp': {
     extension: '.bmp',
@@ -1452,32 +2069,65 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // backstop for a mistake, not as the intended way to read what a format
     // becomes.
     mediaType: 'image/bmp',
-    targets: TRANSCODE_TARGETS.filter((id) => id !== 'bmp'),
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'bmp'), ...HEIF_TARGETS],
   },
   '.gif': {
     extension: '.gif',
     mediaType: 'image/gif',
-    targets: TRANSCODE_TARGETS.filter((id) => id !== 'gif'),
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'gif'), ...HEIF_TARGETS],
   },
   '.tiff': {
     extension: '.tiff',
     mediaType: 'image/tiff',
-    targets: TRANSCODE_TARGETS.filter((id) => id !== 'tiff'),
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'tiff'), ...HEIF_TARGETS],
   },
   '.webp': {
     extension: '.webp',
     mediaType: 'image/webp',
-    targets: TRANSCODE_TARGETS.filter((id) => id !== 'webp'),
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'webp'), ...HEIF_TARGETS],
   },
   '.avif': {
     extension: '.avif',
     mediaType: 'image/avif',
-    targets: TRANSCODE_TARGETS.filter((id) => id !== 'avif'),
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'avif'), ...HEIF_TARGETS],
   },
   '.ico': {
     extension: '.ico',
     mediaType: 'image/x-icon',
-    targets: TRANSCODE_TARGETS.filter((id) => id !== 'ico'),
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'ico'), ...HEIF_TARGETS],
+  },
+  '.jxl': {
+    extension: '.jxl',
+    // No `family`, same as `.bmp`/`.gif`/etc above - `ffmpeg`'s own
+    // `--enable-libjxl` reads and writes this one, verified by hand. See
+    // `jxl`'s own TARGETS entry for the Debian-build caveat.
+    mediaType: 'image/jxl',
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'jxl'), ...HEIF_TARGETS],
+  },
+  '.jp2': {
+    extension: '.jp2',
+    mediaType: 'image/jp2',
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'jp2'), ...HEIF_TARGETS],
+  },
+  '.qoi': {
+    extension: '.qoi',
+    mediaType: 'image/qoi',
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'qoi'), ...HEIF_TARGETS],
+  },
+  '.tga': {
+    extension: '.tga',
+    mediaType: 'image/x-tga',
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'tga'), ...HEIF_TARGETS],
+  },
+  '.pcx': {
+    extension: '.pcx',
+    mediaType: 'image/x-pcx',
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'pcx'), ...HEIF_TARGETS],
+  },
+  '.apng': {
+    extension: '.apng',
+    mediaType: 'image/apng',
+    targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'apng'), ...HEIF_TARGETS],
   },
   '.srt': {
     extension: '.srt',
@@ -1535,6 +2185,221 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     mediaType: 'application/jsonl',
     targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'jsonl')],
   },
+  '.xml': {
+    extension: '.xml',
+    // No `family`: `xml-js`, not LibreOffice, reads this source - see
+    // `data.service.ts`.
+    mediaType: 'application/xml',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'xml')],
+  },
+  '.toml': {
+    extension: '.toml',
+    // No `family`: `smol-toml` reads this source - see `data.service.ts`.
+    mediaType: 'application/toml',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'toml')],
+  },
+  '.ini': {
+    extension: '.ini',
+    // No `family`: `ini` reads this source - see `data.service.ts`.
+    mediaType: 'text/plain',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'ini')],
+  },
+  '.sqlite': {
+    extension: '.sqlite',
+    // No `family`: `node:sqlite`'s `DatabaseSync` reads this source - the
+    // one member of the data-engine group that is bytes, not text - see
+    // `data.service.ts`'s own header comment.
+    mediaType: 'application/vnd.sqlite3',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'sqlite')],
+  },
+  '.svg': {
+    extension: '.svg',
+    // A real family, unlike `.bmp`/`.gif`/etc: LibreOffice opens an SVG as a
+    // Draw document directly - verified by hand (`draw_png_Export`/
+    // `draw_pdf_Export` both ran against a real `.svg` file and produced a
+    // correct PNG/PDF). `ffmpeg` ALSO reads `.svg` (this build's `librsvg`
+    // decoder, verified by hand), which is what lets it reach
+    // `TRANSCODE_TARGETS`/`HEIF_TARGETS` below the same flat way every other
+    // image source does - the `family`/`importFilter` here only cover its
+    // `pdf`/`svg` reach through Draw.
+    family: 'draw',
+    mediaType: 'image/svg+xml',
+    importFilter: 'draw_svg_Import',
+    // `svg` itself is excluded (self-target check - `.svg` converting to
+    // `svg` is not a conversion this service should advertise). `emf`/`wmf`/
+    // `eps` reach it the same Draw route `pdf`/`svg` do - verified by hand.
+    targets: ['pdf', 'emf', 'wmf', 'eps', ...TRANSCODE_TARGETS, ...HEIF_TARGETS],
+  },
+  '.emf': {
+    extension: '.emf',
+    // Same Draw route as `.svg` above - verified by hand both directions
+    // (`draw_emf_Export`/`draw_emf_Import` against a real file). No
+    // `TRANSCODE_TARGETS`/`HEIF_TARGETS` reach: unlike `.svg`, `ffmpeg` does
+    // not decode EMF at all, so those routes simply are not there for this
+    // source the way they are for `.svg`. `png`/`jpg` are deliberately
+    // EXCLUDED too, unlike `.svg`/`.png`/`.jpg` above: those are `raster`
+    // targets, reserved for sources with actual pages to split one image
+    // per page from (a presentation, or a PDF - see `routes only
+    // presentations and PDFs to the raster pipeline` in `test/unit.test.ts`)
+    // - a single-page EMF has no `png-image`/`jpg-image`-shaped single-file
+    // route to reach either one through, the way a `TRANSCODE_TARGETS`
+    // source does, so it reaches neither.
+    family: 'draw',
+    mediaType: 'image/emf',
+    importFilter: 'draw_emf_Import',
+    targets: ['pdf', 'svg', 'wmf', 'eps'],
+  },
+  '.wmf': {
+    extension: '.wmf',
+    // Same as `.emf` above, including the `png`/`jpg` exclusion - verified
+    // by hand both directions.
+    family: 'draw',
+    mediaType: 'image/wmf',
+    importFilter: 'draw_wmf_Import',
+    targets: ['pdf', 'svg', 'emf', 'eps'],
+  },
+  '.eps': {
+    extension: '.eps',
+    // Same as `.emf`/`.wmf` above, including the `png`/`jpg` exclusion -
+    // verified by hand both directions.
+    family: 'draw',
+    mediaType: 'application/postscript',
+    importFilter: 'draw_eps_Import',
+    targets: ['pdf', 'svg', 'emf', 'wmf'],
+  },
+  '.heic': {
+    extension: '.heic',
+    // No `family`: `libheif`'s own tools, not LibreOffice, read this source
+    // - see `heif.service.ts` and `TargetFormat.mode`'s own `heif` bullet.
+    mediaType: 'image/heic',
+    // `heif` itself is excluded (self-target check would catch `heic`
+    // anyway, but `heif` needs excluding explicitly - the two are different
+    // ids for the same underlying container, and converting one to the
+    // other is a real, if minor, normalisation this service does offer).
+    targets: [...TRANSCODE_TARGETS, 'heif'],
+  },
+  '.heif': {
+    extension: '.heif',
+    mediaType: 'image/heif',
+    targets: [...TRANSCODE_TARGETS, 'heic'],
+  },
+  '.obj': {
+    extension: '.obj',
+    // No `family`: `assimp`, not LibreOffice, reads every source in this
+    // group - see `assimp.service.ts`.
+    mediaType: 'model/obj',
+    targets: ASSIMP_TARGETS.filter((id) => id !== 'obj'),
+  },
+  '.stl': {
+    extension: '.stl',
+    mediaType: 'model/stl',
+    targets: ASSIMP_TARGETS.filter((id) => id !== 'stl'),
+  },
+  '.ply': {
+    extension: '.ply',
+    mediaType: 'model/ply',
+    targets: ASSIMP_TARGETS.filter((id) => id !== 'ply'),
+  },
+  '.glb': {
+    extension: '.glb',
+    mediaType: 'model/gltf-binary',
+    targets: ASSIMP_TARGETS.filter((id) => id !== 'glb'),
+  },
+  '.3mf': {
+    extension: '.3mf',
+    mediaType: 'model/3mf',
+    targets: ASSIMP_TARGETS.filter((id) => id !== '3mf'),
+  },
+  '.off': {
+    extension: '.off',
+    // A real, verified SOURCE (`assimp listext` reads it) with no target of
+    // its own to exclude - see `ASSIMP_TARGETS`'s own comment for why `.off`
+    // itself never appears in that list.
+    mediaType: 'model/vnd.off',
+    targets: ASSIMP_TARGETS,
+  },
+  '.epub': {
+    extension: '.epub',
+    // No `family`: `ebook-convert`, not LibreOffice, reads this source - see
+    // `ebook.service.ts`. A `.kepub.epub` upload is a real EPUB container
+    // underneath (verified by hand), so it is read here too, under its own
+    // `extname()`-truncated `.epub` bucket, exactly like `.tar.gz` already
+    // reads as `.gz` elsewhere in this matrix.
+    mediaType: 'application/epub+zip',
+    targets: EBOOK_TARGETS,
+  },
+  '.mobi': {
+    extension: '.mobi',
+    mediaType: 'application/x-mobipocket-ebook',
+    targets: ['epub', ...EBOOK_TARGETS.filter((id) => id !== 'mobi')],
+  },
+  '.azw3': {
+    extension: '.azw3',
+    mediaType: 'application/vnd.amazon.mobi8-ebook',
+    targets: ['epub', ...EBOOK_TARGETS.filter((id) => id !== 'azw3')],
+  },
+  '.fb2': {
+    extension: '.fb2',
+    mediaType: 'application/x-fictionbook+xml',
+    targets: ['epub', ...EBOOK_TARGETS.filter((id) => id !== 'fb2')],
+  },
+  '.lrf': {
+    extension: '.lrf',
+    mediaType: 'application/x-sony-bbeb',
+    targets: ['epub', ...EBOOK_TARGETS.filter((id) => id !== 'lrf')],
+  },
+  '.pdb': {
+    extension: '.pdb',
+    mediaType: 'application/x-pilot',
+    targets: ['epub', ...EBOOK_TARGETS.filter((id) => id !== 'pdb')],
+  },
+  '.ttf': {
+    extension: '.ttf',
+    // No `family`: `fontTools`, not LibreOffice, reads every source in this
+    // group - see `font.service.ts`.
+    mediaType: 'font/ttf',
+    targets: FONT_TARGETS.filter((id) => id !== 'ttf'),
+  },
+  '.otf': {
+    extension: '.otf',
+    mediaType: 'font/otf',
+    targets: FONT_TARGETS.filter((id) => id !== 'otf'),
+  },
+  '.woff': {
+    extension: '.woff',
+    mediaType: 'font/woff',
+    targets: FONT_TARGETS.filter((id) => id !== 'woff'),
+  },
+  '.woff2': {
+    extension: '.woff2',
+    mediaType: 'font/woff2',
+    targets: FONT_TARGETS.filter((id) => id !== 'woff2'),
+  },
+  '.parquet': {
+    extension: '.parquet',
+    // No `family`: `arrow_engine.py` (`pyarrow`), not LibreOffice, reads
+    // this source - see `arrow.service.ts`.
+    mediaType: 'application/vnd.apache.parquet',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'parquet')],
+  },
+  '.orc': {
+    extension: '.orc',
+    mediaType: 'application/x-orc',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'orc')],
+  },
+  '.feather': {
+    extension: '.feather',
+    mediaType: 'application/vnd.apache.arrow.file',
+    targets: ['csv', ...DATA_TARGETS.filter((id) => id !== 'feather')],
+  },
+  '.eml': {
+    extension: '.eml',
+    // No `family`: `mailparser`, not LibreOffice, reads this source - see
+    // `email.service.ts`. Only `txt`/`html` - the EXISTING ids, reached
+    // through `engineFrom.email` on each, not a mode of its own.
+    mediaType: 'message/rfc822',
+    targets: ['txt', 'html'],
+  },
 };
 
 export const ALLOWED_EXTENSIONS = Object.keys(SOURCES) as AllowedExtension[];
@@ -1584,7 +2449,19 @@ export interface ResolvedConversion {
    * back to `target.mode`, so it never has to ask "but which route did THIS
    * one take" any other way.
    */
-  engine: 'soffice' | 'extract' | 'pdf-engine' | 'pandoc' | 'archive' | 'ffmpeg' | 'data';
+  engine:
+    | 'soffice'
+    | 'extract'
+    | 'pdf-engine'
+    | 'pandoc'
+    | 'archive'
+    | 'ffmpeg'
+    | 'data'
+    | 'heif'
+    | 'assimp'
+    | 'ebook'
+    | 'font'
+    | 'email';
 }
 
 /**
@@ -1618,6 +2495,18 @@ export function resolveConversion(
     // of `mode: 'data'` outright.
     return { source, target, convertTo: '', engine: 'data' };
   }
+  if (target.engineFrom?.ebook?.includes(extension)) {
+    // The ebook sources reaching `epub` - see `EBOOK_TARGETS`'s own comment
+    // for why `epub` needs this route instead of `mode: 'ebook'` outright
+    // (it is an EXISTING `direct` target every writer-family source already
+    // reaches through LibreOffice's own filter).
+    return { source, target, convertTo: '', engine: 'ebook' };
+  }
+  if (target.engineFrom?.email?.includes(extension)) {
+    // `.eml` reaching the EXISTING `txt`/`html` targets - same second-route
+    // shape as `ebook` above. See `email.service.ts`.
+    return { source, target, convertTo: '', engine: 'email' };
+  }
 
   if (target.mode === 'extract') {
     // Nothing to look up: there is no LibreOffice filter for an engine that
@@ -1635,12 +2524,51 @@ export function resolveConversion(
     return { source, target, convertTo: '', engine: 'archive' };
   }
 
+  if (target.mode === 'transcode' && (extension === '.heic' || extension === '.heif')) {
+    // A `.heic`/`.heif` source reaching an ordinary `transcode` target
+    // (`bmp`/`gif`/`tiff`/`webp`/`avif`/`ico`/`png-image`/`jpg-image`) still
+    // cannot go through bare `ffmpeg` - this build has no HEIF decoder for
+    // it to use - so this pair is routed to the `heif` engine instead,
+    // BEFORE the generic `transcode` branch below would otherwise claim it.
+    // See `TargetFormat.mode`'s own `heif` bullet.
+    return { source, target, convertTo: '', engine: 'heif' };
+  }
+
   if (target.mode === 'transcode') {
     // `ffmpeg` reads and writes every pair this mode covers directly - no
     // filter, and no family requirement either: a source that ALSO has a
     // family (`.png`/`.jpg`/`.jpeg`, for their `pdf` target) still reaches a
     // transcode target this way, unaffected by whatever family it has.
     return { source, target, convertTo: '', engine: 'ffmpeg' };
+  }
+
+  if (target.mode === 'heif') {
+    // Also family-less like `transcode`/`data` above - `heif-convert`/
+    // `heif-enc` reads and writes every pair this mode covers directly, with
+    // no per-family filter to look up. See `TargetFormat.mode`'s own `heif`
+    // bullet for what `heif.service.ts` actually does for each pair.
+    return { source, target, convertTo: '', engine: 'heif' };
+  }
+
+  if (target.mode === '3d') {
+    // Also family-less - `assimp` reads and writes every pair this mode
+    // covers directly, no per-family filter to look up. See
+    // `assimp.service.ts`.
+    return { source, target, convertTo: '', engine: 'assimp' };
+  }
+
+  if (target.mode === 'ebook') {
+    // Also family-less - `ebook-convert` reads and writes every pair this
+    // mode covers directly, no per-family filter to look up. See
+    // `ebook.service.ts`.
+    return { source, target, convertTo: '', engine: 'ebook' };
+  }
+
+  if (target.mode === 'font') {
+    // Also family-less - `font_engine.py` reads and writes every pair this
+    // mode covers directly, no per-family filter to look up. See
+    // `font.service.ts`.
+    return { source, target, convertTo: '', engine: 'font' };
   }
 
   if (target.mode === 'data') {
@@ -1789,6 +2717,18 @@ export function validateMatrix(): void {
     if (target.mode === 'data' && target.multiple) {
       problems.push(`data target "${id}" declares itself a multi-file response`);
     }
+    if (target.mode === 'heif' && target.multiple) {
+      problems.push(`heif target "${id}" declares itself a multi-file response`);
+    }
+    if (target.mode === '3d' && target.multiple) {
+      problems.push(`3d target "${id}" declares itself a multi-file response`);
+    }
+    if (target.mode === 'ebook' && target.multiple) {
+      problems.push(`ebook target "${id}" declares itself a multi-file response`);
+    }
+    if (target.mode === 'font' && target.multiple) {
+      problems.push(`font target "${id}" declares itself a multi-file response`);
+    }
 
     if (target.mode === 'extract') {
       // An extract target names its own sources, so it is the only target
@@ -1816,7 +2756,7 @@ export function validateMatrix(): void {
     // its own targets. Checked once per engine, and once more across both
     // engines together, since a source named under BOTH would leave
     // `resolveConversion` to silently pick whichever is checked first.
-    const engines = ['pdf', 'pandoc', 'data'] as const;
+    const engines = ['pdf', 'pandoc', 'data', 'ebook', 'email'] as const;
     const seenUnderAnotherEngine = new Set<string>();
     for (const engine of engines) {
       for (const extension of target.engineFrom?.[engine] ?? []) {
@@ -1873,15 +2813,25 @@ export function validateMatrix(): void {
       const reachesViaEngine =
         (TARGETS[targetId].engineFrom?.pdf?.includes(ext as AllowedExtension) ?? false) ||
         (TARGETS[targetId].engineFrom?.pandoc?.includes(ext as AllowedExtension) ?? false) ||
-        (TARGETS[targetId].engineFrom?.data?.includes(ext as AllowedExtension) ?? false);
+        (TARGETS[targetId].engineFrom?.data?.includes(ext as AllowedExtension) ?? false) ||
+        (TARGETS[targetId].engineFrom?.ebook?.includes(ext as AllowedExtension) ?? false) ||
+        (TARGETS[targetId].engineFrom?.email?.includes(ext as AllowedExtension) ?? false);
       const isArchiveTarget = TARGETS[targetId].mode === 'archive';
       const isTranscodeTarget = TARGETS[targetId].mode === 'transcode';
       const isDataTarget = TARGETS[targetId].mode === 'data';
+      const isHeifTarget = TARGETS[targetId].mode === 'heif';
+      const isAssimpTarget = TARGETS[targetId].mode === '3d';
+      const isEbookTarget = TARGETS[targetId].mode === 'ebook';
+      const isFontTarget = TARGETS[targetId].mode === 'font';
       if (
         TARGETS[targetId].mode !== 'extract' &&
         !isArchiveTarget &&
         !isTranscodeTarget &&
         !isDataTarget &&
+        !isHeifTarget &&
+        !isAssimpTarget &&
+        !isEbookTarget &&
+        !isFontTarget &&
         !reachesViaEngine &&
         !source.family
       ) {

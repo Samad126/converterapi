@@ -18,12 +18,18 @@
     "@pdf-lib/fontkit": "^1.1.1",
     "ag-psd": "^31.0.2",
     "express": "^5.1.0",
+    "ini": "^7.0.0",
+    "mailparser": "^3.9.28",
     "multer": "^2.0.2",
     "pdf-lib": "^1.17.1",
+    "smol-toml": "^1.9.0",
+    "xml-js": "^1.6.11",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
+    "@types/ini": "^4.1.1",
+    "@types/mailparser": "^3.4.6",
     "@types/multer": "^2.0.0",
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"

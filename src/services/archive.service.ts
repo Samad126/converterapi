@@ -61,11 +61,11 @@
 import fsp from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 
-import { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, SEVENZIP_BIN } from '../config.ts';
+import { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, SEVENZIP_BIN, ZSTD_BIN } from '../config.ts';
 import { ClientGoneError, Errors } from '../errors.ts';
 import { runProcess, type ProcessOutcome } from './soffice.service.ts';
 
-export type ArchiveWriter = 'zip' | 'tar' | 'tar.gz' | 'tar.bz2' | '7z';
+export type ArchiveWriter = 'zip' | 'tar' | 'tar.gz' | 'tar.bz2' | 'tar.zst' | '7z';
 
 /** Exported for direct unit testing - see `test/archive.test.ts`. */
 export interface ArchiveEntry {
@@ -199,6 +199,36 @@ async function extractOnce(run: {
     // `x`, not `e`: full paths preserved, which is what lets the directory
     // structure the source archive declared come through unchanged.
     args: ['x', `-o${outDir}`, '-y', '--', archivePath],
+    workspace,
+    deadline,
+    signal,
+  });
+}
+
+/**
+ * Undo the OUTER Zstandard layer of a `.zst` source with the standalone
+ * `zstd` CLI, before `extractArchiveTree` ever sees it - `7z` has no
+ * Zstandard codec in this build at all (see `ZSTD_BIN`'s own comment in
+ * `config.ts`), unlike gzip/bzip2/xz, which it reads natively and which is
+ * why THEY need no separate step like this one. The result is hastily
+ * checked to be a real archive layer of its own: an already-plain file
+ * inside a `.zst` (Zstandard's version of `gzip -k` on one document) is not
+ * this feature's job to unpack - `runArchivePipeline`'s caller decides that
+ * the same way it does for `.gz`, by handing the decompressed path straight
+ * to `extractArchiveTree`, which is what would refuse it if there is
+ * nothing 7z can list inside.
+ */
+export async function decompressZstd(run: {
+  inputPath: string;
+  outputPath: string;
+  workspace: string;
+  deadline: number;
+  signal?: AbortSignal;
+}): Promise<ProcessOutcome> {
+  const { inputPath, outputPath, workspace, deadline, signal } = run;
+  return runProcess({
+    bin: ZSTD_BIN,
+    args: ['-d', '-f', '-o', outputPath, inputPath],
     workspace,
     deadline,
     signal,
@@ -361,7 +391,7 @@ export async function createArchive(run: {
     return;
   }
 
-  // tar.gz / tar.bz2: build the intermediate tar, then compress it.
+  // tar.gz / tar.bz2 / tar.zst: build the intermediate tar, then compress it.
   const tarPath = join(workspace, 'archive-intermediate.tar');
   const tarOutcome = await runProcess({
     bin: SEVENZIP_BIN,
@@ -371,6 +401,21 @@ export async function createArchive(run: {
     signal,
   });
   throwForArchiveOutcome(tarOutcome, 'extract');
+
+  if (writer === 'tar.zst') {
+    // `7z` has no Zstandard codec in this build (see `ZSTD_BIN`'s own
+    // comment in `config.ts`), so this one compression step runs the
+    // standalone `zstd` CLI instead of a second `7z a` call.
+    const zstdOutcome = await runProcess({
+      bin: ZSTD_BIN,
+      args: ['-f', '-o', outputPath, tarPath],
+      workspace,
+      deadline,
+      signal,
+    });
+    throwForArchiveOutcome(zstdOutcome, 'extract');
+    return;
+  }
 
   const compressFormat = writer === 'tar.gz' ? 'gzip' : 'bzip2';
   const compressOutcome = await runProcess({

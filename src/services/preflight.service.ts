@@ -20,7 +20,13 @@ import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  ARROW_ENGINE_SCRIPT,
+  ASSIMP_BIN,
+  EBOOK_CONVERT_BIN,
   FFMPEG_BIN,
+  FONT_ENGINE_SCRIPT,
+  HEIF_CONVERT_BIN,
+  HEIF_ENC_BIN,
   PANDOC_BIN,
   PDFTOPPM_BIN,
   PDF_ENGINE_SCRIPT,
@@ -30,6 +36,7 @@ import {
   SEVENZIP_BIN,
   SOFFICE_BIN,
   TESSERACT_BIN,
+  ZSTD_BIN,
 } from '../config.ts';
 import { PreflightError } from '../errors.ts';
 import { archivesFiles, resolveConversion, type AllowedExtension, type TargetId } from '../formats.ts';
@@ -57,6 +64,10 @@ export interface PreflightReport {
   pandocVersion: string;
   sevenZipVersion: string;
   ffmpegVersion: string;
+  heifConvertVersion: string;
+  zstdVersion: string;
+  assimpVersion: string;
+  ebookConvertVersion: string;
   fonts: Array<{ requested: string; resolved: string }>;
   /** False means a scanned PDF's `docx` will convert without OCR - see `checkTesseractPresent`. */
   ocrAvailable: boolean;
@@ -72,6 +83,12 @@ export async function preflight(): Promise<PreflightReport> {
   const pandocVersion = assertPandocPresent();
   const sevenZipVersion = assertSevenZipPresent();
   const ffmpegVersion = assertFfmpegPresent();
+  const heifConvertVersion = assertHeifPresent();
+  const zstdVersion = assertZstdPresent();
+  const assimpVersion = assertAssimpPresent();
+  const ebookConvertVersion = assertEbookConvertPresent();
+  assertFontEnginePresent();
+  assertArrowEnginePresent();
   const ocrAvailable = checkTesseractPresent();
   if (!ocrAvailable) {
     console.warn(
@@ -85,6 +102,10 @@ export async function preflight(): Promise<PreflightReport> {
     pandocVersion,
     sevenZipVersion,
     ffmpegVersion,
+    heifConvertVersion,
+    zstdVersion,
+    assimpVersion,
+    ebookConvertVersion,
     fonts,
     ocrAvailable,
   };
@@ -378,6 +399,227 @@ function assertFfmpegPresent(): string {
     );
   }
   return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
+ * `heif-convert`/`heif-enc` (Debian/Ubuntu package: `libheif-examples`),
+ * needed for `.heic`/`.heif` in EITHER direction - the one pair `ffmpeg`
+ * cannot reach at all in this build (verified by hand: no HEIF demuxer or
+ * encoder). See `heif.service.ts` and `formats.ts`'s own `heif` mode bullet.
+ *
+ * Checked the same way `ffmpeg`/pandoc/7z are: can each tool even be run,
+ * before any request depends on it. Two binaries, one check, because a
+ * container missing either one fails half of every `.heic`/`.heif` request -
+ * `heif-convert` alone can decode a source but never produce one, and
+ * `heif-enc` alone is the reverse.
+ */
+function assertHeifPresent(): string {
+  for (const [bin, purpose] of [
+    [HEIF_CONVERT_BIN, 'decodes .heic/.heif sources'],
+    [HEIF_ENC_BIN, 'encodes .heic/.heif targets'],
+  ] as const) {
+    const result = spawnSync(bin, ['--help'], { encoding: 'utf8', timeout: 10_000 });
+    if (result.error) {
+      const code = (result.error as NodeJS.ErrnoException).code;
+      throw new PreflightError(
+        [
+          `Cannot run "${bin}" (${code ?? result.error.message}).`,
+          '',
+          `It ${purpose} - neither ffmpeg nor LibreOffice can read or write this`,
+          'format in this build.',
+          '  Debian/Ubuntu:  apt-get install -y libheif-examples',
+          '  Docker:         use the provided Dockerfile',
+          '',
+          `Set ${bin === HEIF_CONVERT_BIN ? 'HEIF_CONVERT_BIN' : 'HEIF_ENC_BIN'} if it is installed somewhere not on PATH.`,
+        ].join('\n'),
+      );
+    }
+    if (result.status !== 0) {
+      throw new PreflightError(
+        `"${bin} --help" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+      );
+    }
+  }
+  const versionResult = spawnSync(HEIF_CONVERT_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  return (versionResult.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
+ * `zstd`, needed for `.zst`/`tar.zst` in either direction - `7z` has no
+ * Zstandard codec in this build at all (verified by hand: `7z l`/`7z a
+ * -tzstd` both fail with "Unsupported archive type"), unlike gzip/bzip2/xz,
+ * which it reads and writes natively. See `archive.service.ts`.
+ */
+function assertZstdPresent(): string {
+  const result = spawnSync(ZSTD_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${ZSTD_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It decompresses .zst sources and compresses tar.zst targets - 7z has',
+        'no Zstandard codec in this build at all.',
+        '  Debian/Ubuntu:  apt-get install -y zstd',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        'Set ZSTD_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${ZSTD_BIN} --version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').trim() || 'unknown';
+}
+
+/**
+ * `assimp` (Debian/Ubuntu package: `assimp-utils`), the 3D-model engine -
+ * `.obj`/`.stl`/`.ply`/`.glb`/`.3mf`/`.off` in, any of `obj`/`stl`/`ply`/
+ * `glb`/`3mf` out. See `assimp.service.ts`.
+ */
+function assertAssimpPresent(): string {
+  const result = spawnSync(ASSIMP_BIN, ['version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${ASSIMP_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It reads and writes every 3D-model format this service offers',
+        '(.obj/.stl/.ply/.glb/.3mf/.off) - no other engine here can.',
+        '  Debian/Ubuntu:  apt-get install -y assimp-utils',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        'Set ASSIMP_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${ASSIMP_BIN} version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').split('\n').find((line) => line.trim().length > 0)?.trim() ?? 'unknown';
+}
+
+/**
+ * Calibre's `ebook-convert` (Debian/Ubuntu package: `calibre`), the ebook
+ * engine - `.epub`/`.mobi`/`.azw3`/`.fb2`/`.lrf`/`.pdb` in, any of `epub`/
+ * `mobi`/`azw3`/`fb2`/`lrf`/`pdb`/`snb`/KEPUB out. See `ebook.service.ts`.
+ */
+function assertEbookConvertPresent(): string {
+  const result = spawnSync(EBOOK_CONVERT_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${EBOOK_CONVERT_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It reads and writes every ebook format this service offers',
+        '(.epub/.mobi/.azw3/.fb2/.lrf/.pdb/snb/kepub) - no other engine here can.',
+        '  Debian/Ubuntu:  apt-get install -y calibre',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        `Set EBOOK_CONVERT_BIN if it is installed somewhere not on PATH.`,
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${EBOOK_CONVERT_BIN} --version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
+ * `fontTools`, the font engine (`.ttf`/`.otf`/`.woff`/`.woff2`). Same shape
+ * as `assertPdfEnginePresent` above - a Python module, not a standalone
+ * binary, checked by actually importing it. See `font.service.ts`/
+ * `font_engine.py`.
+ */
+function assertFontEnginePresent(): void {
+  const result = spawnSync(PYTHON_BIN, ['-c', 'import fontTools'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${PYTHON_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It runs scripts/font_engine.py, the .ttf/.otf/.woff/.woff2 engine.',
+        '  Docker:  use the provided Dockerfile',
+        '',
+        'Set PYTHON_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      [
+        'fontTools is not installed.',
+        '',
+        '  Debian/Ubuntu:  apt-get install -y python3-fonttools',
+        '  Docker:         use the provided Dockerfile',
+        '',
+        `stderr: ${(result.stderr ?? '').trim()}`,
+      ].join('\n'),
+    );
+  }
+  if (!existsSync(FONT_ENGINE_SCRIPT)) {
+    throw new PreflightError(`Font engine script missing: ${FONT_ENGINE_SCRIPT}`);
+  }
+}
+
+/**
+ * `pyarrow`, the columnar-data engine (`.parquet`/`.orc`/`.feather`). Same
+ * shape as `assertPdfEnginePresent` above. Installed via pip, not a Debian
+ * package - see `config.ts`'s own `ARROW_ENGINE_SCRIPT` comment for why.
+ * See `arrow.service.ts`/`arrow_engine.py`.
+ */
+function assertArrowEnginePresent(): void {
+  const result = spawnSync(PYTHON_BIN, ['-c', 'import pyarrow, pyarrow.parquet, pyarrow.orc, pyarrow.feather'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${PYTHON_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It runs scripts/arrow_engine.py, the .parquet/.orc/.feather engine.',
+        '  Docker:  use the provided Dockerfile',
+        '',
+        'Set PYTHON_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      [
+        'pyarrow is not installed.',
+        '',
+        '  pip install pyarrow',
+        '  Docker:  use the provided Dockerfile',
+        '',
+        `stderr: ${(result.stderr ?? '').trim()}`,
+      ].join('\n'),
+    );
+  }
+  if (!existsSync(ARROW_ENGINE_SCRIPT)) {
+    throw new PreflightError(`Arrow engine script missing: ${ARROW_ENGINE_SCRIPT}`);
+  }
 }
 
 /**

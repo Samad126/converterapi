@@ -1547,7 +1547,7 @@ describe('POST /convert/<target> - PDF sources', () => {
     const error = expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
     assert.match(
       error.message,
-      /A \.pdf file can be converted to: PDF\/A, PNG, JPG, DOCX, PPTX, XLSX, Markdown\./,
+      /A \.pdf file can be converted to: PDF\/A, PNG, JPG, SVG, EMF, WMF, EPS, DOCX, PPTX, XLSX, Markdown\./,
     );
   });
 

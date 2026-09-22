@@ -1800,7 +1800,7 @@ components:
         Identifier of an output format, as used in the `/convert/{target}` path
         and returned by `GET /formats`.
       enum:
-        [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa, markdown, zip, tar, "tar.gz", "tar.bz2", "7z", cbz, srt, vtt, ass, ssa, tsv, json, yaml, jsonl, bmp, gif, tiff, webp, avif, ico, "png-image", "jpg-image"]
+        [pdf, odt, docx, txt, html, rtf, epub, ods, xlsx, csv, odp, pptx, png, jpg, tables, layers, pdfa, markdown, zip, tar, "tar.gz", "tar.bz2", "7z", cbz, srt, vtt, ass, ssa, tsv, json, yaml, jsonl, bmp, gif, tiff, webp, avif, ico, "png-image", "jpg-image", svg, heic, heif, emf, wmf, eps, jxl, jp2, qoi, tga, pcx, apng, xml, toml, ini, sqlite, "tar.zst", obj, stl, ply, glb, "3mf", mobi, azw3, fb2, lrf, pdb, snb, kepub, ttf, otf, woff, woff2, parquet, orc, feather]
 
     MediaTargetId:
       type: string
@@ -2156,7 +2156,7 @@ components:
           example:
             error:
               code: E_UNKNOWN_TARGET
-              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers), PDF/A, Markdown, ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ, SRT, VTT, ASS, SSA, TSV, JSON, YAML, JSONL, BMP, GIF, TIFF, WEBP, AVIF, ICO, PNG (image), JPG (image).'
+              message: 'That is not a format this converter can produce. Available: PDF, ODT, DOCX, TXT, HTML, RTF, EPUB, ODS, XLSX, CSV, ODP, PPTX, PNG, JPG, XLSX (tables), PNG (layers), PDF/A, Markdown, ZIP, TAR, TAR.GZ, TAR.BZ2, 7Z, CBZ, SRT, VTT, ASS, SSA, TSV, JSON, YAML, JSONL, BMP, GIF, TIFF, WEBP, AVIF, ICO, PNG (image), JPG (image), SVG, HEIC, HEIF, EMF, WMF, EPS, JXL, JPEG 2000, QOI, TGA, PCX, APNG, XML, TOML, INI, SQLite, TAR.ZST, OBJ, STL, PLY, GLB, 3MF, MOBI, AZW3, FB2, LRF, PDB, SNB, KEPUB, TTF, OTF, WOFF, WOFF2, Parquet, ORC, Feather.'
 
     TooLarge:
       description: |
@@ -2190,7 +2190,7 @@ components:
           example:
             error:
               code: E_UNSUPPORTED
-              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb, .zip, .tar, .tgz, .tbz2, .txz, .gz, .bz2, .xz, .7z, .iso, .cbz, .bmp, .gif, .tiff, .webp, .avif, .ico, .srt, .vtt, .ass, .ssa, .tsv, .json, .yaml, .yml, .jsonl.'
+              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb, .zip, .tar, .tgz, .tbz2, .txz, .gz, .bz2, .xz, .zst, .7z, .iso, .cbz, .bmp, .gif, .tiff, .webp, .avif, .ico, .jxl, .jp2, .qoi, .tga, .pcx, .apng, .srt, .vtt, .ass, .ssa, .tsv, .json, .yaml, .yml, .jsonl, .xml, .toml, .ini, .sqlite, .svg, .emf, .wmf, .eps, .heic, .heif, .obj, .stl, .ply, .glb, .3mf, .off, .epub, .mobi, .azw3, .fb2, .lrf, .pdb, .ttf, .otf, .woff, .woff2, .parquet, .orc, .feather, .eml.'
 
     UnsupportedTarget:
       description: |
