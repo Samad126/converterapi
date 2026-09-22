@@ -266,7 +266,7 @@ RUN apt-get update \
       tesseract-ocr-tur \
       tesseract-ocr-rus \
  && fc-cache -f \
- && pip3 install --no-cache-dir --break-system-packages \
+ && pip3 install --no-cache-dir --break-system-packages --ignore-installed \
       pdf2docx \
       pdfplumber \
       python-pptx \
