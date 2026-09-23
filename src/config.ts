@@ -453,7 +453,7 @@ export const MAX_PAGE_OPERATION_FILES = intFromEnv('MAX_PAGE_OPERATION_FILES', 2
  * Checked after upload rather than by multer's own per-file `fileSize` limit,
  * which bounds each file individually (at `MAX_UPLOAD_BYTES`) but says
  * nothing about their sum - twenty files at the per-file cap would otherwise
- * be a 500MB request working its way through pdf-lib entirely in memory.
+ * be a 2GB request working its way through pdf-lib entirely in memory.
  */
 export const MAX_PAGE_OPERATION_TOTAL_BYTES = intFromEnv(
   'MAX_PAGE_OPERATION_TOTAL_BYTES',

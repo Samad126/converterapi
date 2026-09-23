@@ -19,6 +19,7 @@ contract** with a client that is already shipped and cannot be changed.
 ## Contents
 
 - [Quick start](#quick-start)
+- [Command-line tool](#command-line-tool)
 - [Conversion matrix](#conversion-matrix)
 - [API](#api)
   - [POST /convert/{target}](#post-converttarget)
@@ -805,6 +806,47 @@ running" in one line.
 
 ---
 
+## Command-line tool
+
+`npm install` also gives you `converter`, a local CLI twin of the HTTP API:
+same conversion engines (LibreOffice, pandoc, ffmpeg, qpdf, Calibre, assimp,
+etc), driven directly against files on disk instead of over HTTP — no rate
+limit, no upload ceiling and no `CONVERT_TIMEOUT_MS` deadline, since those
+exist to protect a shared host from the public internet and neither concern
+applies to your own files on your own machine (see
+[`src/cli/index.ts`](src/cli/index.ts)).
+
+```bash
+npm run cli -- convert pdf report.docx
+npm run cli -- convert png slides.pptx --out ./images
+npm run cli -- pdf merge a.pdf b.pdf c.pdf
+npm run cli -- pdf split report.pdf --every 5
+npm run cli -- pdf rotate scan.pdf --degrees 90
+npm run cli -- pdf protect secret.pdf --password hunter2
+npm run cli -- media mp3 podcast.wav
+npm run cli -- formats
+npm run cli -- doctor
+```
+
+After `npm run build`, the same commands are available as `converter` (the
+package's `bin` entry, `dist/cli/index.js`) — either run directly against a
+global/local install, or via `npx converter ...` from a project that depends
+on this package.
+
+| Command | Does |
+|---|---|
+| `converter convert <target> <file> [file2 ...] [--out <dir>] [--ocr=false]` | Same conversions `POST /convert/{target}` offers, against local files |
+| `converter media <target> <file> [file2 ...] [--out <dir>]` | Same audio/video conversions `POST /media/{target}` offers, run synchronously (no job polling needed locally) |
+| `converter pdf <operation> <file> [flags]` | The same page-level PDF operations as the `/pdf/*` routes — `merge`, `split`, `remove`, `extract`, `organize`, `scan`, `rotate`, `watermark`, `crop`, `page-numbers`, `protect`, `unlock`, `repair`, `compress` |
+| `converter formats` | Prints the conversion matrix `GET /formats` serves |
+| `converter doctor` | Checks that the system tools this relies on (LibreOffice, ffmpeg, pandoc, qpdf, Calibre, assimp, 7z, poppler, ...) are installed and on `PATH` |
+
+Run `converter --help` (or `converter pdf` with no further arguments) for the
+full flag reference, including the `--pages`/`--order` selection syntax
+(`1,3,5-7`) the page operations share with the HTTP API.
+
+---
+
 ## API
 
 ### POST /convert/{target}
@@ -918,8 +960,9 @@ on:
 
 1. **`CONVERT_TIMEOUT_MS`** (90s) / the Android client's 120s abort — a real
    transcode routinely runs for minutes.
-2. **`MAX_UPLOAD_BYTES`** (25MB) — pinned to the Android client's wire
-   contract; video needs an order of magnitude more.
+2. **`MAX_UPLOAD_BYTES`** (100MB) — pinned to the Android client's wire
+   contract and to Cloudflare's own 100MB edge ceiling; video work would
+   ideally take more, but there is nowhere above that limit for it to go.
 3. **The synchronous one-request-one-file model** — a client cannot hold a
    connection open for a transcode that may take a while, and nothing about
    `/convert/{target}`'s own contract changes to accommodate one that can.
@@ -999,9 +1042,12 @@ naming a job id that never existed, or was swept after its TTL, answers
 **Resource caps raised for this endpoint specifically** — see
 [Configuration](#configuration) for the exact variables. The container's own
 `mem_limit`/tmpfs size were raised alongside them (see
-[`docker-compose.yml`](docker-compose.yml)'s own comments): a 500MB upload
-lands on the same tmpfs `/tmp` the document-conversion workspaces already
-share, which is RAM, not disk.
+[`docker-compose.yml`](docker-compose.yml)'s own comments): `MEDIA_MAX_UPLOAD_BYTES`
+now defaults to the same 100MB `MAX_UPLOAD_BYTES` uses — Cloudflare's own edge
+refuses any request body over 100MB before nginx or this service ever see it,
+so a separate, larger ceiling here would be dead configuration — and that
+upload lands on the same tmpfs `/tmp` the document-conversion workspaces
+already share, which is RAM, not disk.
 
 ### POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}
 
@@ -1499,7 +1545,7 @@ Android-specific numbers, not a promise made to the web app).
 4. **The server's deadline (90s) is shorter than the client's abort (120s)**, so
    the server can still answer with a proper error instead of being killed
    mid-conversion.
-5. **The 25 MB body limit agrees with the client's `MAX_UPLOAD_BYTES`.** It is a
+5. **The 100 MB body limit agrees with the client's `MAX_UPLOAD_BYTES`.** It is a
    named constant in [`src/config.ts`](src/config.ts), not a literal, and it is
    mirrored by the reverse proxy so an oversized upload is refused before it
    reaches Node. Express's default overflow response is an HTML page; that is
@@ -1851,8 +1897,9 @@ same reasoning as `MAX_RASTER_PAGES`:
 
 - `MAX_DOCUMENT_XML_BYTES` (default 32MB) caps the inflated size of
   `word/document.xml`, checked against the size the archive's own directory
-  declares **before** any inflating happens. 25MB of DEFLATE can inflate to
-  gigabytes, and the only place to stop a decompression bomb is before the work.
+  declares **before** any inflating happens. The upload is capped at 100MB, but
+  that much DEFLATE can inflate to gigabytes, and the only place to stop a
+  decompression bomb is before the work.
   A second check uses the inflate's own output cap, which is what catches a
   directory that lied.
 - `MAX_TABLE_CELLS` (default 200,000) caps the grid positions one document may
@@ -2034,7 +2081,7 @@ So [`src/lib/queue.ts`](src/lib/queue.ts) implements a bounded queue:
   a far better answer than a request that hangs for two minutes and then dies.
 
 The queue is checked *before* the body is read, so a client is told the
-converter is busy rather than spending a minute uploading 25 MB to find out. A
+converter is busy rather than spending a minute uploading 100 MB to find out. A
 request whose client disconnects while it is still queued is removed from the
 queue rather than being handed a slot nobody wants.
 
@@ -2081,7 +2128,7 @@ a workspace touched between the check and the delete is left alone.
 
 | Limit | Value | Where |
 |---|---|---|
-| Max upload | 25 MB | `MAX_UPLOAD_BYTES` (must equal the client's) + proxy `request_body max_size` |
+| Max upload | 100 MB | `MAX_UPLOAD_BYTES` (must equal the client's) + proxy `client_max_body_size`, and dead-ceiling-capped by Cloudflare's own 100MB edge limit |
 | Files per page operation | 20 | `MAX_PAGE_OPERATION_FILES` (`/pdf/merge`, `/pdf/scan-to-pdf`) |
 | Combined size per page operation | 100 MB | `MAX_PAGE_OPERATION_TOTAL_BYTES` (several files, not one) |
 | Conversion deadline | 90s | `CONVERT_TIMEOUT_MS` (client aborts at 120s) |
@@ -2100,16 +2147,17 @@ a workspace touched between the check and the delete is left alone.
 | JPEG quality | 90 | `RASTER_JPEG_QUALITY` |
 | Stale sweep | every 5 min | `SWEEP_INTERVAL_MS` |
 | Stale age | 15 min | `STALE_WORKSPACE_MS` |
-| Container memory | 1 GB | `docker-compose.yml` |
+| Container memory | 3 GB | `docker-compose.yml` (`mem_limit`/`memswap_limit`, raised from 1g/1g for `/media/{target}`) |
 | Container CPUs | 2 | `docker-compose.yml` |
 | Container PIDs | 256 | `docker-compose.yml` |
-| tmpfs for workspaces | 1 GB | `docker-compose.yml` |
+| tmpfs for workspaces | 2 GB | `docker-compose.yml` |
 
 **Sizing note.** `MAX_CONCURRENT_CONVERSIONS × typical soffice memory` must stay
 under the container's `mem_limit`, or the kernel OOM-kills `soffice` mid-run and
 every request becomes a `500`. LibreOffice peaks in the low hundreds of MB for
 ordinary documents and considerably more for image-heavy ones; 2 concurrent
-under a 1 GB cap is a deliberately conservative starting point. Raise both
+under a 3 GB cap is a deliberately conservative starting point that also leaves
+room for a 100MB `/media/{target}` upload and its transcode. Raise both
 together, not one.
 
 **Logging.** One JSON line per request: request id, outcome, source extension,
@@ -2149,10 +2197,12 @@ All configuration is environment variables read in
 | `MAX_LAYER_OUTPUT_BYTES` | `50331648` | For the `layers` target; refused with `E_TOO_LARGE` |
 | `MAX_PAGE_OPERATION_FILES` | `20` | For `/pdf/merge`, `/pdf/scan-to-pdf`; refused with `E_TOO_LARGE` |
 | `MAX_PAGE_OPERATION_TOTAL_BYTES` | `104857600` | Combined size of every file in one page-operation request |
-| `MAX_UPLOAD_BYTES` | `26214400` (25MB) | `/convert/{target}`'s per-file cap - must equal the Android client's own, and the reverse proxy's body-size limit; see [Wire-compatibility constraints](#wire-compatibility-constraints) |
+| `MAX_CONVERT_FILES` | `15` | For `/convert/{target}`; refused with `E_TOO_LARGE` |
+| `MAX_CONVERT_TOTAL_BYTES` | `104857600` | Combined size of every file in one `/convert/{target}` request (several files, not one) |
+| `MAX_UPLOAD_BYTES` | `104857600` (100MB) | `/convert/{target}`'s per-file cap - must equal the Android client's own, and the reverse proxy's body-size limit; see [Wire-compatibility constraints](#wire-compatibility-constraints) |
 | `MAX_ARCHIVE_ENTRIES` | `5000` | For the archive targets; refused with `E_CONVERT_FAILED` |
 | `MAX_ARCHIVE_UNCOMPRESSED_BYTES` | `536870912` (512MB) | For the archive targets; the decompression-bomb bound |
-| `MEDIA_MAX_UPLOAD_BYTES` | `524288000` (500MB) | `/media/{target}`'s own, much larger upload cap - not part of the Android client's wire contract, so not tied to `MAX_UPLOAD_BYTES` |
+| `MEDIA_MAX_UPLOAD_BYTES` | `104857600` (100MB) | `/media/{target}`'s own upload cap - defaults to the same value as `MAX_UPLOAD_BYTES`, since Cloudflare's own edge refuses any request body over 100MB regardless of what either constant allows |
 | `MEDIA_CONVERT_TIMEOUT_MS` | `1800000` (30 min) | How long one media job may run before `E_TIMEOUT` |
 | `MEDIA_JOB_TTL_MS` | `1800000` (30 min) | How long a finished media job's result stays downloadable |
 | `MAX_CONCURRENT_MEDIA_JOBS` | `1` | Its own pool, separate from `MAX_CONCURRENT_CONVERSIONS` |
@@ -2248,7 +2298,7 @@ pretending otherwise:
 
 **TLS terminates at a reverse proxy** in front of the service — the client uses
 `https://` and the app speaks plain HTTP, bound to loopback. The proxy's body
-limit is set to match the application's 25 MB so a large upload is rejected
+limit is set to match the application's 100 MB so a large upload is rejected
 before it reaches Node at all. Note that the proxy is also where you would add
 anything stronger than per-IP limiting (a WAF, a proof-of-work challenge, an
 allowlist) if this ever attracts real attention.
@@ -2330,7 +2380,7 @@ one file. [`deploy/nginx.conf.example`](deploy/nginx.conf.example) is a generic
 single-host block to adapt if you are deploying this somewhere else. The parts
 that matter:
 
-- `client_max_body_size 25m` — **must match `MAX_UPLOAD_BYTES`**, so an
+- `client_max_body_size 100m` — **must match `MAX_UPLOAD_BYTES`**, so an
   oversized upload is refused before it reaches Node. Two halves of one number.
 - `proxy_read_timeout 120s` — the app's deadline is 90s and the client gives up
   at 120s; neither helps if nginx cuts the connection first.
