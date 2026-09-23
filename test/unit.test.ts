@@ -65,7 +65,7 @@ describe('conversion matrix', () => {
   });
 
   it('accepts every extension the documentation lists', () => {
-    assert.equal(ALLOWED_EXTENSIONS.length, 100);
+    assert.equal(ALLOWED_EXTENSIONS.length, 101);
     for (const extension of ALLOWED_EXTENSIONS) {
       assert.equal(isAllowedExtension(extension), true, extension);
     }
