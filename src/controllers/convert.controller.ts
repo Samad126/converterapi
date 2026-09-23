@@ -66,7 +66,7 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
       next(Errors.rateLimited());
       return;
     }
-    // Refuse before the client uploads 25MB we have nowhere to put. The
+    // Refuse before the client uploads 100MB we have nowhere to put. The
     // authoritative check is still the queue's own acquire().
     if (!queue.hasCapacity()) {
       next(Errors.busy());

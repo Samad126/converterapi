@@ -17,7 +17,7 @@
  * before calling here) parses the PDF twice - accepted for the sake of a
  * service whose functions each take plain bytes in and plain bytes out,
  * rather than threading a loaded `PDFDocument` through the controller layer.
- * Uploads are capped at 25MB (`MAX_UPLOAD_BYTES`), so the second parse is
+ * Uploads are capped at 100MB (`MAX_UPLOAD_BYTES`), so the second parse is
  * bounded, not unbounded rework.
  */
 import fontkit from '@pdf-lib/fontkit';

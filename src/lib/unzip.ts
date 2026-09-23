@@ -69,7 +69,7 @@ export function readZipEntry(archive: Buffer, wanted: string, maxBytes: number):
   const entry = findEntry(archive, end, wanted);
   if (!entry) return { kind: 'missing' };
 
-  // Refuse before inflating anything. A 25MB upload can declare a 4GiB part,
+  // Refuse before inflating anything. A 100MB upload can declare a 4GiB part,
   // and the whole point of a bomb is that the work is done by the time you
   // notice - so the check has to come first, not after.
   if (entry.uncompressedSize > maxBytes) {
@@ -161,8 +161,8 @@ function readEntryData(archive: Buffer, entry: CentralEntry, maxBytes: number): 
 
   if (entry.method === METHOD_STORED) {
     // Copied rather than returned as a subarray: a view would keep the whole
-    // upload alive for as long as the part is held, which on a 25MB upload is
-    // 25MB of retention for a few kilobytes of XML.
+    // upload alive for as long as the part is held, which on a 100MB upload is
+    // 100MB of retention for a few kilobytes of XML.
     return { kind: 'found', data: Buffer.from(payload) };
   }
   if (entry.method !== METHOD_DEFLATE) return { kind: 'missing' };

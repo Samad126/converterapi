@@ -138,7 +138,7 @@ paths:
         A PDF with no extractable text at all (a scan), or one built on
         Type3 fonts, asking for `docx` is OCR'd before reconstruction by
         default - see the `ocr` field on the request body.
-      x-max-upload-bytes: 26214400
+      x-max-upload-bytes: 104857600
       parameters:
         - name: target
           in: path
@@ -185,9 +185,11 @@ paths:
 
         This is a separate endpoint from `POST /convert/{target}` on purpose:
         a real audio/video transcode routinely runs far longer than that
-        endpoint's deadline, and needs an upload ceiling far above the 25MB
-        the Android client's wire contract fixes for `/convert`. Nothing
-        about `/convert/{target}`'s existing contract changes because of this
+        endpoint's deadline. Its upload ceiling is the same 100MB
+        `/convert` enforces - both are capped there by Cloudflare's own edge
+        limit on a proxied request body, so raising this endpoint's ceiling
+        above it would be dead configuration. Nothing about
+        `/convert/{target}`'s existing contract changes because of this
         endpoint.
 
         `target` and the source extension must be the same KIND (audio to
@@ -200,7 +202,7 @@ paths:
         set than audio/video formats could in principle cover - see
         `formats-media.ts`'s own comment for the reasoning and the wider list
         a future pass could verify and add.
-      x-max-upload-bytes: 524288000
+      x-max-upload-bytes: 104857600
       parameters:
         - name: target
           in: path
@@ -1226,7 +1228,7 @@ components:
         one under any other name is simply not this field and is ignored the
         same way any unrecognised part would be.
 
-        Each file is capped at **26214400 bytes (25 MB)**, matching the
+        Each file is capped at **104857600 bytes (100 MB)**, matching the
         client's own `MAX_UPLOAD_BYTES` and the reverse proxy's body limit -
         exceeding it at any layer produces `413`. With more than one file,
         their combined size is additionally capped (`MAX_CONVERT_TOTAL_BYTES`,
@@ -2160,7 +2162,7 @@ components:
 
     TooLarge:
       description: |
-        The upload exceeds 26214400 bytes (25 MB). Applied by the reverse proxy,
+        The upload exceeds 104857600 bytes (100 MB). Applied by the reverse proxy,
         by the multipart parser and by the client, all using the same limit.
 
         Also returned when an image target would produce more pages than the

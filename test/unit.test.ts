@@ -751,8 +751,8 @@ describe('workspace lifecycle', () => {
 });
 
 describe('config', () => {
-  it('caps uploads at the 25MB the client also enforces', () => {
-    assert.equal(MAX_UPLOAD_BYTES, 25 * 1024 * 1024);
+  it('caps uploads at the 100MB the client also enforces', () => {
+    assert.equal(MAX_UPLOAD_BYTES, 100 * 1024 * 1024);
   });
 
   it('names the on-disk upload from the validated extension only', () => {

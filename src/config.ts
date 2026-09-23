@@ -32,8 +32,14 @@ function intFromEnv(name: string, fallback: number, min: number): number {
  * deploy/converter.alakbaroff.com.conf) so an oversized upload is refused
  * before it reaches Node at all - which is also why that 413 needs its own CORS
  * header: the application never sees the response.
+ *
+ * 100MB, not higher: Cloudflare's own edge refuses request bodies over 100MB
+ * regardless of what nginx or this constant allow, so anything above that is
+ * dead ceiling - the request never reaches this host at all, and fails with a
+ * Cloudflare error instead of the E_TOO_LARGE response this service is built
+ * to give.
  */
-export const MAX_UPLOAD_BYTES = 25 * MB;
+export const MAX_UPLOAD_BYTES = 100 * MB;
 
 /**
  * Our own conversion deadline.
@@ -274,8 +280,8 @@ export const MAX_TABLES = intFromEnv('MAX_TABLES', 1_000, 1);
 /**
  * Ceiling on the inflated size of `word/document.xml`.
  *
- * This is the decompression-bomb bound. The upload is capped at 25MB, but
- * 25MB of DEFLATE can inflate to gigabytes - that is what a bomb IS - and the
+ * This is the decompression-bomb bound. The upload is capped at 100MB, but
+ * that much DEFLATE can inflate to gigabytes - that is what a bomb IS - and the
  * only place to stop it is before the inflate, against the size the archive's
  * own directory declares. 32MB is generously above the largest document that
  * can pass MAX_TABLE_CELLS, so honest documents never meet it and a bomb
@@ -365,7 +371,7 @@ export const MAX_ARCHIVE_ENTRIES = intFromEnv('MAX_ARCHIVE_ENTRIES', 5_000, 1);
  * MAX_PSD_DECODE_BYTES use, for the same reason: the declared number is
  * exactly what a bomb lies about, and checking it after extraction has
  * already spent the disk and CPU the check exists to avoid spending. 512MB
- * is generously above anything a 25MB upload legitimately expands to at
+ * is generously above anything a 100MB upload legitimately expands to at
  * ordinary compression ratios, while comfortably under the container's
  * `mem_limit: 1g` alongside MAX_CONCURRENT_CONVERSIONS.
  */
@@ -380,16 +386,27 @@ export const MAX_ARCHIVE_UNCOMPRESSED_BYTES = intFromEnv(
  * NOT part of `/convert/{target}`'s synchronous contract. Everything below
  * exists because real audio/video work breaks three assumptions the rest of
  * this service depends on: `CONVERT_TIMEOUT_MS` (a real transcode routinely
- * exceeds 90s), `MAX_UPLOAD_BYTES` (25MB, pinned to the Android client's
- * wire contract - video needs an order of magnitude more), and the
- * synchronous one-request-one-file model (a client cannot hold a connection
- * open for a transcode that may take minutes). See `media-jobs.service.ts`
- * and the README's own section on this endpoint for the full reasoning.
+ * exceeds 90s), `MAX_UPLOAD_BYTES` (100MB, pinned to the Android client's
+ * wire contract - video would ideally take an order of magnitude more), and
+ * the synchronous one-request-one-file model (a client cannot hold a
+ * connection open for a transcode that may take minutes). See
+ * `media-jobs.service.ts` and the README's own section on this endpoint for
+ * the full reasoning.
  */
 
-/** The upload ceiling for `/media/{target}` - MAX_UPLOAD_BYTES exists for a wire
- * contract this endpoint is not part of, so it gets its own, much larger one. */
-export const MEDIA_MAX_UPLOAD_BYTES = intFromEnv('MEDIA_MAX_UPLOAD_BYTES', 500 * MB, 1024);
+/**
+ * The upload ceiling for `/media/{target}`.
+ *
+ * This used to be its own, much larger number (500MB) on the theory that
+ * `MAX_UPLOAD_BYTES` was a wire contract this endpoint isn't part of. It
+ * isn't reachable in production: this endpoint sits behind the same reverse
+ * proxy and the same Cloudflare edge as everything else, and Cloudflare
+ * itself refuses any request body over 100MB before nginx or this constant
+ * ever see it. Set equal to `MAX_UPLOAD_BYTES` so the env override, if
+ * anyone raises it, cannot promise a ceiling the network in front of it
+ * won't honour.
+ */
+export const MEDIA_MAX_UPLOAD_BYTES = intFromEnv('MEDIA_MAX_UPLOAD_BYTES', MAX_UPLOAD_BYTES, 1024);
 
 /**
  * How long one media job may run before it is killed and reported as

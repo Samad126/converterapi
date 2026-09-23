@@ -39,7 +39,7 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
 
     # ---------------------------------------------------------------------
-    # MUST match MAX_UPLOAD_BYTES in src/config.ts - 25 MB, 26214400 bytes.
+    # MUST match MAX_UPLOAD_BYTES in src/config.ts - 100 MB, 104857600 bytes.
     #
     # Matching it exactly is the point: an upload over the limit is refused
     # here, before a single byte of it reaches Node, so a large body cannot
@@ -47,7 +47,7 @@ server {
     # application limit, change this in the same commit; they are two halves
     # of one number.
     # ---------------------------------------------------------------------
-    client_max_body_size 25m;
+    client_max_body_size 100m;
 
     location / {
         proxy_pass http://127.0.0.1:3010;

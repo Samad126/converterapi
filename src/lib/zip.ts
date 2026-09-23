@@ -18,7 +18,7 @@
  * an order of magnitude, so an .xlsx built from a large table is worth the CPU.
  *
  * No ZIP64, so a single entry over 4GiB or more than 65535 entries would
- * produce a corrupt archive. Neither is reachable: uploads are capped at 25MB
+ * produce a corrupt archive. Neither is reachable: uploads are capped at 100MB
  * (see MAX_UPLOAD_BYTES), the table extractor is capped in cells, and a
  * conversion that ran long enough to produce gigabytes would hit
  * CONVERT_TIMEOUT_MS first.

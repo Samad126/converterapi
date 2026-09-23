@@ -57,7 +57,7 @@ export class BoundedQueue {
    * Is there room for another request?
    *
    * Used to shed load BEFORE reading the body, so a client is told the
-   * converter is busy instead of spending a minute uploading 25MB to find out.
+   * converter is busy instead of spending a minute uploading 100MB to find out.
    * Advisory only - `acquire` is what actually decides, since the answer can
    * change between this call and that one.
    */
