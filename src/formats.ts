@@ -170,6 +170,7 @@ export type AllowedExtension =
   | '.bz2'
   | '.xz'
   | '.7z'
+  | '.rar'
   | '.iso'
   | '.bmp'
   | '.gif'
@@ -251,17 +252,10 @@ export type AllowedExtension =
  */
 
 /**
- * RAR (`.rar`) is deliberately not an accepted extension. `7z` can read it
- * (`7z i` lists both `Rar` and `Rar5` as recognised formats), but there is no
- * legal way to author a REAL `.rar` fixture to verify that reading against in
- * this environment - the format's writer is a proprietary tool, unlike every
- * other archive format here. Same reasoning as `.pub` in the legacy-Office
- * extensions above: not trusted until run against a real file, and there is
- * no real file to run it against yet.
- *
- * Writing `.rar` was never in scope regardless: even CloudConvert's own
- * public catalogue routes RAR *creation* through a separate, proprietary,
- * credit-gated engine - `7z`/p7zip can only read the format, never write it.
+ * RAR (`.rar`) is accepted as a SOURCE only. `7z` reads `Rar` and `Rar5`, but
+ * p7zip can never write the format, so `rar` is not a target. No real `.rar`
+ * fixture could be authored here (the writer is proprietary), so the read
+ * path is untested against a real file.
  */
 
 /**
@@ -307,6 +301,7 @@ export const ARCHIVE_EXTENSIONS: readonly AllowedExtension[] = [
   '.bz2',
   '.xz',
   '.7z',
+  '.rar',
   '.iso',
   // `.cbz` is a comic-book archive - a plain ZIP of page images under a
   // reader-recognised extension, nothing more - so it rides this exact
@@ -2046,6 +2041,11 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     extension: '.7z',
     mediaType: 'application/x-7z-compressed',
     targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', 'cbz'],
+  },
+  '.rar': {
+    extension: '.rar',
+    mediaType: 'application/vnd.rar',
+    targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
   },
   '.iso': {
     extension: '.iso',
