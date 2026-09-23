@@ -106,7 +106,9 @@ export function createPagesController(deps: PagesControllerDeps): PagesControlle
 
   const admit: PagesController['admit'] = (req, _res, next) => {
     if (!rateLimiter.check(req.ip ?? 'unknown')) {
-      next(Errors.rateLimited());
+      const error = Errors.rateLimited();
+      error.retryAfterSeconds = rateLimiter.retryAfterSeconds(req.ip ?? 'unknown');
+      next(error);
       return;
     }
     if (!queue.hasCapacity()) {

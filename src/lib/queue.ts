@@ -168,6 +168,13 @@ export class RateLimiter {
     return existing.count <= this.maxPerWindow;
   }
 
+  /** Whole seconds until `key`'s window resets; at least 1. */
+  retryAfterSeconds(key: string, now = Date.now()): number {
+    const existing = this.windows.get(key);
+    if (!existing) return 1;
+    return Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+  }
+
   /** Keeps the map from growing with one entry per IP we have ever seen. */
   private maybeSweep(now: number): void {
     if (this.windows.size < 10_000) return;

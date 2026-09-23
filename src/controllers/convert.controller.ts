@@ -63,7 +63,9 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
 
   const admit: ConvertController['admit'] = (req, _res, next) => {
     if (!rateLimiter.check(req.ip ?? 'unknown')) {
-      next(Errors.rateLimited());
+      const error = Errors.rateLimited();
+      error.retryAfterSeconds = rateLimiter.retryAfterSeconds(req.ip ?? 'unknown');
+      next(error);
       return;
     }
     // Refuse before the client uploads 100MB we have nowhere to put. The

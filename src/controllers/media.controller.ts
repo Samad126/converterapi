@@ -63,7 +63,9 @@ export function createMediaController(deps: MediaControllerDeps): MediaControlle
 
   const admit: MediaController['admit'] = (req, _res, next) => {
     if (!rateLimiter.check(req.ip ?? 'unknown')) {
-      next(Errors.rateLimited());
+      const error = Errors.rateLimited();
+      error.retryAfterSeconds = rateLimiter.retryAfterSeconds(req.ip ?? 'unknown');
+      next(error);
       return;
     }
     // Refuse before the client uploads up to MEDIA_MAX_UPLOAD_BYTES we have

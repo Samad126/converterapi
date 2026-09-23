@@ -48,6 +48,8 @@ export class AppError extends Error {
   readonly status: number;
   /** The sentence the phone will show. */
   readonly userMessage: string;
+  /** Sent as `Retry-After` (seconds) when set. */
+  retryAfterSeconds?: number;
 
   constructor(code: ErrorCode, status: number, userMessage: string, options?: { cause?: unknown }) {
     super(`${code}: ${userMessage}`, options);

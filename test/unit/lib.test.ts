@@ -221,6 +221,13 @@ describe('RateLimiter', () => {
     assert.equal(limiter.check('1.2.3.4', 500), false);
     assert.equal(limiter.check('1.2.3.4', 1000), true);
   });
+
+  it('reports the whole seconds left in the window, at least 1', () => {
+    const limiter = new RateLimiter(1, 60_000);
+    limiter.check('1.2.3.4', 0);
+    assert.equal(limiter.retryAfterSeconds('1.2.3.4', 1_500), 59);
+    assert.equal(limiter.retryAfterSeconds('1.2.3.4', 59_999), 1);
+  });
 });
 
 describe('workspace lifecycle', () => {

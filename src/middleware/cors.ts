@@ -41,7 +41,7 @@ import type { NextFunction, Request, Response } from 'express';
  * their real filename (`Content-Disposition`) and empties the reference in the
  * error dialog (`X-Request-Id`).
  */
-const EXPOSED_HEADERS = 'Content-Disposition, X-Request-Id';
+const EXPOSED_HEADERS = 'Content-Disposition, X-Request-Id, Retry-After';
 
 /** What a preflight may ask for. The API converts with POST and reads with GET. */
 const ALLOWED_METHODS = 'GET, POST, OPTIONS';

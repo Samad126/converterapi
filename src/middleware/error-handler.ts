@@ -22,6 +22,7 @@ import { cleanup, getContext, logRequest } from './request-context.ts';
  */
 export function respondJson(res: Response, error: AppError, status = error.status): void {
   res.setHeader('Content-Type', 'application/json');
+  if (error.retryAfterSeconds !== undefined) res.setHeader('Retry-After', String(error.retryAfterSeconds));
   res.status(status).end(JSON.stringify(error.toEnvelope()));
 }
 

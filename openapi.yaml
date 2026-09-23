@@ -2418,6 +2418,12 @@ components:
     RateLimited:
       description: |
         Too many requests from this address in the current window.
+      headers:
+        Retry-After:
+          description: Whole seconds until the rate-limit window resets.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:
