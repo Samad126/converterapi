@@ -7,10 +7,14 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "converter": "dist/cli/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "dev": "node --watch --experimental-strip-types src/server.ts",
+    "cli": "node --experimental-strip-types src/cli/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --experimental-strip-types \"test/**/*.test.ts\""
   },
