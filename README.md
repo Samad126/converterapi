@@ -215,14 +215,12 @@ once, whatever the upload was actually called. `.tgz`/`.tbz2`/`.txz` are
 listed as their own source extensions because those *are* single, whole
 extensions `extname()` returns intact.
 
-**RAR (`.rar`) is deliberately not in the matrix**, as either a source or a
-target. `7z` can read it (`7z i` lists both `Rar` and `Rar5` as recognised),
-but there is no legal way to author a real `.rar` fixture to verify that
-reading against - the format's writer is a proprietary tool, unlike every
-other format here - so it stays out until someone can actually test it, the
-same reasoning `.pub` was left out of the legacy-Office extensions for.
-Writing `.rar` was never in scope regardless: `7z`/p7zip can only ever read
-the format, never write it.
+**RAR (`.rar`) is accepted as a source only.** `7z` reads `Rar` and `Rar5`
+(`7z i` lists both), so a `.rar` converts to `zip`, `tar`, `tar.gz`, `tar.bz2`,
+`tar.zst`, `7z` or `cbz`. It is never a target: the format's writer is
+proprietary and `7z`/p7zip can only ever read it. There is still no legal way
+to author a real `.rar` fixture, so the read path is not covered by an
+end-to-end test the way every other archive source is.
 
 **`zip` is written by this codebase's own [`zip.ts`](src/lib/zip.ts)**, not
 another `7z` subprocess call - the project's standing rule is that a format
@@ -431,8 +429,7 @@ it as a real import format; `assimp listexport` does not list it at all, and
 asking for it anyway fails outright with "no output format specified and I
 failed to guess it". The same asymmetric "one direction is a real, tested
 filter and the other is not" shape `.rar` already has elsewhere in this
-service (there, read-only for a different reason - no legal way to author a
-`.rar` fixture at all).
+service (there, read-only because `7z` cannot write it).
 
 A `.obj` *target* writes a companion `.mtl` file alongside it, even from a
 source with no materials (verified by hand) - Calibre's writer does this
@@ -837,7 +834,7 @@ on this package.
 |---|---|
 | `converter convert <target> <file> [file2 ...] [--out <dir>] [--ocr=false]` | Same conversions `POST /convert/{target}` offers, against local files |
 | `converter media <target> <file> [file2 ...] [--out <dir>]` | Same audio/video conversions `POST /media/{target}` offers, run synchronously (no job polling needed locally) |
-| `converter pdf <operation> <file> [flags]` | The same page-level PDF operations as the `/pdf/*` routes — `merge`, `split`, `remove`, `extract`, `organize`, `scan`, `rotate`, `watermark`, `crop`, `page-numbers`, `protect`, `unlock`, `repair`, `compress` |
+| `converter pdf <operation> <file> [flags]` | The page-level PDF operations behind these `/pdf/*` routes — `merge`, `split`, `remove` (`remove-pages`), `extract` (`extract-pages`), `organize`, `scan` (`scan-to-pdf`), `rotate`, `watermark`, `crop`, `page-numbers`, `protect`, `unlock`, `repair`, `compress`. The routes that take structured input or run OCR — `sign`, `edit`, `redact`, `fill-form`, `form-fields`, `compare`, `ocr` — are HTTP-only; there is no CLI command for them |
 | `converter formats` | Prints the conversion matrix `GET /formats` serves |
 | `converter doctor` | Checks that the system tools this relies on (LibreOffice, ffmpeg, pandoc, qpdf, Calibre, assimp, 7z, poppler, ...) are installed and on `PATH` |
 

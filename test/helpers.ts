@@ -82,7 +82,7 @@ export async function upload(
   const form = new FormData();
   form.append(
     options.fieldName ?? 'files',
-    new Blob([bytes], { type: options.mimeType ?? 'application/octet-stream' }),
+    new Blob([new Uint8Array(bytes)], { type: options.mimeType ?? 'application/octet-stream' }),
     filename,
   );
   for (const [key, value] of Object.entries(options.fields ?? {})) {
@@ -106,7 +106,7 @@ export async function uploadMedia(
   target: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const form = new FormData();
-  form.append('files', new Blob([bytes], { type: 'application/octet-stream' }), filename);
+  form.append('files', new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' }), filename);
   const response = await fetch(`${baseUrl}/media/${target}`, { method: 'POST', body: form });
   const body = (await response.json()) as Record<string, unknown>;
   return { status: response.status, body };
@@ -163,7 +163,7 @@ export async function postPages(
   for (const file of files) {
     form.append(
       file.fieldName ?? 'files',
-      new Blob([file.bytes], { type: file.mimeType ?? 'application/octet-stream' }),
+      new Blob([new Uint8Array(file.bytes)], { type: file.mimeType ?? 'application/octet-stream' }),
       file.filename,
     );
   }

@@ -36,7 +36,7 @@ const address = server.address();
 const port = typeof address === 'object' && address ? address.port : 0;
 
 const form = new FormData();
-form.append('files', new Blob([LARGE_DOCX]), 'large.docx');
+form.append('files', new Blob([new Uint8Array(LARGE_DOCX)]), 'large.docx');
 
 const startedAt = Date.now();
 const response = await fetch(`http://127.0.0.1:${port}/convert/pdf`, { method: 'POST', body: form });

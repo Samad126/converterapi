@@ -188,7 +188,7 @@ describe('openapi document', () => {
       MAX_UPLOAD_BYTES,
       'the documented limit and MAX_UPLOAD_BYTES have diverged',
     );
-    assert.equal(MAX_UPLOAD_BYTES, 25 * 1024 * 1024);
+    assert.equal(MAX_UPLOAD_BYTES, 100 * 1024 * 1024);
   });
 
   it('documents exactly the target ids the matrix implements', () => {

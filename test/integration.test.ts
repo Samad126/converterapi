@@ -110,7 +110,7 @@ describe('GET /health', () => {
     const response = await fetch(`${server.baseUrl}/health`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type') ?? '', /application\/json/);
-    const body = await response.json();
+    const body = (await response.json()) as { status: string; queue: object; mediaQueue: object };
     assert.equal(body.status, 'ok');
     assert.deepEqual(Object.keys(body.queue).sort(), ['maxConcurrent', 'maxQueued', 'queued', 'running'].sort());
     assert.deepEqual(Object.keys(body.mediaQueue).sort(), ['maxConcurrent', 'maxQueued', 'queued', 'running'].sort());
@@ -258,7 +258,7 @@ describe('the target segment is required', () => {
     // catch-all 404, whose message happens to be the right thing to say to
     // someone on an out-of-date client: "please update the app".
     const form = new FormData();
-    form.append('file', new Blob([SAMPLE_DOCX]), 'sample.docx');
+    form.append('file', new Blob([new Uint8Array(SAMPLE_DOCX)]), 'sample.docx');
     const response = await fetch(`${server.baseUrl}/convert`, { method: 'POST', body: form });
 
     assert.equal(response.status, 404);
@@ -834,14 +834,12 @@ describe('POST /convert/<target> - archive engine (7z)', () => {
     expectJsonEnvelope(response, 415, 'E_UNSUPPORTED_TARGET');
   });
 
-  it('rejects a .rar upload as an unsupported extension', async () => {
-    // .rar is deliberately not in the matrix at all - see formats.ts's own
-    // comment: there is no legal way to author a real .rar fixture to
-    // verify reading against in this environment, and 7z can only ever read
-    // the format, never write it. This proves the exclusion is real: a
-    // client that tries anyway gets the ordinary 415, not a 500 from some
-    // half-wired code path.
-    const response = await upload(server.baseUrl, 'archive.rar', Buffer.from('Rar!\x1a\x07\x00'), {
+  it('rejects an unknown archive extension as unsupported', async () => {
+    // `.rar` is a supported source (read-only - 7z can extract it but never
+    // write it), so the ordinary 415 for an extension outside the matrix is
+    // proved with one that is genuinely not in it: a client that tries anyway
+    // gets the 415 envelope, not a 500 from some half-wired code path.
+    const response = await upload(server.baseUrl, 'archive.arj', Buffer.from('`\xea\x00\x00'), {
       target: 'zip',
     });
     assert.equal(response.status, 415);
@@ -1621,7 +1619,7 @@ describe('cancellation', () => {
   it('kills the running soffice when the client disconnects', async () => {
     const controller = new AbortController();
     const form = new FormData();
-    form.append('files', new Blob([LARGE_DOCX]), 'large.docx');
+    form.append('files', new Blob([new Uint8Array(LARGE_DOCX)]), 'large.docx');
 
     const request = fetch(`${server.baseUrl}/convert/pdf`, {
       method: 'POST',

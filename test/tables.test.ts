@@ -249,7 +249,7 @@ describe('table extraction', () => {
   it('reports a nested table as its own table, after its parent', () => {
     const inner = table(row(cell('inner')));
     const outer = table(row(`<w:tc><w:p><w:r><w:t>outer</w:t></w:r></w:p>${inner}</w:tc>`));
-    const result = extractTables(docxBody(outer), GENEROUS);
+    const result = extractTables(docxBody(outer), GENEROUS, GENEROUS);
     assert.equal(result.kind, 'ok');
     assert.deepEqual(result.kind === 'ok' && result.tables, [[['outer']], [['inner']]]);
   });

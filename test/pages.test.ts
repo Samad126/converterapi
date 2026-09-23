@@ -977,7 +977,6 @@ describe('POST /pdf/compare', () => {
       { filename: 'b.pdf', bytes: buildMinimalPdf(['B']) },
       { filename: 'c.pdf', bytes: buildMinimalPdf(['C']) },
     ]);
-    const body = JSON.parse(response.body.toString('utf8'));
     assert.equal(response.status, 400);
   });
 });

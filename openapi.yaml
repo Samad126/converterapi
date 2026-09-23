@@ -2208,7 +2208,7 @@ components:
           example:
             error:
               code: E_UNSUPPORTED
-              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb, .zip, .tar, .tgz, .tbz2, .txz, .gz, .bz2, .xz, .zst, .7z, .iso, .cbz, .bmp, .gif, .tiff, .webp, .avif, .ico, .jxl, .jp2, .qoi, .tga, .pcx, .apng, .srt, .vtt, .ass, .ssa, .tsv, .json, .yaml, .yml, .jsonl, .xml, .toml, .ini, .sqlite, .svg, .emf, .wmf, .eps, .heic, .heif, .obj, .stl, .ply, .glb, .3mf, .off, .epub, .mobi, .azw3, .fb2, .lrf, .pdb, .ttf, .otf, .woff, .woff2, .parquet, .orc, .feather, .eml.'
+              message: 'This file type cannot be converted. Supported types: .docx, .docm, .doc, .dot, .dotx, .odt, .ods, .odg, .odp, .xlsx, .xls, .xlsm, .pptx, .ppt, .pptm, .pps, .ppsx, .pot, .potx, .csv, .txt, .html, .htm, .rtf, .png, .jpg, .jpeg, .psd, .pdf, .md, .rst, .tex, .textile, .org, .opml, .muse, .ipynb, .zip, .tar, .tgz, .tbz2, .txz, .gz, .bz2, .xz, .zst, .7z, .rar, .iso, .cbz, .bmp, .gif, .tiff, .webp, .avif, .ico, .jxl, .jp2, .qoi, .tga, .pcx, .apng, .srt, .vtt, .ass, .ssa, .tsv, .json, .yaml, .yml, .jsonl, .xml, .toml, .ini, .sqlite, .svg, .emf, .wmf, .eps, .heic, .heif, .obj, .stl, .ply, .glb, .3mf, .off, .epub, .mobi, .azw3, .fb2, .lrf, .pdb, .ttf, .otf, .woff, .woff2, .parquet, .orc, .feather, .eml.'
 
     UnsupportedTarget:
       description: |

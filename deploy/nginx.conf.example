@@ -66,7 +66,7 @@ server {
         proxy_read_timeout    120s;
 
         # Hand the upload straight through instead of spooling it to disk
-        # first. Optional, but it halves the disk traffic for a 25 MB body.
+        # first. Optional, but it halves the disk traffic for a 100 MB body.
         # Note the name: `proxy_request_buffering`, not `request_buffering`.
         proxy_request_buffering off;
 

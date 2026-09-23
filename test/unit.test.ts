@@ -590,7 +590,7 @@ describe('RateLimiter', () => {
 
 describe('error envelope', () => {
   it('carries the exact code, status and verbatim message for every case', () => {
-    const cases: Array<[AppError, number, string, string]> = [
+    const cases: Array<[InstanceType<typeof AppError>, number, string, string]> = [
       [
         Errors.convertFailed(),
         500,
@@ -625,7 +625,7 @@ describe('error envelope', () => {
     // Every error, with the arguments a real request would give it - the point
     // is the RENDERED sentence, so a factory that leaks a raw argument into the
     // text would be caught here.
-    const samples: AppError[] = [
+    const samples: Array<InstanceType<typeof AppError>> = [
       Errors.convertFailed(),
       Errors.timeout(),
       Errors.encrypted(),
