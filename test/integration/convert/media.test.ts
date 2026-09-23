@@ -17,7 +17,7 @@ import {
   startTestServer,
   uploadMedia,
   type TestServer,
-} from './helpers.ts';
+} from '../../support/helpers.ts';
 
 let server: TestServer;
 

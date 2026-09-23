@@ -18,8 +18,8 @@ import type { Server } from 'node:http';
 // and the tests would scribble in the real temp root.
 process.env.TEMP_ROOT = await fsp.mkdtemp(join(tmpdir(), 'converter-test-'));
 
-const { createApp } = await import('../src/app.ts');
-const { BoundedQueue, RateLimiter } = await import('../src/lib/queue.ts');
+const { createApp } = await import('../../src/app.ts');
+const { BoundedQueue, RateLimiter } = await import('../../src/lib/queue.ts');
 
 export const TEMP_ROOT = process.env.TEMP_ROOT;
 
@@ -264,7 +264,7 @@ export async function buildPptxFixture(slides: readonly string[]): Promise<Buffe
   const cached = pptxCache.get(cacheKey);
   if (cached) return cached;
 
-  const { buildMinimalOdp } = await import('../src/lib/probe-documents.ts');
+  const { buildMinimalOdp } = await import('../../src/lib/probe-documents.ts');
   const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-pptx-'));
   try {
     const source = join(dir, 'probe.odp');
@@ -652,7 +652,7 @@ let jpegFixtureCache: Promise<Buffer> | undefined;
 export function buildJpegFixture(): Promise<Buffer> {
   if (!jpegFixtureCache) {
     jpegFixtureCache = (async () => {
-      const { pdfProbe } = await import('../src/lib/probe-documents.ts');
+      const { pdfProbe } = await import('../../src/lib/probe-documents.ts');
       const dir = await fsp.mkdtemp(join(tmpdir(), 'converter-jpeg-'));
       try {
         const source = join(dir, 'probe.pdf');

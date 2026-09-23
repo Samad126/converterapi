@@ -14,13 +14,13 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { startTestServer, upload, type TestServer } from './helpers.ts';
-import { loadOpenApiDocument } from '../src/openapi.ts';
-import { Errors, AppError } from '../src/errors.ts';
-import { TARGET_IDS, targetsFor } from '../src/formats.ts';
-import { MAX_UPLOAD_BYTES } from '../src/config.ts';
-import { buildMinimalDocx } from '../src/lib/probe-documents.ts';
-import { buildEncryptedDocxContainer, buildMalformedDocx } from './fixtures.ts';
+import { startTestServer, upload, type TestServer } from '../../support/helpers.ts';
+import { loadOpenApiDocument } from '../../../src/openapi.ts';
+import { Errors, AppError } from '../../../src/errors.ts';
+import { TARGET_IDS, targetsFor } from '../../../src/formats.ts';
+import { MAX_UPLOAD_BYTES } from '../../../src/config.ts';
+import { buildMinimalDocx } from '../../../src/lib/probe-documents.ts';
+import { buildEncryptedDocxContainer, buildMalformedDocx } from '../../support/fixtures.ts';
 
 interface SpecDocument {
   openapi: string;

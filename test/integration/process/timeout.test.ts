@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
-const childPath = fileURLToPath(new URL('./timeout-child.ts', import.meta.url));
+const childPath = fileURLToPath(new URL('../../support/timeout-child.ts', import.meta.url));
 
 describe('conversion deadline', () => {
   it('answers 504 E_TIMEOUT instead of being killed by the client', async () => {

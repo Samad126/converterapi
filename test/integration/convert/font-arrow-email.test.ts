@@ -22,7 +22,7 @@ import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { startTestServer, upload } from './helpers.ts';
+import { startTestServer, upload } from '../../support/helpers.ts';
 
 const run = promisify(execFile);
 
@@ -66,7 +66,7 @@ test('font/arrow/email fourth-wave formats', async (t) => {
       return;
     }
 
-    const ttfBytes = await fsp.readFile(join(import.meta.dirname, '..', 'assets', 'fonts', 'DancingScript.ttf'));
+    const ttfBytes = await fsp.readFile(join(import.meta.dirname, '..', '..', '..', 'assets', 'fonts', 'DancingScript.ttf'));
 
     const otfRes = await upload(server.baseUrl, 't.ttf', ttfBytes, { target: 'otf' });
     assert.equal(otfRes.status, 200, otfRes.body.toString('utf8').slice(0, 300));

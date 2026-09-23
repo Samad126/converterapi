@@ -22,9 +22,9 @@ import { join } from 'node:path';
 
 process.env.TEMP_ROOT = await fsp.mkdtemp(join(tmpdir(), 'converter-archive-unit-'));
 
-const { validateEntries } = await import('../src/engines/archive.engine.ts');
-const { AppError } = await import('../src/errors.ts');
-const { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES } = await import('../src/config.ts');
+const { validateEntries } = await import('../../src/engines/archive.engine.ts');
+const { AppError } = await import('../../src/errors.ts');
+const { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES } = await import('../../src/config.ts');
 
 function file(path: string, size = 10, attributes = ' -rw-r--r--'): {
   path: string;

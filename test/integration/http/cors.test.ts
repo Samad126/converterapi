@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 
-import { startTestServer } from './helpers.ts';
+import { startTestServer } from '../../support/helpers.ts';
 
 const ORIGIN = 'https://converter.alakbaroff.com';
 const OTHER_ORIGIN = 'https://not-our-frontend.example';

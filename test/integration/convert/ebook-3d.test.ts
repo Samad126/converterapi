@@ -22,7 +22,7 @@ import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { startTestServer, upload } from './helpers.ts';
+import { startTestServer, upload } from '../../support/helpers.ts';
 
 const run = promisify(execFile);
 

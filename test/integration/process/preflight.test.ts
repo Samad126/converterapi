@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const entrypoint = fileURLToPath(new URL('../src/server.ts', import.meta.url));
+const entrypoint = fileURLToPath(new URL('../../../src/server.ts', import.meta.url));
 
 interface Boot {
   code: number;
