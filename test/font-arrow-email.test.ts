@@ -43,7 +43,7 @@ test('font/arrow/email fourth-wave formats', async (t) => {
 
   // --- fonts: ttf/otf/woff/woff2 via fontTools ----------------------------
   await t.test('ttf -> otf -> woff -> woff2 -> ttf round trip', async (t2) => {
-    // `runProcess` (soffice.service.ts) deliberately overrides `HOME` to the
+    // `runProcess` (soffice.engine.ts) deliberately overrides `HOME` to the
     // request's own workspace for every subprocess it spawns, so a `pip
     // install --user` fontTools (findable from an ordinary shell, but only
     // via `$HOME/.local`) silently is NOT findable through the real

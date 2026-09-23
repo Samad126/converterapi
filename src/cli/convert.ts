@@ -1,6 +1,6 @@
 /**
  * `converter convert <target> <file...>` - the CLI twin of `POST
- * /convert/{target}`, driving `conversion.service.ts` directly instead of
+ * /convert/{target}`, driving `conversion.pipeline.ts` directly instead of
  * through Express/multer.
  *
  * Same workspace shape the HTTP controller builds (`createWorkspace()`, the
@@ -13,7 +13,7 @@ import fsp from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { isAllowedExtension, isTargetId, resolveConversion, targetsFor, type TargetId } from '../formats.ts';
-import { convert } from '../services/conversion.service.ts';
+import { convert } from '../pipelines/conversion.pipeline.ts';
 import { createWorkspace, inputFileNameFor, removeWorkspace } from '../services/workspace.service.ts';
 import { extensionOf, fail, flagString, parseArgs, readInput, reportError, withExtension, writeResult } from './lib.ts';
 

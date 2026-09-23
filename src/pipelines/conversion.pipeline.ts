@@ -59,23 +59,23 @@ import { extractLayers, MANIFEST_FILENAME, manifestJson } from '../lib/psd-layer
 import { readZipEntry } from '../lib/unzip.ts';
 import { buildXlsx, sheetNameFor, WorkbookLimitError, type XlsxSheet } from '../lib/xlsx.ts';
 import { zipDeflated } from '../lib/zip.ts';
-import { collectTreeFiles, createArchive, decompressZstd, extractArchiveTree } from './archive.service.ts';
-import { parseArrowSource, serializeArrowTarget } from './arrow.service.ts';
-import { runAssimpExport } from './assimp.service.ts';
-import { parseDataSource, parseSqliteSource, serializeDataTarget, serializeSqliteTarget } from './data.service.ts';
-import { runEbookConvert } from './ebook.service.ts';
-import { renderEmailAsHtml, renderEmailAsText } from './email.service.ts';
-import { runFfmpeg } from './ffmpeg.service.ts';
-import { runFontConvert } from './font.service.ts';
-import { runHeifDecode, runHeifEncode } from './heif.service.ts';
-import { PANDOC_WRITERS, runPandoc } from './pandoc.service.ts';
+import { collectTreeFiles, createArchive, decompressZstd, extractArchiveTree } from '../engines/archive.engine.ts';
+import { parseArrowSource, serializeArrowTarget } from '../services/arrow.service.ts';
+import { runAssimpExport } from '../engines/assimp.engine.ts';
+import { parseDataSource, parseSqliteSource, serializeDataTarget, serializeSqliteTarget } from '../services/data.service.ts';
+import { runEbookConvert } from '../engines/ebook.engine.ts';
+import { renderEmailAsHtml, renderEmailAsText } from '../services/email.service.ts';
+import { runFfmpeg } from '../engines/ffmpeg.engine.ts';
+import { runFontConvert } from '../engines/font.engine.ts';
+import { runHeifDecode, runHeifEncode } from '../engines/heif.engine.ts';
+import { PANDOC_WRITERS, runPandoc } from '../engines/pandoc.engine.ts';
 import {
   PDF_ENGINE_NO_TABLES_EXIT_CODE,
   runPdfEngine,
   type PdfEngineOperation,
-} from './pdf-engine.service.ts';
-import { rasterizePdf, runSoffice, type ProcessOutcome } from './soffice.service.ts';
-import { OUTPUT_DIRNAME, inputFileNameFor, PROFILE_DIRNAME } from './workspace.service.ts';
+} from '../engines/pdf-engine.engine.ts';
+import { rasterizePdf, runSoffice, type ProcessOutcome } from '../engines/soffice.engine.ts';
+import { OUTPUT_DIRNAME, inputFileNameFor, PROFILE_DIRNAME } from '../services/workspace.service.ts';
 
 /** The images subdirectory, kept apart so collection is "everything in here". */
 const RASTER_DIRNAME = 'raster';
@@ -770,7 +770,7 @@ async function runPandocPipeline(run: {
 
 /**
  * List, validate and unpack the source archive, then repack the tree into
- * the target format. See `archive.service.ts`'s own header comment for the
+ * the target format. See `archive.engine.ts`'s own header comment for the
  * security reasoning - this is the one pipeline here that writes untrusted
  * archive contents to disk before the response is built.
  *
@@ -897,7 +897,7 @@ async function runFfmpegPipeline(run: {
 
 // ---------------------------------------------------------------------------
 // engine: a 3D-model source asking for another 3D format, answered by
-// assimp - see assimp.service.ts
+// assimp - see assimp.engine.ts
 // ---------------------------------------------------------------------------
 
 /**
@@ -905,7 +905,7 @@ async function runFfmpegPipeline(run: {
  * Shaped exactly like `runFfmpegPipeline` above - one process, one output
  * file expected in `outDir` (a `.obj` target's incidental companion `.mtl`
  * simply does not match `target.extension` and is left unread, same as any
- * other engine's extra output file - see `assimp.service.ts`'s own header
+ * other engine's extra output file - see `assimp.engine.ts`'s own header
  * comment).
  */
 async function runAssimpPipeline(run: {
@@ -940,7 +940,7 @@ async function runAssimpPipeline(run: {
 
 // ---------------------------------------------------------------------------
 // engine: an ebook source asking for another ebook format, answered by
-// ebook-convert (Calibre) - see ebook.service.ts
+// ebook-convert (Calibre) - see ebook.engine.ts
 // ---------------------------------------------------------------------------
 
 /**
@@ -983,7 +983,7 @@ async function runEbookPipeline(run: {
 
 // ---------------------------------------------------------------------------
 // engine: a font source asking for another font format, answered by
-// font_engine.py (fontTools) - see font.service.ts
+// font_engine.py (fontTools) - see font.engine.ts
 // ---------------------------------------------------------------------------
 
 async function runFontPipeline(run: {
@@ -1036,7 +1036,7 @@ async function runEmailPipeline(run: {
 }
 
 // ---------------------------------------------------------------------------
-// engine: `.heic`/`.heif` in either direction - see `heif.service.ts`
+// engine: `.heic`/`.heif` in either direction - see `heif.engine.ts`
 // ---------------------------------------------------------------------------
 
 /**
@@ -1053,7 +1053,7 @@ const HEIF_CONVERT_DIRECT_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.tif',
  * `.heic`/`.heif` (see `resolveConversion`'s own `heif`-before-`transcode`
  * branch). Both directions land here because both need the same two tools,
  * just in whichever order the pair actually calls for - see this file's own
- * `heif.service.ts` header comment for why neither `ffmpeg` nor a single
+ * `heif.engine.ts` header comment for why neither `ffmpeg` nor a single
  * subprocess can do this alone.
  */
 async function runHeifPipeline(run: {

@@ -15,14 +15,14 @@
  * adding it to the matrix would advertise a conversion that 500s on every
  * request, which is worse than not offering it.
  *
- * Reuses `runProcess` from soffice.service.ts rather than a second copy of
- * it, for the same reason `pdf-engine.service.ts` does: the failure modes -
+ * Reuses `runProcess` from soffice.engine.ts rather than a second copy of
+ * it, for the same reason `pdf-engine.engine.ts` does: the failure modes -
  * a wedged process, a client that left, a deadline shared with the rest of
  * the pipeline - are identical, and two engines disagreeing about how a
  * subprocess is killed would be a bug waiting to happen.
  */
 import { PANDOC_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 /**
  * The pandoc writer name for each target this engine reaches.

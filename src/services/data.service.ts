@@ -22,7 +22,7 @@
  * uses, because there is no other honest way to do it. A value that is not
  * shaped like a table fails with a message that says so, exactly as
  * `tables` fails honestly on a PDF with no ruled table rather than
- * inventing one - see `conversion.service.ts`'s `extractTablesToWorkbook`.
+ * inventing one - see `conversion.pipeline.ts`'s `extractTablesToWorkbook`.
  * TOML and a `.sqlite` table need "the value is an OBJECT" (TOML has no
  * concept of a bare top-level array or scalar - verified by hand: `smol-toml`
  * throws "stringify can only be called with an object" for either) or "the
@@ -45,7 +45,7 @@
  * not a dependency - verified by hand against the exact `node:22-bookworm-slim`
  * image this service's own Dockerfile builds from) rather than a text
  * parser/serializer, and its own functions below take/return a `Buffer`
- * instead of a `string` - see `runDataPipeline` in `conversion.service.ts`
+ * instead of a `string` - see `runDataPipeline` in `conversion.pipeline.ts`
  * for the one branch that reads/writes bytes instead of UTF-8 text because
  * of it. Reading takes the FIRST user table in the file (`sqlite_master`
  * minus SQLite's own internal `sqlite_%` tables) and every one of its rows,

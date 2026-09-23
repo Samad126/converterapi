@@ -106,7 +106,7 @@ export const SOFFICE_BIN = process.env.SOFFICE_BIN ?? 'soffice';
  * `.muse`/`.ipynb`) - a second, non-LibreOffice converter for the same
  * reason `pdf_engine.py` is: none of these formats is something soffice
  * opens, so there is no `--convert-to` for any of them. See
- * `services/pandoc.service.ts`.
+ * `engines/pandoc.engine.ts`.
  */
 export const PANDOC_BIN = process.env.PANDOC_BIN ?? 'pandoc';
 
@@ -116,7 +116,7 @@ export const PANDOC_BIN = process.env.PANDOC_BIN ?? 'pandoc';
  * engine, running `ffmpeg` as a subprocess. Unlike `soffice`, this is a flat
  * format-to-format tool with no document family to key a filter on, which
  * is why it gets its own `mode: 'transcode'` rather than reusing `'direct'`.
- * See `services/ffmpeg.service.ts`.
+ * See `engines/ffmpeg.engine.ts`.
  */
 export const FFMPEG_BIN = process.env.FFMPEG_BIN ?? 'ffmpeg';
 
@@ -125,7 +125,7 @@ export const FFMPEG_BIN = process.env.FFMPEG_BIN ?? 'ffmpeg';
  * `libheif`'s own `heif-convert`/`heif-enc` CLIs (Debian package:
  * `libheif-examples`) as subprocesses, exactly like `ffmpeg` above but for
  * the one pair this build's `ffmpeg` cannot reach at all (no HEIF demuxer or
- * encoder in it - verified by hand). See `services/heif.service.ts`.
+ * encoder in it - verified by hand). See `engines/heif.engine.ts`.
  */
 export const HEIF_CONVERT_BIN = process.env.HEIF_CONVERT_BIN ?? 'heif-convert';
 export const HEIF_ENC_BIN = process.env.HEIF_ENC_BIN ?? 'heif-enc';
@@ -135,21 +135,21 @@ export const HEIF_ENC_BIN = process.env.HEIF_ENC_BIN ?? 'heif-enc';
  * Zstandard codec in this build at all (verified by hand: `7z a -tzstd`
  * fails with "Unsupported archive type", and `7z l` on a real `.zst` file
  * fails with "Unsupported archive type" too, unlike gzip/bzip2/xz, which it
- * reads and writes natively). See `archive.service.ts`.
+ * reads and writes natively). See `archive.engine.ts`.
  */
 export const ZSTD_BIN = process.env.ZSTD_BIN ?? 'zstd';
 
 /**
  * The 3D-model engine (`.obj`/`.stl`/`.ply`/`.glb`/`.3mf`/`.off`), an eighth
  * conversion engine, running `assimp` (Debian/Ubuntu package:
- * `assimp-utils`) as a subprocess. See `assimp.service.ts`.
+ * `assimp-utils`) as a subprocess. See `assimp.engine.ts`.
  */
 export const ASSIMP_BIN = process.env.ASSIMP_BIN ?? 'assimp';
 
 /**
  * The ebook engine (`.epub`/`.mobi`/`.azw3`/`.fb2`/`.lrf`/`.pdb`/`.snb`/
  * KEPUB), a ninth conversion engine, running Calibre's `ebook-convert`
- * (Debian/Ubuntu package: `calibre`) as a subprocess. See `ebook.service.ts`.
+ * (Debian/Ubuntu package: `calibre`) as a subprocess. See `ebook.engine.ts`.
  */
 export const EBOOK_CONVERT_BIN = process.env.EBOOK_CONVERT_BIN ?? 'ebook-convert';
 
@@ -159,7 +159,7 @@ export const EBOOK_CONVERT_BIN = process.env.EBOOK_CONVERT_BIN ?? 'ebook-convert
  * A separate binary because LibreOffice cannot do this job: its command-line
  * image export writes only the first page of a presentation, whatever the
  * filter options say. Rendering the PDF is the only way to get one image per
- * slide. See services/conversion.service.ts.
+ * slide. See services/conversion.pipeline.ts.
  */
 export const PDFTOPPM_BIN = process.env.PDFTOPPM_BIN ?? 'pdftoppm';
 
@@ -195,7 +195,7 @@ export const PDF_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'pdf
  * The font engine (`.ttf`/`.otf`/`.woff`/`.woff2`), an eleventh conversion
  * engine, running `scripts/font_engine.py` (`fontTools`, Debian/Ubuntu
  * package: `python3-fonttools`) the same way `pdf_engine.py` runs above.
- * See `font.service.ts`.
+ * See `font.engine.ts`.
  */
 export const FONT_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'font_engine.py');
 
@@ -215,7 +215,7 @@ export const ARROW_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'a
  * `pdf-lib` (everything else in the page-operations family) does not
  * implement PDF encryption at all - by its own README, that is out of scope
  * for it. qpdf is a small, single-purpose CLI built for exactly this, with no
- * further dependencies of its own. See qpdf.service.ts.
+ * further dependencies of its own. See qpdf.engine.ts.
  */
 export const QPDF_BIN = process.env.QPDF_BIN ?? 'qpdf';
 
@@ -345,7 +345,7 @@ export const MAX_LAYER_OUTPUT_BYTES = intFromEnv('MAX_LAYER_OUTPUT_BYTES', 48 * 
  * `.tar.xz`/`.gz`/`.bz2`/`.xz`/`.7z`/`.iso` sources, `zip`/`tar`/`tar.gz`/
  * `tar.bz2`/`7z` targets) - a fourth conversion engine, running `7z` as a
  * subprocess exactly as `soffice`/`pandoc`/`pdf_engine.py` are. See
- * `archive.service.ts`.
+ * `archive.engine.ts`.
  */
 export const SEVENZIP_BIN = process.env.SEVENZIP_BIN ?? '7z';
 
@@ -353,7 +353,7 @@ export const SEVENZIP_BIN = process.env.SEVENZIP_BIN ?? '7z';
  * Ceiling on how many entries one archive may unpack into.
  *
  * The direct analogue of MAX_PSD_LAYERS/MAX_TABLES: unpacking is genuinely new
- * ground for this service (see `archive.service.ts`'s own header comment for
+ * ground for this service (see `archive.engine.ts`'s own header comment for
  * why that is a hazard on its own), and a reader that unpacks one file per
  * archive entry - which is what a conversion has to do - pays a cost per
  * entry before it has produced anything. An archive of a hundred thousand

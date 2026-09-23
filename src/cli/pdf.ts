@@ -1,6 +1,6 @@
 /**
  * `converter pdf <operation> ...` - the CLI twin of the `/pdf/*` endpoints in
- * `pages.controller.ts`, calling `pdf-pages.service.ts`/`qpdf.service.ts`
+ * `pages.controller.ts`, calling `pdf-pages.service.ts`/`qpdf.engine.ts`
  * directly. Covers the page-manipulation operations that take simple
  * flags; the JSON-element operations (`sign`, `edit`, `redact`, `fill-form`,
  * `compare`) are not exposed here - see the README.
@@ -29,8 +29,8 @@ import {
   repairWithQpdf,
   unlockWithQpdf,
   type CompressLevel,
-} from '../services/qpdf.service.ts';
-import type { ProcessOutcome } from '../services/soffice.service.ts';
+} from '../engines/qpdf.engine.ts';
+import type { ProcessOutcome } from '../engines/soffice.engine.ts';
 import { createWorkspace, removeWorkspace } from '../services/workspace.service.ts';
 import { extensionOf, fail, flagString, parseArgs, readInput, reportError, usageFail, withExtension, writeResult } from './lib.ts';
 

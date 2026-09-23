@@ -9,12 +9,12 @@
  * `docx`/`pptx`/`xlsx` targets from a PDF needed `pdf_engine.py` rather than
  * LibreOffice: the right tool for THIS job is `qpdf`, a small, dependency-free
  * CLI built for exactly this, and reusing `runProcess` from
- * soffice.service.ts keeps its failure handling (a wedged process, a client
+ * soffice.engine.ts keeps its failure handling (a wedged process, a client
  * that left, a shared deadline) identical to every other subprocess this
  * service runs.
  */
 import { QPDF_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export interface QpdfRunOptions {
   inputPath: string;

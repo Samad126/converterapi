@@ -7,7 +7,7 @@
  *
  * Hand-rolled rather than a dependency, in keeping with this codebase's own
  * standard for a format small enough to describe correctly in a few dozen
- * lines (see `zip.ts`'s and `archive.service.ts`'s own comments on the same
+ * lines (see `zip.ts`'s and `archive.engine.ts`'s own comments on the same
  * point) - RFC 4180 quoting is exactly that size, and getting it right by
  * hand once here is cheaper than auditing a third-party parser's behaviour
  * on the same edge cases.

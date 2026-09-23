@@ -1,8 +1,8 @@
 /**
  * Shared helpers for the `converter` CLI.
  *
- * The CLI calls the same services the HTTP API calls (conversion.service.ts,
- * pdf-pages.service.ts, qpdf.service.ts, ffmpeg.service.ts) directly, on the
+ * The CLI calls the same services the HTTP API calls (conversion.pipeline.ts,
+ * pdf-pages.service.ts, qpdf.engine.ts, ffmpeg.engine.ts) directly, on the
  * user's own machine, for the user's own files. There is deliberately no
  * rate limiter, queue or upload-size ceiling here: those exist in the HTTP
  * server to protect a shared host from untrusted uploads over the network,

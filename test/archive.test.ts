@@ -1,6 +1,6 @@
 /**
  * Unit tests for `validateEntries` - the pre-extraction safety checks
- * `archive.service.ts` runs against `7z l -slt`'s own listing before any
+ * `archive.engine.ts` runs against `7z l -slt`'s own listing before any
  * byte is written to disk. Tested directly with hand-built entry lists
  * (the same shape `tables.test.ts` tests `readZipEntry`'s bomb defence
  * with) rather than real multi-hundred-megabyte archives, because the
@@ -22,7 +22,7 @@ import { join } from 'node:path';
 
 process.env.TEMP_ROOT = await fsp.mkdtemp(join(tmpdir(), 'converter-archive-unit-'));
 
-const { validateEntries } = await import('../src/services/archive.service.ts');
+const { validateEntries } = await import('../src/engines/archive.engine.ts');
 const { AppError } = await import('../src/errors.ts');
 const { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES } = await import('../src/config.ts');
 

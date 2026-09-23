@@ -24,7 +24,7 @@
  * one step earlier here.
  */
 import { HEIF_CONVERT_BIN, HEIF_ENC_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export interface HeifRun {
   inputPath: string;

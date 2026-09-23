@@ -475,7 +475,7 @@ export async function buildIsoFixture(files: Record<string, string>): Promise<Bu
  * A password-protected `.zip`, built with `7z`.
  *
  * For the "an encrypted archive is refused, not silently skipped" test -
- * `archive.service.ts`'s own `validateEntries` refuses the whole conversion
+ * `archive.engine.ts`'s own `validateEntries` refuses the whole conversion
  * the moment `7z l -slt` reports `Encrypted = +` on any entry.
  */
 export async function buildEncryptedZipFixture(password: string): Promise<Buffer> {

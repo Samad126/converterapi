@@ -57,7 +57,7 @@ interface RunProcessOptions {
   /** Extra environment on top of the safe baseline. */
   env?: Record<string, string>;
   /**
-   * Keep stdout rather than draining and discarding it - `archive.service.ts`
+   * Keep stdout rather than draining and discarding it - `archive.engine.ts`
    * needs `7z l -slt`'s output. Bounded the same way stderr already is, for
    * the same reason: a pathological archive can make `7z` extremely chatty.
    */
@@ -73,7 +73,7 @@ interface RunProcessOptions {
  * specific HTTP error, not an exception to be caught somewhere far away.
  */
 /**
- * Exported for `pdf-engine.service.ts`: the PDF-sourced `word`/`slides`/`sheet`
+ * Exported for `pdf-engine.engine.ts`: the PDF-sourced `word`/`slides`/`sheet`
  * targets spawn a Python script rather than soffice, but they fail the same
  * ways - a wedged process, a client that left, a deadline shared with the rest
  * of the pipeline - so they reuse this runner rather than a second copy of it.

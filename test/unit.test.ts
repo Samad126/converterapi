@@ -34,7 +34,7 @@ const {
   inputFileNameFor,
 } = await import('../src/services/workspace.service.ts');
 const { zipStored, safeEntryName } = await import('../src/lib/zip.ts');
-const { EXTRACT_TARGET_IDS } = await import('../src/services/conversion.service.ts');
+const { EXTRACT_TARGET_IDS } = await import('../src/pipelines/conversion.pipeline.ts');
 const { decodeUploadName, downloadNameFor, contentDispositionFor } = await import(
   '../src/lib/download-name.ts'
 );
@@ -128,7 +128,7 @@ describe('conversion matrix', () => {
         if (TARGETS[target].mode === 'heif' || extension === '.heic' || extension === '.heif') {
           // `libheif`'s own tools, not LibreOffice, read/write every
           // `.heic`/`.heif` pair - no filter, no family - see
-          // `heif.service.ts`. Checked before `mode === 'transcode'` below:
+          // `heif.engine.ts`. Checked before `mode === 'transcode'` below:
           // a `.heic`/`.heif` SOURCE reaching an ordinary transcode target
           // (`bmp`/`gif`/etc) still needs this engine, not bare `ffmpeg`,
           // which cannot read it at all - see `resolveConversion`'s own
@@ -139,7 +139,7 @@ describe('conversion matrix', () => {
         }
 
         if (TARGETS[target].mode === '3d') {
-          // `assimp`, family-less like `heif` above - see `assimp.service.ts`.
+          // `assimp`, family-less like `heif` above - see `assimp.engine.ts`.
           assert.equal(resolved.engine, 'assimp', `${extension} -> ${target} used the wrong engine`);
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
@@ -147,7 +147,7 @@ describe('conversion matrix', () => {
 
         if (TARGETS[target].mode === 'ebook') {
           // `ebook-convert`, family-less like `heif` above - see
-          // `ebook.service.ts`.
+          // `ebook.engine.ts`.
           assert.equal(resolved.engine, 'ebook', `${extension} -> ${target} used the wrong engine`);
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
@@ -155,7 +155,7 @@ describe('conversion matrix', () => {
 
         if (TARGETS[target].mode === 'font') {
           // `font_engine.py`, family-less like `heif` above - see
-          // `font.service.ts`.
+          // `font.engine.ts`.
           assert.equal(resolved.engine, 'font', `${extension} -> ${target} used the wrong engine`);
           assert.equal(resolved.convertTo, '', `${extension} -> ${target} invented a filter`);
           continue;
@@ -291,7 +291,7 @@ describe('conversion matrix', () => {
       if (TARGETS[id].mode !== 'extract') continue;
       assert.ok(
         EXTRACT_TARGET_IDS.includes(id),
-        `"${id}" is an extract target with no engine in conversion.service.ts`,
+        `"${id}" is an extract target with no engine in conversion.pipeline.ts`,
       );
     }
   });
@@ -300,7 +300,7 @@ describe('conversion matrix', () => {
     // A raster target is split into one image per page, which only means
     // anything for a document with pages to show - a presentation, or a PDF,
     // which is pages already and skips the render-to-PDF half of the
-    // pipeline entirely (see conversion.service.ts's `sourceIsPdf`).
+    // pipeline entirely (see conversion.pipeline.ts's `sourceIsPdf`).
     for (const id of TARGET_IDS) {
       if (TARGETS[id].mode !== 'raster') continue;
       for (const extension of ALLOWED_EXTENSIONS) {

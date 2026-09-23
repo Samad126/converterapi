@@ -14,7 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { createApp } from './app.ts';
 import { HOST, PORT, SKIP_WARMUP, SWEEP_INTERVAL_MS } from './config.ts';
 import { PreflightError } from './errors.ts';
-import { sweepMediaJobs, sweepOrphanedMediaWorkspaces } from './services/media-jobs.service.ts';
+import { sweepMediaJobs, sweepOrphanedMediaWorkspaces } from './jobs/media-jobs.service.ts';
 import { preflight, warmUp } from './services/preflight.service.ts';
 import { sweepStaleWorkspaces } from './services/workspace.service.ts';
 

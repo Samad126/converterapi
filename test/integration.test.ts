@@ -110,7 +110,10 @@ describe('GET /health', () => {
     const response = await fetch(`${server.baseUrl}/health`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type') ?? '', /application\/json/);
-    assert.deepEqual(await response.json(), { status: 'ok' });
+    const body = await response.json();
+    assert.equal(body.status, 'ok');
+    assert.deepEqual(Object.keys(body.queue).sort(), ['maxConcurrent', 'maxQueued', 'queued', 'running'].sort());
+    assert.deepEqual(Object.keys(body.mediaQueue).sort(), ['maxConcurrent', 'maxQueued', 'queued', 'running'].sort());
   });
 });
 
@@ -953,7 +956,7 @@ describe('POST /convert/<target> - image transcode engine (ffmpeg)', () => {
 
   it('reads a real GIF source (decoded as a tiny video) and still produces one still image', async () => {
     // The whole reason `-frames:v 1 -update 1` is mandatory rather than
-    // cosmetic - see ffmpeg.service.ts's own header comment: without it, a
+    // cosmetic - see ffmpeg.engine.ts's own header comment: without it, a
     // GIF source (which ffmpeg decodes as a one-frame video, not a still
     // image) trips "Cannot write more than one file with the same name" and
     // the conversion fails outright, verified by hand before this flag was

@@ -18,12 +18,12 @@
  * A `.obj` TARGET writes a companion `.mtl` file alongside it (verified by
  * hand - even from a source with no materials at all), which this function
  * does nothing special for: `collectProducedFiles(outDir, target.extension)`
- * in `conversion.service.ts` already filters by extension, so the `.mtl`
+ * in `conversion.pipeline.ts` already filters by extension, so the `.mtl`
  * simply never matches and is left behind unread, the same as it would be
  * for any other engine's incidental output file.
  */
 import { ASSIMP_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export interface AssimpRun {
   inputPath: string;

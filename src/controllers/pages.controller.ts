@@ -54,14 +54,14 @@ import {
   type SignFontStyle,
   type SignImage,
 } from '../services/pdf-pages.service.ts';
-import { runPdfCompare, runPdfEngine, runPdfRedact } from '../services/pdf-engine.service.ts';
+import { runPdfCompare, runPdfEngine, runPdfRedact } from '../engines/pdf-engine.engine.ts';
 import {
   compressWithQpdf,
   protectWithQpdf,
   repairWithQpdf,
   unlockWithQpdf,
   type CompressLevel,
-} from '../services/qpdf.service.ts';
+} from '../engines/qpdf.engine.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest } from '../middleware/request-context.ts';
 
@@ -834,7 +834,7 @@ function parsePageNumberPosition(raw: unknown): PageNumberPosition {
 
 const COMPRESS_LEVELS: readonly CompressLevel[] = ['low', 'medium', 'high'];
 
-/** `level` for `/pdf/compress`, defaulting to `medium` - see `qpdf.service.ts` for what each one does. */
+/** `level` for `/pdf/compress`, defaulting to `medium` - see `qpdf.engine.ts` for what each one does. */
 function parseCompressLevel(raw: unknown): CompressLevel {
   if (raw === undefined || raw === null || raw === '') return 'medium';
   if (typeof raw !== 'string' || !COMPRESS_LEVELS.includes(raw as CompressLevel)) {
@@ -1278,7 +1278,7 @@ function parseRedactArea(item: unknown, index: number, pageCount: number): Redac
  * through the Python engine rather than qpdf or pdf-lib.
  */
 async function readPdfEngineOutput(
-  outcome: import('../services/soffice.service.ts').ProcessOutcome,
+  outcome: import('../engines/soffice.engine.ts').ProcessOutcome,
   outputPath: string,
 ): Promise<Buffer> {
   if (outcome.kind === 'timeout') throw Errors.timeout();
@@ -1304,7 +1304,7 @@ async function readPdfEngineOutput(
  * the JSON it promised".
  */
 async function readPdfCompareOutput(
-  outcome: import('../services/soffice.service.ts').ProcessOutcome,
+  outcome: import('../engines/soffice.engine.ts').ProcessOutcome,
   outputPath: string,
 ): Promise<unknown> {
   if (outcome.kind === 'timeout') throw Errors.timeout();
@@ -1325,12 +1325,12 @@ async function readPdfCompareOutput(
  *
  * qpdf writes nothing and exits non-zero on failure, so success is "exit 0
  * (or exit 3, for `/pdf/repair` - see below) and a file appeared" - the same
- * "exit code alone carries no information" caution `soffice.service.ts`
+ * "exit code alone carries no information" caution `soffice.engine.ts`
  * documents for LibreOffice, checked the same way: look at what actually
  * landed on disk.
  */
 async function readQpdfOutput(
-  outcome: import('../services/soffice.service.ts').ProcessOutcome,
+  outcome: import('../engines/soffice.engine.ts').ProcessOutcome,
   outputPath: string,
   options: { wrongPasswordAware?: boolean; warningsAreSuccess?: boolean } = {},
 ): Promise<Buffer> {

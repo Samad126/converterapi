@@ -19,7 +19,7 @@ import {
   resolveMediaConversion,
   type MediaTargetId,
 } from '../formats-media.ts';
-import { runFfmpegMedia } from '../services/ffmpeg.service.ts';
+import { runFfmpegMedia } from '../engines/ffmpeg.engine.ts';
 import { Errors } from '../errors.ts';
 import { createWorkspace, removeWorkspace } from '../services/workspace.service.ts';
 import { extensionOf, fail, flagString, parseArgs, readInput, reportError, withExtension, writeResult } from './lib.ts';

@@ -54,8 +54,8 @@ import {
   writerProbe,
 } from '../lib/probe-documents.ts';
 import { readZipEntry } from '../lib/unzip.ts';
-import { convert } from './conversion.service.ts';
-import { protectWithQpdf, unlockWithQpdf } from './qpdf.service.ts';
+import { convert } from '../pipelines/conversion.pipeline.ts';
+import { protectWithQpdf, unlockWithQpdf } from '../engines/qpdf.engine.ts';
 import { createWorkspace, inputFileNameFor, removeWorkspace } from './workspace.service.ts';
 
 export interface PreflightReport {
@@ -405,7 +405,7 @@ function assertFfmpegPresent(): string {
  * `heif-convert`/`heif-enc` (Debian/Ubuntu package: `libheif-examples`),
  * needed for `.heic`/`.heif` in EITHER direction - the one pair `ffmpeg`
  * cannot reach at all in this build (verified by hand: no HEIF demuxer or
- * encoder). See `heif.service.ts` and `formats.ts`'s own `heif` mode bullet.
+ * encoder). See `heif.engine.ts` and `formats.ts`'s own `heif` mode bullet.
  *
  * Checked the same way `ffmpeg`/pandoc/7z are: can each tool even be run,
  * before any request depends on it. Two binaries, one check, because a
@@ -448,7 +448,7 @@ function assertHeifPresent(): string {
  * `zstd`, needed for `.zst`/`tar.zst` in either direction - `7z` has no
  * Zstandard codec in this build at all (verified by hand: `7z l`/`7z a
  * -tzstd` both fail with "Unsupported archive type"), unlike gzip/bzip2/xz,
- * which it reads and writes natively. See `archive.service.ts`.
+ * which it reads and writes natively. See `archive.engine.ts`.
  */
 function assertZstdPresent(): string {
   const result = spawnSync(ZSTD_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
@@ -479,7 +479,7 @@ function assertZstdPresent(): string {
 /**
  * `assimp` (Debian/Ubuntu package: `assimp-utils`), the 3D-model engine -
  * `.obj`/`.stl`/`.ply`/`.glb`/`.3mf`/`.off` in, any of `obj`/`stl`/`ply`/
- * `glb`/`3mf` out. See `assimp.service.ts`.
+ * `glb`/`3mf` out. See `assimp.engine.ts`.
  */
 function assertAssimpPresent(): string {
   const result = spawnSync(ASSIMP_BIN, ['version'], { encoding: 'utf8', timeout: 10_000 });
@@ -510,7 +510,7 @@ function assertAssimpPresent(): string {
 /**
  * Calibre's `ebook-convert` (Debian/Ubuntu package: `calibre`), the ebook
  * engine - `.epub`/`.mobi`/`.azw3`/`.fb2`/`.lrf`/`.pdb` in, any of `epub`/
- * `mobi`/`azw3`/`fb2`/`lrf`/`pdb`/`snb`/KEPUB out. See `ebook.service.ts`.
+ * `mobi`/`azw3`/`fb2`/`lrf`/`pdb`/`snb`/KEPUB out. See `ebook.engine.ts`.
  */
 function assertEbookConvertPresent(): string {
   const result = spawnSync(EBOOK_CONVERT_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
@@ -541,7 +541,7 @@ function assertEbookConvertPresent(): string {
 /**
  * `fontTools`, the font engine (`.ttf`/`.otf`/`.woff`/`.woff2`). Same shape
  * as `assertPdfEnginePresent` above - a Python module, not a standalone
- * binary, checked by actually importing it. See `font.service.ts`/
+ * binary, checked by actually importing it. See `font.engine.ts`/
  * `font_engine.py`.
  */
 function assertFontEnginePresent(): void {
@@ -778,7 +778,7 @@ const WARM_UP_CASES: readonly WarmUpCase[] = [
   // `assertSevenZipPresent` proves the binary runs, this proves listing,
   // unpacking and repacking a real archive all actually work together -
   // including the code path that writes untrusted archive contents to disk,
-  // which is new ground for this service (see archive.service.ts). `.tar ->
+  // which is new ground for this service (see archive.engine.ts). `.tar ->
   // zip` specifically exercises the `zip.ts`-backed writer, which is real
   // ZIP-signature output - unlike `tar`/`7z`, whose own signatures the
   // single-file check below does not assert on, so this is the one archive

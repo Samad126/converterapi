@@ -10,14 +10,14 @@
  * filter to speak of, on any source): they shell out to `scripts/
  * pdf_engine.py`, a second and unrelated conversion engine.
  *
- * Reuses `runProcess` from soffice.service.ts rather than a second copy of it:
+ * Reuses `runProcess` from soffice.engine.ts rather than a second copy of it:
  * the failure modes are identical (a wedged process, a client that left, a
  * deadline shared with the rest of the pipeline), and the two engines
  * disagreeing about how a subprocess is killed would be a bug waiting to
  * happen.
  */
 import { PDF_ENGINE_SCRIPT, PYTHON_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export type PdfEngineOperation = 'docx' | 'pptx' | 'xlsx' | 'markdown' | 'ocr';
 

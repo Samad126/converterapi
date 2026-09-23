@@ -1214,6 +1214,22 @@ paths:
                 properties:
                   status:
                     type: string
+                  queue:
+                    type: object
+                    description: Admission-queue stats for `/convert/{target}`. Informational only - a saturated queue does not change this endpoint's 200 status.
+                    properties:
+                      running: { type: integer }
+                      queued: { type: integer }
+                      maxConcurrent: { type: integer }
+                      maxQueued: { type: integer }
+                  mediaQueue:
+                    type: object
+                    description: The same stats for `/media/{target}`'s own, separate queue.
+                    properties:
+                      running: { type: integer }
+                      queued: { type: integer }
+                      maxConcurrent: { type: integer }
+                      maxQueued: { type: integer }
                     const: ok
               example:
                 status: ok

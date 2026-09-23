@@ -126,7 +126,7 @@ conversion engine cares about.
 
 `.md`, `.rst`, `.tex`, `.textile`, `.org`, `.opml`, `.muse` and `.ipynb` are
 not documents LibreOffice opens, so they never reach `soffice`. They are read
-by `pandoc` instead (see [`pandoc.service.ts`](src/services/pandoc.service.ts)),
+by `pandoc` instead (see [`pandoc.engine.ts`](src/engines/pandoc.engine.ts)),
 the same way a PDF's `docx`/`pptx`/`xlsx`/`markdown` route through the
 "second, independent conversion engine" below (`pdf_engine.py`) rather than a
 LibreOffice filter — this is a third such engine, alongside it.
@@ -157,7 +157,7 @@ already-verified, already-running LibreOffice `docx`→`pdf` filter).
 
 `.zip`, `.tar`, `.tgz`, `.tbz2`, `.txz`, `.gz`, `.bz2`, `.xz`, `.7z` and
 `.iso` convert to `zip`/`tar`/`tar.gz`/`tar.bz2`/`7z` through
-[`archive.service.ts`](src/services/archive.service.ts), which runs `7z`
+[`archive.engine.ts`](src/engines/archive.engine.ts), which runs `7z`
 (p7zip) as a subprocess - a fourth non-LibreOffice engine.
 
 This is the one place in the service that genuinely **unpacks** untrusted
@@ -237,7 +237,7 @@ cannot write a compound format directly - verified by hand) `tar.gz`/
 
 `.bmp`, `.gif`, `.tiff`, `.webp`, `.avif` and `.ico` convert to
 `bmp`/`gif`/`tiff`/`webp`/`avif`/`ico`/`png-image`/`jpg-image` through
-[`ffmpeg.service.ts`](src/services/ffmpeg.service.ts), a fifth non-LibreOffice
+[`ffmpeg.engine.ts`](src/engines/ffmpeg.engine.ts), a fifth non-LibreOffice
 engine. `.png`, `.jpg` and `.jpeg` - already sources, but previously reaching
 only `pdf` - now reach all eight of these too (minus their own format:
 `.png` does not offer `png-image`, `.jpg` does not offer `jpg-image` - see
@@ -269,7 +269,7 @@ at one frame regardless of how many the source has (so an animated GIF/WEBP
 becomes its first frame, rather than a failed conversion), and `-update 1`
 tells the muxer this is a single still image rather than a sequence at all.
 Verified by hand against a real GIF before this was added - see
-`ffmpeg.service.ts`'s own header comment.
+`ffmpeg.engine.ts`'s own header comment.
 
 **A non-zero `ffmpeg` exit is checked explicitly, unlike `soffice`'s.**
 `soffice --convert-to` always exits 0 regardless of success, so every
@@ -323,7 +323,7 @@ fails in production where it worked in development.
 This build's `ffmpeg` has no HEIF demuxer or encoder at all (verified by
 hand: `ffmpeg -demuxers`/`-decoders` list no `heif` entry), so `.heic`/
 `.heif` needed a real seventh conversion engine -
-[`heif.service.ts`](src/services/heif.service.ts), running `libheif`'s own
+[`heif.engine.ts`](src/engines/heif.engine.ts), running `libheif`'s own
 `heif-convert`/`heif-enc` CLIs (Debian/Ubuntu package: `libheif-examples`)
 as subprocesses, exactly like `ffmpeg` itself is run.
 
@@ -520,7 +520,7 @@ exact shape CSV/TSV's own reader already produces), or the reverse, so
 `data.service.ts`'s own common-JS-value model absorbs all three without ever
 knowing a subprocess was involved. `arrow.service.ts` is the thin Node-side
 wrapper that writes/reads the intermediate JSON file and shells out to the
-script; `runDataPipeline` in `conversion.service.ts` is what decides, per
+script; `runDataPipeline` in `conversion.pipeline.ts` is what decides, per
 request, whether a source/target needs that door or the ordinary text one.
 
 Verified by hand for the full round trip: CSV -> Parquet -> ORC -> Feather ->
@@ -788,7 +788,7 @@ PDF - see
 [PDF as a source](#pdf-as-a-source-and-why-some-of-its-targets-are-not-libreoffice-either).
 `--break-system-packages` installs into the system site-packages rather than
 `--user`, which matters because the service sandboxes each conversion's `HOME`
-- see `pdf-engine.service.ts` for why a `--user` install would go missing at
+- see `pdf-engine.engine.ts` for why a `--user` install would go missing at
 request time even though `pip show` finds it fine.
 
 Or just use Docker, which installs all of it:
@@ -1160,7 +1160,7 @@ its own README that PDF encryption is out of scope for it — there is no path
 in it that sets or removes a password. These two endpoints shell out to
 [`qpdf`](https://qpdf.sourceforge.io/) instead, a small, dependency-free CLI
 built for exactly this, reusing the same subprocess runner (`runProcess` in
-`soffice.service.ts`) that LibreOffice and `pdf_engine.py` use — the failure
+`soffice.engine.ts`) that LibreOffice and `pdf_engine.py` use — the failure
 modes are identical (a wedged process, a client that left, a shared
 deadline), so there is no reason to write a second copy of handling them.
 

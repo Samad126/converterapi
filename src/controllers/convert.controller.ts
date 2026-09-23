@@ -42,7 +42,7 @@ import { AppError, ClientGoneError, Errors } from '../errors.ts';
 import { contentDispositionFor, downloadNameFor } from '../lib/download-name.ts';
 import { BoundedQueue, RateLimiter } from '../lib/queue.ts';
 import { zipStored, type ZipEntry } from '../lib/zip.ts';
-import { convert, type ConversionResult } from '../services/conversion.service.ts';
+import { convert, type ConversionResult } from '../pipelines/conversion.pipeline.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest, type RequestContext } from '../middleware/request-context.ts';
 

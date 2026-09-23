@@ -265,13 +265,13 @@ export type AllowedExtension =
  */
 
 /**
- * The pandoc-readable markup/plain-text sources - see `pandoc.service.ts`.
+ * The pandoc-readable markup/plain-text sources - see `pandoc.engine.ts`.
  *
  * One list, referenced by every target pandoc reaches, so a new markup
  * source is one line here rather than a change to five different targets.
  *
  * AsciiDoc (`.adoc`) is deliberately not in this list - see the note at the
- * top of `pandoc.service.ts` for why: the pandoc build this service was
+ * top of `pandoc.engine.ts` for why: the pandoc build this service was
  * verified against has no AsciiDoc reader at all.
  */
 export const MARKUP_EXTENSIONS: readonly AllowedExtension[] = [
@@ -286,13 +286,13 @@ export const MARKUP_EXTENSIONS: readonly AllowedExtension[] = [
 ];
 
 /**
- * The archive-engine sources - see `archive.service.ts`.
+ * The archive-engine sources - see `archive.engine.ts`.
  *
  * `.tar.gz`/`.tar.bz2`/`.tar.xz` are deliberately NOT extensions of their
  * own: `extname()` (used by the upload filter - see
  * `middleware/convert-upload.ts`) only ever returns the LAST extension, so a
  * `report.tar.gz` upload is already accepted as `.gz`, which reads correctly
- * because `archive.service.ts`'s extraction is content-based, not name-based
+ * because `archive.engine.ts`'s extraction is content-based, not name-based
  * - it recurses into a compound source's inner `.tar` regardless of what the
  * outer file was called. `.tgz`/`.tbz2`/`.txz` are listed here because those
  * ARE single, whole extensions `extname()` returns intact.
@@ -316,7 +316,7 @@ export const ARCHIVE_EXTENSIONS: readonly AllowedExtension[] = [
 ];
 
 /**
- * The ffmpeg-transcode target ids - see `ffmpeg.service.ts` and the note
+ * The ffmpeg-transcode target ids - see `ffmpeg.engine.ts` and the note
  * above `AllowedExtension` on why `png`/`jpg` are not among them.
  *
  * One list, referenced by every image source, so that a new transcode
@@ -383,12 +383,12 @@ const HEIF_TARGETS: readonly TargetId[] = ['heic', 'heif'];
  * The `font`-engine target ids and source extensions - `.ttf`/`.otf`/
  * `.woff`/`.woff2`, flat like `TRANSCODE_TARGETS`/`ASSIMP_TARGETS` (every
  * source reaches every OTHER target, no per-family filter). See
- * `font.service.ts`/`font_engine.py`.
+ * `font.engine.ts`/`font_engine.py`.
  */
 const FONT_TARGETS: readonly TargetId[] = ['ttf', 'otf', 'woff', 'woff2'];
 
 /**
- * The `assimp`-engine target ids - see `assimp.service.ts`. `.off` is
+ * The `assimp`-engine target ids - see `assimp.engine.ts`. `.off` is
  * deliberately NOT among them: it is a real, verified SOURCE (`assimp
  * listext` reads it) but not a real export format at all (`assimp
  * listexport` does not list it, and asking for it fails outright) - the
@@ -398,7 +398,7 @@ const FONT_TARGETS: readonly TargetId[] = ['ttf', 'otf', 'woff', 'woff2'];
 const ASSIMP_TARGETS: readonly TargetId[] = ['obj', 'stl', 'ply', 'glb', '3mf'];
 
 /**
- * The `ebook`-engine target ids - see `ebook.service.ts`. `epub` is
+ * The `ebook`-engine target ids - see `ebook.engine.ts`. `epub` is
  * deliberately NOT among them: it is an EXISTING `mode: 'direct'` target
  * (LibreOffice's own `writer` EPUB filter already writes it for every
  * writer-family source), and this group reaches that SAME id through
@@ -412,7 +412,7 @@ const EBOOK_TARGETS: readonly TargetId[] = ['mobi', 'azw3', 'fb2', 'lrf', 'pdb',
 
 /**
  * Every source `ebook-convert` reads - `.snb` deliberately excluded, see
- * `ebook.service.ts`'s own header comment for the real bug that makes it
+ * `ebook.engine.ts`'s own header comment for the real bug that makes it
  * untrustworthy as a source in this build. `.epub` is included: it is a new
  * source this feature adds (LibreOffice/pandoc only ever WROTE `.epub`
  * before now), read by the same `ebook-convert` this whole group uses.
@@ -479,7 +479,7 @@ const DATA_EXTENSIONS: readonly AllowedExtension[] = [
  * The three `DATA_TARGETS`/`DATA_EXTENSIONS` members that are NOT pure JS -
  * `arrow.service.ts` shells out to `scripts/arrow_engine.py` (`pyarrow`) for
  * all three, the one subprocess-backed corner of an otherwise pure-JS
- * engine. `runDataPipeline` in `conversion.service.ts` checks this set
+ * engine. `runDataPipeline` in `conversion.pipeline.ts` checks this set
  * before deciding whether to call `data.service.ts`'s own synchronous
  * parse/serialize or `arrow.service.ts`'s async ones - see its own comment.
  */
@@ -501,7 +501,7 @@ export interface TargetFormat {
    *   - `raster` - the source is rendered to PDF first and the PDF is then
    *     rasterised into ONE IMAGE PER PAGE, because LibreOffice's command-line
    *     image export only ever writes the first page of a presentation. See
-   *     `rasterizePdf` in services/conversion.service.ts.
+   *     `rasterizePdf` in services/conversion.pipeline.ts.
    *   - `extract` - LibreOffice is not involved at all. Either a part is read
    *     out of the upload's own package - which is what makes a Word
    *     document's tables available as a workbook - or the upload is read
@@ -510,15 +510,15 @@ export interface TargetFormat {
    *     this mode that makes the service more than a LibreOffice front end.
    *   - `archive` - `7z` (p7zip), run as a subprocess: the source archive is
    *     listed, validated and unpacked, then the resulting file tree is
-   *     packed into the target format. See `archive.service.ts` for why this
+   *     packed into the target format. See `archive.engine.ts` for why this
    *     is NOT the same shape as `extract` - it genuinely unpacks untrusted
    *     bytes to disk, which `extract` never does. `archiveWriter` names
-   *     which writer `conversion.service.ts` calls for it.
+   *     which writer `conversion.pipeline.ts` calls for it.
    *   - `transcode` - `ffmpeg`, run as a subprocess: one image (or subtitle)
    *     format straight to another, with no document family to key a filter
    *     on - unlike `soffice`'s `direct` mode, `ffmpeg` is a flat
    *     format-to-format tool, so there is nothing for a per-family filter
-   *     table to express. See `ffmpeg.service.ts`.
+   *     table to express. See `ffmpeg.engine.ts`.
    *   - `data` - pure JS, no subprocess at all: CSV/TSV/JSON/JSONL/YAML,
    *     read into one common JS value and written back out. Flat like
    *     `transcode`, for the same reason (no document family applies), but
@@ -537,7 +537,7 @@ export interface TargetFormat {
    *     reads PNG/JPEG (verified by hand - a `.bmp` input fails with "Not a
    *     JPEG file"), so producing `heic`/`heif` from any OTHER image source
    *     first runs that source through the ordinary `ffmpeg` transcode to an
-   *     intermediate PNG. See `heif.service.ts`.
+   *     intermediate PNG. See `heif.engine.ts`.
    *
    * `mode` describes the LIBREOFFICE-OR-NOT route a target normally takes.
    * `engineFrom`, below, is orthogonal to it: `docx`/`pptx`/`xlsx` are
@@ -558,7 +558,7 @@ export interface TargetFormat {
    */
   mode: 'direct' | 'raster' | 'extract' | 'archive' | 'transcode' | 'data' | 'heif' | '3d' | 'ebook' | 'font';
   /**
-   * `mode: 'archive'` only: which writer `archive.service.ts` calls.
+   * `mode: 'archive'` only: which writer `archive.engine.ts` calls.
    * `'zip'` goes through `zip.ts`'s own `zipDeflated`, not a `7z` subprocess
    * - see `createArchive`'s own comment for why. Absent for every other mode.
    */
@@ -610,8 +610,8 @@ export interface TargetFormat {
   /**
    * Sources that reach this target through a non-LibreOffice engine instead
    * of through `filters` - today, a PDF (via `pdf_engine.py`, see
-   * `pdf-engine.service.ts`) reaching `docx`/`pptx`/`xlsx`/`markdown`, the
-   * pandoc-readable markup formats (via `pandoc.service.ts`) reaching
+   * `pdf-engine.engine.ts`) reaching `docx`/`pptx`/`xlsx`/`markdown`, the
+   * pandoc-readable markup formats (via `pandoc.engine.ts`) reaching
    * `docx`/`html`/`odt`/`rtf`/`txt`/`markdown`, and the OTHER data-engine
    * formats (via `data.service.ts`) reaching `csv` - see `DATA_TARGETS`'s
    * own comment for why `csv` needs this rather than just being `mode:
@@ -678,7 +678,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     multiple: false,
     filters: { writer: 'writer8' },
     // A markup source has no LibreOffice family, so it reaches ODT through
-    // pandoc's own `odt` writer rather than a filter - see `pandoc.service.ts`.
+    // pandoc's own `odt` writer rather than a filter - see `pandoc.engine.ts`.
     engineFrom: { pandoc: MARKUP_EXTENSIONS },
   },
   docx: {
@@ -1135,7 +1135,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     extension: '.gif',
     mediaType: 'image/gif',
     label: 'GIF',
-    // A still image, always: `ffmpeg.service.ts` passes `-frames:v 1`, so an
+    // A still image, always: `ffmpeg.engine.ts` passes `-frames:v 1`, so an
     // animated GIF *source* becomes its first frame here, same as it does
     // for every other transcode target - this is not an animation pipeline.
     mode: 'transcode',
@@ -1393,7 +1393,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/zstd',
     label: 'TAR.ZST',
     // Same `archive` route every other archive target uses - see
-    // `archive.service.ts`'s own `decompressZstd`/`createArchive` additions
+    // `archive.engine.ts`'s own `decompressZstd`/`createArchive` additions
     // for why this one alone needs the standalone `zstd` CLI rather than
     // `7z` itself (no Zstandard codec in this build).
     mode: 'archive',
@@ -1406,11 +1406,11 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     extension: '.obj',
     mediaType: 'model/obj',
     label: 'OBJ',
-    // `assimp`, family-less like `heic`/`heif` - see `assimp.service.ts`.
+    // `assimp`, family-less like `heic`/`heif` - see `assimp.engine.ts`.
     // Writes a companion `.mtl` alongside the requested `.obj` (verified by
     // hand, even from a source with no materials) - left behind, unread, the
     // same as any other engine's incidental output file; see
-    // `assimp.service.ts`'s own header comment.
+    // `assimp.engine.ts`'s own header comment.
     mode: '3d',
     multiple: false,
     filters: {},
@@ -1457,7 +1457,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'application/x-mobipocket-ebook',
     label: 'MOBI',
     // `ebook-convert`, family-less like `heic`/`heif` - see
-    // `ebook.service.ts`.
+    // `ebook.engine.ts`.
     mode: 'ebook',
     multiple: false,
     filters: {},
@@ -1503,7 +1503,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     extension: '.snb',
     mediaType: 'application/x-snb',
     label: 'SNB',
-    // Write-only in this build - see `ebook.service.ts`'s own header comment
+    // Write-only in this build - see `ebook.engine.ts`'s own header comment
     // for the real bug that makes reading it back untrustworthy (no source
     // extension `.snb` exists in `AllowedExtension` at all, the same
     // asymmetric shape `.rar` has in the other direction elsewhere in this
@@ -1515,7 +1515,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
   kepub: {
     id: 'kepub',
     // The literal double extension Calibre's KEPUB writer plugin requires
-    // on the OUTPUT path - see `ebook.service.ts`'s own header comment. Same
+    // on the OUTPUT path - see `ebook.engine.ts`'s own header comment. Same
     // shape `tar.gz`/`tar.bz2`/`tar.zst` already use for a genuinely
     // two-part extension.
     extension: '.kepub.epub',
@@ -1531,7 +1531,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
     mediaType: 'font/ttf',
     label: 'TTF',
     // `font_engine.py` (`fontTools`), family-less like `heic`/`heif` - see
-    // `font.service.ts`.
+    // `font.engine.ts`.
     mode: 'font',
     multiple: false,
     filters: {},
@@ -1942,7 +1942,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     extension: '.md',
     // No `family`: pandoc, not LibreOffice, reads every source in this
     // group - see the note on `.psd` above for why a source with no family
-    // is possible at all, and `pandoc.service.ts` for the engine itself.
+    // is possible at all, and `pandoc.engine.ts` for the engine itself.
     mediaType: 'text/markdown',
     // `markdown` is excluded (see the target's own `engineFrom` comment): a
     // `.md` file "converting" to Markdown is not a conversion to offer.
@@ -1986,7 +1986,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
   '.zip': {
     extension: '.zip',
     // No `family`: `7z`, not LibreOffice, reads every source in this group -
-    // see `archive.service.ts`. `zip` itself is excluded from `targets`
+    // see `archive.engine.ts`. `zip` itself is excluded from `targets`
     // (caught by the matrix's own self-target check, since this extension's
     // stripped form is exactly the `zip` id).
     mediaType: 'application/zip',
@@ -2016,7 +2016,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     extension: '.gz',
     mediaType: 'application/gzip',
     // A bare `.gz` (one compressed file, not a tarball) offers the same
-    // targets as every other archive source: `archive.service.ts`'s
+    // targets as every other archive source: `archive.engine.ts`'s
     // extraction is generic over "how many files came out", not specific to
     // tar's own container shape.
     targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', 'tar.zst', '7z', 'cbz'],
@@ -2036,9 +2036,9 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // `zstd` undoes the outer compression layer, not `7z` - `7z` has no
     // Zstandard codec in this build at all (verified by hand: `7z l` on a
     // real `.zst` file fails with "Unsupported archive type"). See
-    // `conversion.service.ts`'s `runArchivePipeline` for the pre-decompress
+    // `conversion.pipeline.ts`'s `runArchivePipeline` for the pre-decompress
     // step this needs that every other archive source here does not, and
-    // `archive.service.ts`'s `decompressZstd`.
+    // `archive.engine.ts`'s `decompressZstd`.
     mediaType: 'application/zstd',
     targets: ['zip', 'tar', 'tar.gz', 'tar.bz2', '7z', 'cbz'],
   },
@@ -2063,7 +2063,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
   '.bmp': {
     extension: '.bmp',
     // No `family`: `ffmpeg`, not LibreOffice, reads every source in this
-    // group - see `ffmpeg.service.ts`. Each one's own target list is every
+    // group - see `ffmpeg.engine.ts`. Each one's own target list is every
     // OTHER transcode target, filtered explicitly rather than left to
     // `validateMatrix`'s self-target check to catch: the check exists as a
     // backstop for a mistake, not as the intended way to read what a format
@@ -2270,7 +2270,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
   '.heic': {
     extension: '.heic',
     // No `family`: `libheif`'s own tools, not LibreOffice, read this source
-    // - see `heif.service.ts` and `TargetFormat.mode`'s own `heif` bullet.
+    // - see `heif.engine.ts` and `TargetFormat.mode`'s own `heif` bullet.
     mediaType: 'image/heic',
     // `heif` itself is excluded (self-target check would catch `heic`
     // anyway, but `heif` needs excluding explicitly - the two are different
@@ -2286,7 +2286,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
   '.obj': {
     extension: '.obj',
     // No `family`: `assimp`, not LibreOffice, reads every source in this
-    // group - see `assimp.service.ts`.
+    // group - see `assimp.engine.ts`.
     mediaType: 'model/obj',
     targets: ASSIMP_TARGETS.filter((id) => id !== 'obj'),
   },
@@ -2321,7 +2321,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
   '.epub': {
     extension: '.epub',
     // No `family`: `ebook-convert`, not LibreOffice, reads this source - see
-    // `ebook.service.ts`. A `.kepub.epub` upload is a real EPUB container
+    // `ebook.engine.ts`. A `.kepub.epub` upload is a real EPUB container
     // underneath (verified by hand), so it is read here too, under its own
     // `extname()`-truncated `.epub` bucket, exactly like `.tar.gz` already
     // reads as `.gz` elsewhere in this matrix.
@@ -2356,7 +2356,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
   '.ttf': {
     extension: '.ttf',
     // No `family`: `fontTools`, not LibreOffice, reads every source in this
-    // group - see `font.service.ts`.
+    // group - see `font.engine.ts`.
     mediaType: 'font/ttf',
     targets: FONT_TARGETS.filter((id) => id !== 'ttf'),
   },
@@ -2445,7 +2445,7 @@ export interface ResolvedConversion {
    * reaches it - a `.doc` upload asking for `docx` still gets a plain
    * `soffice --convert-to`. Only a PDF's or a markup file's request for
    * `docx` takes an engine route, which is exactly what `target.engineFrom`
-   * names. The caller (`conversion.service.ts`) checks this before falling
+   * names. The caller (`conversion.pipeline.ts`) checks this before falling
    * back to `target.mode`, so it never has to ask "but which route did THIS
    * one take" any other way.
    */
@@ -2546,28 +2546,28 @@ export function resolveConversion(
     // Also family-less like `transcode`/`data` above - `heif-convert`/
     // `heif-enc` reads and writes every pair this mode covers directly, with
     // no per-family filter to look up. See `TargetFormat.mode`'s own `heif`
-    // bullet for what `heif.service.ts` actually does for each pair.
+    // bullet for what `heif.engine.ts` actually does for each pair.
     return { source, target, convertTo: '', engine: 'heif' };
   }
 
   if (target.mode === '3d') {
     // Also family-less - `assimp` reads and writes every pair this mode
     // covers directly, no per-family filter to look up. See
-    // `assimp.service.ts`.
+    // `assimp.engine.ts`.
     return { source, target, convertTo: '', engine: 'assimp' };
   }
 
   if (target.mode === 'ebook') {
     // Also family-less - `ebook-convert` reads and writes every pair this
     // mode covers directly, no per-family filter to look up. See
-    // `ebook.service.ts`.
+    // `ebook.engine.ts`.
     return { source, target, convertTo: '', engine: 'ebook' };
   }
 
   if (target.mode === 'font') {
     // Also family-less - `font_engine.py` reads and writes every pair this
     // mode covers directly, no per-family filter to look up. See
-    // `font.service.ts`.
+    // `font.engine.ts`.
     return { source, target, convertTo: '', engine: 'font' };
   }
 

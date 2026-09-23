@@ -9,6 +9,7 @@ import { Router } from 'express';
 
 import { ENABLE_DOCS } from '../config.ts';
 import type { BoundedQueue, RateLimiter } from '../lib/queue.ts';
+import { mediaQueueStats } from '../jobs/media-jobs.service.ts';
 import { createConvertRouter } from './convert.routes.ts';
 import { createDocsRouter } from './docs.routes.ts';
 import { createFormatsRouter } from './formats.routes.ts';
@@ -26,7 +27,7 @@ export interface RouteDeps {
 export function createRoutes(deps: RouteDeps): Router {
   const router = Router();
 
-  router.use(createHealthRouter());
+  router.use(createHealthRouter({ queueStats: () => deps.queue.stats(), mediaQueueStats }));
   router.use(createFormatsRouter());
 
   if (deps.enableDocs ?? ENABLE_DOCS) {

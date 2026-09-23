@@ -26,7 +26,7 @@
  * single still image rather than a sequence at all.
  */
 import { FFMPEG_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export interface FfmpegRun {
   inputPath: string;

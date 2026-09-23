@@ -40,7 +40,7 @@ import {
   mediaQueueHasCapacity,
   startMediaJob,
   type MediaJob,
-} from '../services/media-jobs.service.ts';
+} from '../jobs/media-jobs.service.ts';
 import { removeWorkspace } from '../services/workspace.service.ts';
 import type { MediaUploadLocals } from '../middleware/media-upload.ts';
 

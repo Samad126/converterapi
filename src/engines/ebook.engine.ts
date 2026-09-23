@@ -30,7 +30,7 @@
  * real `.kepub.epub` fixture back into `ebook-convert` as a source.
  */
 import { EBOOK_CONVERT_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export interface EbookRun {
   inputPath: string;

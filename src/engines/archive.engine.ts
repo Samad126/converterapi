@@ -63,7 +63,7 @@ import { join, relative, sep } from 'node:path';
 
 import { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, SEVENZIP_BIN, ZSTD_BIN } from '../config.ts';
 import { ClientGoneError, Errors } from '../errors.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export type ArchiveWriter = 'zip' | 'tar' | 'tar.gz' | 'tar.bz2' | 'tar.zst' | '7z';
 
@@ -341,7 +341,7 @@ export async function collectTreeFiles(
 /**
  * Pack an already-extracted directory into `tar`/`tar.gz`/`tar.bz2`/`7z`.
  *
- * `zip` is deliberately NOT handled here - see `conversion.service.ts`'s
+ * `zip` is deliberately NOT handled here - see `conversion.pipeline.ts`'s
  * archive pipeline: the project's own rule is that a format describable in a
  * few hundred lines does not justify a dependency, and `zip.ts` already is
  * that description, trusted and in use elsewhere. This function exists for

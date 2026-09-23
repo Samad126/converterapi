@@ -8,7 +8,7 @@
  * for the other two).
  */
 import { FONT_ENGINE_SCRIPT, PYTHON_BIN } from '../config.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from './soffice.engine.ts';
 
 export interface FontRun {
   inputPath: string;

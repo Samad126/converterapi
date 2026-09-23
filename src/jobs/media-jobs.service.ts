@@ -35,36 +35,26 @@ import {
   MEDIA_JOB_TTL_MS,
   MEDIA_TEMP_ROOT,
 } from '../config.ts';
-import { AppError, Errors, type ErrorEnvelope } from '../errors.ts';
+import { AppError, Errors } from '../errors.ts';
 import { mediaFormat, type MediaExtension, type MediaTargetId } from '../formats-media.ts';
-import { BoundedQueue } from '../lib/queue.ts';
-import { runFfmpegMedia } from './ffmpeg.service.ts';
-import { removeWorkspace, sweepStaleWorkspaces } from './workspace.service.ts';
+import { BoundedQueue, type QueueStats } from '../lib/queue.ts';
+import { runFfmpegMedia } from '../engines/ffmpeg.engine.ts';
+import { removeWorkspace, sweepStaleWorkspaces } from '../services/workspace.service.ts';
+import { InMemoryMediaJobStore, type MediaJob, type MediaJobStore } from './job-store.ts';
 
-export type MediaJobStatus = 'queued' | 'running' | 'done' | 'failed';
+export type { MediaJob, MediaJobStatus, MediaJobStore } from './job-store.ts';
 
-export interface MediaJob {
-  readonly id: string;
-  status: MediaJobStatus;
-  readonly sourceExtension: MediaExtension;
-  readonly target: MediaTargetId;
-  readonly workspace: string;
-  /** The name offered back on download - the upload's own name, target extension swapped in. */
-  readonly downloadName: string;
-  resultPath?: string;
-  bytes?: number;
-  error?: ErrorEnvelope['error'];
-  errorStatus?: number;
-  readonly createdAt: number;
-  updatedAt: number;
-}
-
-const jobs = new Map<string, MediaJob>();
+const jobs: MediaJobStore = new InMemoryMediaJobStore();
 const queue = new BoundedQueue(MAX_CONCURRENT_MEDIA_JOBS, MAX_QUEUED_MEDIA_JOBS);
 
 /** Advisory capacity check for the controller, before it accepts a (possibly large) upload. */
 export function mediaQueueHasCapacity(): boolean {
   return queue.hasCapacity();
+}
+
+/** For `/health` - lets an operator see the media queue saturating, not just the fact that it exists. */
+export function mediaQueueStats(): QueueStats {
+  return queue.stats();
 }
 
 /** Create the per-job workspace, under `MEDIA_TEMP_ROOT` - see that constant's own comment for why not `TEMP_ROOT`. */
@@ -90,7 +80,7 @@ export function createMediaJob(input: {
     createdAt: now,
     updatedAt: now,
   };
-  jobs.set(job.id, job);
+  jobs.set(job);
   return job;
 }
 
@@ -184,7 +174,7 @@ async function processMediaJob(job: MediaJob): Promise<void> {
  */
 export async function sweepMediaJobs(now = Date.now()): Promise<number> {
   let removed = 0;
-  for (const [id, job] of jobs) {
+  for (const [id, job] of jobs.entries()) {
     if (job.status === 'done' || job.status === 'failed') {
       if (now - job.updatedAt > MEDIA_JOB_TTL_MS) {
         await removeWorkspace(job.workspace).catch(() => {});

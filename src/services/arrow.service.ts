@@ -11,7 +11,7 @@
  *
  * Both functions write/read an intermediate JSON file in the request's own
  * workspace rather than piping through stdin/stdout - the same reason
- * `archive.service.ts`'s `decompressZstd` writes to a real path instead of a
+ * `archive.engine.ts`'s `decompressZstd` writes to a real path instead of a
  * pipe: a predictable, per-request-isolated file the caller can inspect on
  * failure, not a stream this file would have to buffer and error-handle by
  * hand.
@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { ARROW_ENGINE_SCRIPT, PYTHON_BIN } from '../config.ts';
 import { Errors } from '../errors.ts';
 import type { TargetId } from '../formats.ts';
-import { runProcess, type ProcessOutcome } from './soffice.service.ts';
+import { runProcess, type ProcessOutcome } from '../engines/soffice.engine.ts';
 
 export interface ArrowRun {
   workspace: string;
