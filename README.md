@@ -860,19 +860,19 @@ file that failed, so one bad file in a batch does not lose the rest.
 
 ```bash
 curl -F "files=@report.docx;type=application/octet-stream" \
-     https://converterapi.example.com/convert/pdf \
+     https://converterapi.alakbaroff.com/convert/pdf \
      -o report.pdf
 
-curl -F "files=@sheet.csv" https://converterapi.example.com/convert/xlsx -o sheet.xlsx
-curl -F "files=@deck.pptx" https://converterapi.example.com/convert/png -o slides.zip
+curl -F "files=@sheet.csv" https://converterapi.alakbaroff.com/convert/xlsx -o sheet.xlsx
+curl -F "files=@deck.pptx" https://converterapi.alakbaroff.com/convert/png -o slides.zip
 
 # Two or more files -> always a ZIP of results, one entry per input file:
 curl -F "files=@report.docx" -F "files=@notes.docx" \
-     https://converterapi.example.com/convert/pdf -o converted.zip
+     https://converterapi.alakbaroff.com/convert/pdf -o converted.zip
 
 # Optional, only meaningful for a scanned PDF -> docx (default is "true"):
 curl -F "files=@scan.pdf" -F "ocr=false" \
-     https://converterapi.example.com/convert/docx -o scan.docx
+     https://converterapi.alakbaroff.com/convert/docx -o scan.docx
 ```
 
 There is deliberately no bare `/convert` that assumes a format. One address that
@@ -970,15 +970,15 @@ itself:
 
 ```bash
 # 1. Submit - 202, with a job id
-curl -F "files=@lecture.wav" https://converterapi.example.com/media/mp3
+curl -F "files=@lecture.wav" https://converterapi.alakbaroff.com/media/mp3
 # {"id":"…","status":"queued","statusUrl":"/media/jobs/…"}
 
 # 2. Poll status until it is no longer queued/running
-curl https://converterapi.example.com/media/jobs/<id>
+curl https://converterapi.alakbaroff.com/media/jobs/<id>
 # {"id":"…","status":"done","target":"mp3","downloadUrl":"/media/jobs/…/download","bytes":123456}
 
 # 3. Download the result
-curl https://converterapi.example.com/media/jobs/<id>/download -o lecture.mp3
+curl https://converterapi.alakbaroff.com/media/jobs/<id>/download -o lecture.mp3
 ```
 
 **Formats.** Audio: `mp3`, `wav`, `flac`, `ogg`, `aac`, `m4a`, `wma`, `opus`,
@@ -1069,19 +1069,19 @@ the input shape and the operation itself.
 
 ```bash
 curl -F "files=@jan.pdf" -F "files=@feb.pdf" -F "files=@mar.pdf" \
-     https://converterapi.example.com/pdf/merge -o q1.pdf
+     https://converterapi.alakbaroff.com/pdf/merge -o q1.pdf
 
 curl -F "file=@report.pdf" -F "every=5" \
-     https://converterapi.example.com/pdf/split -o chunks.zip
+     https://converterapi.alakbaroff.com/pdf/split -o chunks.zip
 
 curl -F "file=@contract.pdf" -F "pages=2,7" \
-     https://converterapi.example.com/pdf/remove-pages -o contract-clean.pdf
+     https://converterapi.alakbaroff.com/pdf/remove-pages -o contract-clean.pdf
 
 curl -F "file=@scan.pdf" -F "order=3,1,2" \
-     https://converterapi.example.com/pdf/organize -o scan-reordered.pdf
+     https://converterapi.alakbaroff.com/pdf/organize -o scan-reordered.pdf
 
 curl -F "files=@page1.jpg" -F "files=@page2.jpg" \
-     https://converterapi.example.com/pdf/scan-to-pdf -o scanned.pdf
+     https://converterapi.alakbaroff.com/pdf/scan-to-pdf -o scanned.pdf
 ```
 
 **None of this touches LibreOffice or `pdf_engine.py`.** It runs on
@@ -1132,16 +1132,16 @@ the same shape `remove-pages`/`extract-pages`/`organize` already use.
 
 ```bash
 curl -F "file=@scan.pdf" -F "degrees=90" -F "pages=1,3" \
-     https://converterapi.example.com/pdf/rotate -o scan-rotated.pdf
+     https://converterapi.alakbaroff.com/pdf/rotate -o scan-rotated.pdf
 
 curl -F "file=@contract.pdf" -F "text=DRAFT" \
-     https://converterapi.example.com/pdf/watermark -o contract-draft.pdf
+     https://converterapi.alakbaroff.com/pdf/watermark -o contract-draft.pdf
 
 curl -F "file=@contract.pdf" -F "password=hunter2" \
-     https://converterapi.example.com/pdf/protect -o contract-locked.pdf
+     https://converterapi.alakbaroff.com/pdf/protect -o contract-locked.pdf
 
 curl -F "file=@contract-locked.pdf" -F "password=hunter2" \
-     https://converterapi.example.com/pdf/unlock -o contract.pdf
+     https://converterapi.alakbaroff.com/pdf/unlock -o contract.pdf
 ```
 
 **`rotate` and `watermark` are `pdf-lib`**, the same as every other page
@@ -1182,13 +1182,13 @@ Three more, rounding out the page-level family.
 
 ```bash
 curl -F "file=@scan.pdf" -F "left=10" -F "right=10" -F "top=20" \
-     https://converterapi.example.com/pdf/crop -o scan-cropped.pdf
+     https://converterapi.alakbaroff.com/pdf/crop -o scan-cropped.pdf
 
 curl -F "file=@report.pdf" -F "startAt=1" -F "position=bottom-right" \
-     https://converterapi.example.com/pdf/page-numbers -o report-numbered.pdf
+     https://converterapi.alakbaroff.com/pdf/page-numbers -o report-numbered.pdf
 
 curl -F "file=@broken.pdf" \
-     https://converterapi.example.com/pdf/repair -o fixed.pdf
+     https://converterapi.alakbaroff.com/pdf/repair -o fixed.pdf
 ```
 
 **`crop` and `page-numbers` are `pdf-lib`**, the same as rotate and watermark.
@@ -1224,10 +1224,10 @@ internal first step of a PDF-to-`docx` conversion.
 
 ```bash
 curl -F "file=@scan.pdf" \
-     https://converterapi.example.com/pdf/ocr -o scan-searchable.pdf
+     https://converterapi.alakbaroff.com/pdf/ocr -o scan-searchable.pdf
 
 curl -F "file=@type3-report.pdf" -F "force=true" \
-     https://converterapi.example.com/pdf/ocr -o report-searchable.pdf
+     https://converterapi.alakbaroff.com/pdf/ocr -o report-searchable.pdf
 ```
 
 **This is `pdf_engine.py`'s existing OCR pipeline (OCRmyPDF + Tesseract),
@@ -1251,7 +1251,7 @@ Shrinks a PDF's file size by recompressing its internal streams and images.
 
 ```bash
 curl -F "file=@report.pdf" -F "level=high" \
-     https://converterapi.example.com/pdf/compress -o report-small.pdf
+     https://converterapi.alakbaroff.com/pdf/compress -o report-small.pdf
 ```
 
 **This is `qpdf`, not a new engine.** `qpdf` has no lossy image-quality dial
@@ -1279,12 +1279,12 @@ Reads and fills a PDF's AcroForm fields.
 
 ```bash
 curl -F "file=@application.pdf" \
-     https://converterapi.example.com/pdf/form-fields
+     https://converterapi.alakbaroff.com/pdf/form-fields
 
 curl -F "file=@application.pdf" \
      -F 'fields={"Full Name":"Jane Doe","Agree":true}' \
      -F "flatten=true" \
-     https://converterapi.example.com/pdf/fill-form -o application-filled.pdf
+     https://converterapi.alakbaroff.com/pdf/fill-form -o application-filled.pdf
 ```
 
 **Both are `pdf-lib`'s own AcroForm API** — no new engine. A PDF with no
@@ -1309,7 +1309,7 @@ A per-page text diff between two PDFs.
 
 ```bash
 curl -F "files=@contract-v1.pdf" -F "files=@contract-v2.pdf" \
-     https://converterapi.example.com/pdf/compare
+     https://converterapi.alakbaroff.com/pdf/compare
 ```
 
 Returns `{"pageCountA":.., "pageCountB":.., "pages":[{"page":1,"equal":true},
@@ -1341,7 +1341,7 @@ onto a PDF, at caller-given positions.
 ```bash
 curl -F "file=@contract.pdf" \
      -F 'elements=[{"type":"signature","page":1,"x":72,"y":700,"width":180,"height":50,"value":"Jane Doe","fontStyle":"cursive","color":"blue"},{"type":"date","page":1,"x":72,"y":760,"width":100,"height":20,"value":"2026-09-20"}]' \
-     https://converterapi.example.com/pdf/sign -o contract-signed.pdf
+     https://converterapi.alakbaroff.com/pdf/sign -o contract-signed.pdf
 ```
 
 Each element in `elements` is one of `signature`/`initials`/`stamp` (typed as
@@ -1380,7 +1380,7 @@ not a black box drawn on top of it.
 ```bash
 curl -F "file=@case-file.pdf" \
      -F 'areas=[{"page":1,"x":72,"y":600,"width":250,"height":18}]' \
-     https://converterapi.example.com/pdf/redact -o case-file-redacted.pdf
+     https://converterapi.alakbaroff.com/pdf/redact -o case-file-redacted.pdf
 ```
 
 `page` is 1-based; `x`/`y`/`width`/`height` are in points, **top-left
@@ -1423,7 +1423,7 @@ instead of one of six fixed signature-shaped marks.
 ```bash
 curl -F "file=@report.pdf" \
      -F 'elements=[{"type":"text","page":1,"x":72,"y":700,"value":"Approved","fontSize":14,"color":"red"},{"type":"rectangle","page":1,"x":72,"y":600,"width":150,"height":30,"color":"blue"}]' \
-     https://converterapi.example.com/pdf/edit -o report-annotated.pdf
+     https://converterapi.alakbaroff.com/pdf/edit -o report-annotated.pdf
 ```
 
 Every position is **top-left origin**, in points — the same convention
@@ -1459,7 +1459,7 @@ The [conversion matrix](#conversion-matrix) as JSON — every accepted extension
 and every target each one can become.
 
 ```bash
-curl -sS https://converterapi.example.com/formats | jq '.sources[] | select(.extension==".docx")'
+curl -sS https://converterapi.alakbaroff.com/formats | jq '.sources[] | select(.extension==".docx")'
 ```
 
 It exists so a client does not have to hard-code the table. The Android client
@@ -2460,8 +2460,8 @@ make it a choice.
 ### Verifying a deployment
 
 ```bash
-curl -sS https://converterapi.example.com/health
-curl -sS -F "file=@report.docx" https://converterapi.example.com/convert/pdf -o out.pdf
+curl -sS https://converterapi.alakbaroff.com/health
+curl -sS -F "file=@report.docx" https://converterapi.alakbaroff.com/convert/pdf -o out.pdf
 head -c 5 out.pdf        # %PDF-
 ```
 
