@@ -1,23 +1,65 @@
 {
-  "name": "converterapi",
+  "name": "any-file-converter",
+  "version": "1.1.0",
+  "description": "File converter for Node.js and the command line: convert documents, spreadsheets, presentations, images, audio, video, ebooks, archives, data files and PDFs (docx to pdf, heic to jpg, mp4 to mp3, ...). Library, CLI and HTTP API.",
   "license": "MIT",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Universal file converter service: documents, spreadsheets, presentations and images, via LibreOffice headless.",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "any-file-converter": "dist/cli/index.js",
+    "converter": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "assets",
+    "openapi.yaml"
+  ],
   "engines": {
     "node": ">=22"
   },
-  "bin": {
-    "converter": "dist/cli/index.js"
-  },
+  "keywords": [
+    "file converter",
+    "file-converter",
+    "converter",
+    "convert",
+    "document converter",
+    "pdf",
+    "docx to pdf",
+    "pdf converter",
+    "image converter",
+    "heic",
+    "audio converter",
+    "video converter",
+    "ffmpeg",
+    "libreoffice",
+    "pandoc",
+    "ebook",
+    "epub",
+    "xlsx",
+    "pptx",
+    "csv",
+    "json",
+    "yaml",
+    "cli",
+    "api"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "dev": "node --watch --experimental-strip-types src/server.ts",
     "cli": "node --experimental-strip-types src/cli/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\""
+    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\"",
+    "prepublishOnly": "npm run typecheck && npm run build"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
@@ -38,5 +80,16 @@
     "@types/multer": "^2.0.0",
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Samad126/converterapi.git"
+  },
+  "homepage": "https://github.com/Samad126/converterapi#readme",
+  "bugs": {
+    "url": "https://github.com/Samad126/converterapi/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

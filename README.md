@@ -1,5 +1,28 @@
 # Universal file converter
 
+[![npm](https://img.shields.io/npm/v/any-file-converter)](https://www.npmjs.com/package/any-file-converter)
+[![license](https://img.shields.io/npm/l/any-file-converter)](LICENSE)
+
+Convert documents, spreadsheets, presentations, images, audio, video, ebooks,
+archives, data files and PDFs from Node.js, the command line, or over HTTP.
+Available on npm as [`any-file-converter`](https://www.npmjs.com/package/any-file-converter).
+
+```bash
+npm install any-file-converter          # library
+npx any-file-converter convert pdf report.docx   # CLI, no install
+```
+
+```js
+import { convertFile } from 'any-file-converter';
+
+const { files } = await convertFile('report.docx', { to: 'pdf' });
+await fs.promises.writeFile(files[0].name, files[0].data);
+```
+
+> The conversions run on system tools (LibreOffice, pandoc, ffmpeg, qpdf, ...)
+> that npm cannot install. Run `npx any-file-converter doctor` to see what is
+> missing, or use the [Docker image](#quick-start), which bundles everything.
+
 A Node.js service that converts documents, spreadsheets, presentations and
 images between formats using LibreOffice headless. It began as the backend for
 an Android app that uploads a Word document and receives a PDF, and that
@@ -18,6 +41,7 @@ contract** with a client that is already shipped and cannot be changed.
 
 ## Contents
 
+- [Install from npm (library)](#install-from-npm-library)
 - [Quick start](#quick-start)
 - [Command-line tool](#command-line-tool)
 - [Conversion matrix](#conversion-matrix)
@@ -743,6 +767,68 @@ answer, not a failure, the same as `.docx → txt` on a blank document.
 
 ---
 
+## Install from npm (library)
+
+```bash
+npm install any-file-converter
+```
+
+Requires Node 22+ and the system tools listed under [Quick start](#quick-start)
+(`npx any-file-converter doctor` checks them).
+
+```js
+import { convertFile, targetsFor } from 'any-file-converter';
+
+// From a path...
+const pdf = await convertFile('report.docx', { to: 'pdf' });
+
+// ...or from a Buffer (then say what it is):
+const png = await convertFile(buffer, { to: 'png', extension: '.pptx' });
+
+pdf.files;    // [{ name: 'report.pdf', data: Buffer }]
+png.archive;  // true: raster targets are always several files, zip them if you like
+
+targetsFor('.docx'); // every target a .docx can become
+```
+
+| Export | Does |
+|---|---|
+| `convertFile(input, { to, extension?, ocr?, signal? })` | Converts a path or Buffer; resolves to `{ files, archive, durationMs }` |
+| `isTargetId(id)`, `targetsFor(ext)` | Validate a target / list what an extension can become |
+| `TARGETS`, `SOURCES` | The full conversion matrix |
+| `AppError` | Thrown when an engine fails; a missing tool shows as `ENOENT` in `error.cause` |
+
+Unsupported input/target pairs reject with a plain `Error` that lists valid
+targets. `CONVERT_TIMEOUT_MS` (default 90s) is read once at import, so set it
+before importing for long files. There is no rate limit or upload ceiling in
+library mode. Audio/video (`/media`) is available through the CLI and HTTP API, not the
+library yet.
+
+### PDF tools
+
+The CLI's `pdf` operations are also in the library, under `pdf`. Inputs are a
+path or a Buffer; results are Buffers. `pages` is 1-based: a string like
+`"1,3,5-7"` or an array of numbers.
+
+```js
+import { pdf } from 'any-file-converter';
+
+const merged = await pdf.merge(['a.pdf', 'b.pdf']);
+const parts  = await pdf.split('report.pdf', { every: 5 });   // Buffer[]
+const first  = await pdf.extractPages('report.pdf', '1-3');
+const locked = await pdf.protect('report.pdf', { password: 'hunter2' });
+```
+
+| Function | Needs |
+|---|---|
+| `merge`, `split`, `extractPages`, `removePagesFrom`, `organize`, `scanToPdf`, `rotate`, `watermark`, `crop`, `pageNumbers` | nothing (pure JS) |
+| `protect`, `unlock`, `repair`, `compress` | `qpdf` on PATH |
+| `sign`, `edit`, `formFields`, `fillFormFields` | nothing (pure JS) |
+
+`redact`, `compare` and `ocr` are HTTP-only.
+
+---
+
 ## Quick start
 
 ```bash
@@ -825,10 +911,10 @@ npm run cli -- formats
 npm run cli -- doctor
 ```
 
-After `npm run build`, the same commands are available as `converter` (the
-package's `bin` entry, `dist/cli/index.js`) — either run directly against a
-global/local install, or via `npx converter ...` from a project that depends
-on this package.
+Installed from npm, the same commands are available as `any-file-converter` (or
+the short alias `converter`): `npx any-file-converter convert pdf report.docx`,
+or `npm i -g any-file-converter` and then `converter convert pdf report.docx`.
+From a clone, `npm run build` produces the same `dist/cli/index.js`.
 
 | Command | Does |
 |---|---|
