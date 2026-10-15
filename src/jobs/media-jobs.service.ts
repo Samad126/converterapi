@@ -39,8 +39,15 @@ import { AppError, Errors } from '../errors.ts';
 import { mediaFormat, type MediaExtension, type MediaTargetId } from '../formats-media.ts';
 import { BoundedQueue, type QueueStats } from '../lib/queue.ts';
 import { runFfmpegMedia } from '../engines/ffmpeg.engine.ts';
+import { isYouTubeTargetId, type YouTubeTargetId } from '../lib/youtube-url.ts';
+import { downloadYouTubeVideo } from '../services/youtube.service.ts';
 import { removeWorkspace, sweepStaleWorkspaces } from '../services/workspace.service.ts';
-import { InMemoryMediaJobStore, type MediaJob, type MediaJobStore } from './job-store.ts';
+import {
+  InMemoryMediaJobStore,
+  type MediaJob,
+  type MediaJobSource,
+  type MediaJobStore,
+} from './job-store.ts';
 
 export type { MediaJob, MediaJobStatus, MediaJobStore } from './job-store.ts';
 
@@ -63,8 +70,8 @@ export async function createMediaWorkspace(): Promise<string> {
   return fsp.mkdtemp(join(MEDIA_TEMP_ROOT, 'job-'));
 }
 
-export function createMediaJob(input: {
-  sourceExtension: MediaExtension;
+function newJob(input: {
+  source: MediaJobSource;
   target: MediaTargetId;
   workspace: string;
   downloadName: string;
@@ -73,7 +80,7 @@ export function createMediaJob(input: {
   const job: MediaJob = {
     id: randomUUID(),
     status: 'queued',
-    sourceExtension: input.sourceExtension,
+    source: input.source,
     target: input.target,
     workspace: input.workspace,
     downloadName: input.downloadName,
@@ -82,6 +89,39 @@ export function createMediaJob(input: {
   };
   jobs.set(job);
   return job;
+}
+
+export function createMediaJob(input: {
+  sourceExtension: MediaExtension;
+  target: MediaTargetId;
+  workspace: string;
+  downloadName: string;
+}): MediaJob {
+  return newJob({
+    source: { kind: 'upload', extension: input.sourceExtension },
+    target: input.target,
+    workspace: input.workspace,
+    downloadName: input.downloadName,
+  });
+}
+
+/**
+ * A job that downloads a YouTube video rather than reading an upload. Its
+ * download name is a placeholder until the download finishes and the video's
+ * title is known - see `processMediaJob`.
+ */
+export function createYouTubeJob(input: {
+  videoId: string;
+  url: string;
+  target: YouTubeTargetId;
+  workspace: string;
+}): MediaJob {
+  return newJob({
+    source: { kind: 'youtube', videoId: input.videoId, url: input.url },
+    target: input.target,
+    workspace: input.workspace,
+    downloadName: `${input.videoId}${mediaFormat(input.target).extension}`,
+  });
 }
 
 export function getMediaJob(id: string): MediaJob | undefined {
@@ -119,32 +159,47 @@ async function processMediaJob(job: MediaJob): Promise<void> {
   job.updatedAt = Date.now();
 
   try {
-    const inputPath = join(job.workspace, `input${job.sourceExtension}`);
     const outDir = join(job.workspace, 'out');
     await fsp.mkdir(outDir, { recursive: true });
     const target = mediaFormat(job.target);
     const outputPath = join(outDir, `converted${target.extension}`);
     const deadline = Date.now() + MEDIA_CONVERT_TIMEOUT_MS;
 
-    const outcome = await runFfmpegMedia({
-      inputPath,
-      outputPath,
-      workspace: job.workspace,
-      deadline,
-    });
+    if (job.source.kind === 'youtube') {
+      if (!isYouTubeTargetId(job.target)) {
+        throw Errors.internal('youtube job created with a non-youtube target');
+      }
+      job.downloadName = await downloadYouTubeVideo({
+        url: job.source.url,
+        videoId: job.source.videoId,
+        target: job.target,
+        workspace: job.workspace,
+        outputPath,
+        titlePath: join(job.workspace, 'title.txt'),
+        deadline,
+      });
+    } else {
+      const inputPath = join(job.workspace, `input${job.source.extension}`);
+      const outcome = await runFfmpegMedia({
+        inputPath,
+        outputPath,
+        workspace: job.workspace,
+        deadline,
+      });
 
-    if (outcome.kind === 'timeout') throw Errors.timeout();
-    if (outcome.kind === 'aborted') {
-      // Unreachable in practice - no `signal` is ever passed to a background
-      // job, since there is no live request to cancel against by the time
-      // this runs - but `ProcessOutcome` still has to be narrowed.
-      throw Errors.internal('media job aborted with no signal');
-    }
-    if (outcome.exitCode !== 0) {
-      throw Errors.convertFailed(
-        `ffmpeg exited ${outcome.exitCode} (signal=${outcome.signal ?? 'none'}): ` +
-          `${outcome.stderr || '(no stderr)'}`,
-      );
+      if (outcome.kind === 'timeout') throw Errors.timeout();
+      if (outcome.kind === 'aborted') {
+        // Unreachable in practice - no `signal` is ever passed to a background
+        // job, since there is no live request to cancel against by the time
+        // this runs - but `ProcessOutcome` still has to be narrowed.
+        throw Errors.internal('media job aborted with no signal');
+      }
+      if (outcome.exitCode !== 0) {
+        throw Errors.convertFailed(
+          `ffmpeg exited ${outcome.exitCode} (signal=${outcome.signal ?? 'none'}): ` +
+            `${outcome.stderr || '(no stderr)'}`,
+        );
+      }
     }
 
     const stat = await fsp.stat(outputPath).catch(() => null);

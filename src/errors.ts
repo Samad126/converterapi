@@ -37,7 +37,8 @@ export type ErrorCode =
   | 'E_RATE_LIMITED'
   | 'E_INTERNAL'
   | 'E_JOB_NOT_FOUND'
-  | 'E_JOB_NOT_READY';
+  | 'E_JOB_NOT_READY'
+  | 'E_VIDEO_UNAVAILABLE';
 
 export interface ErrorEnvelope {
   error: { code: ErrorCode; message: string };
@@ -270,5 +271,52 @@ export const Errors = {
       'E_JOB_NOT_READY',
       409,
       `This conversion is still ${status === 'queued' ? 'queued' : 'in progress'}. Check back in a moment.`,
+    ),
+
+  /**
+   * A YouTube link that names a video this service may not fetch: private,
+   * removed, age-restricted, blocked in this country, or members-only.
+   *
+   * Its own code rather than E_CONVERT_FAILED: nothing in a conversion failed.
+   * The video is simply not available to download, and the person holding the
+   * link can act on that (pick another video) in a way they cannot act on
+   * "the conversion failed".
+   */
+  videoUnavailable: () =>
+    new AppError(
+      'E_VIDEO_UNAVAILABLE',
+      422,
+      'This video is private, removed, age-restricted, or not available in this country.',
+    ),
+
+  /** A live stream, which only becomes downloadable once it has ended. */
+  videoLive: () =>
+    new AppError(
+      'E_VIDEO_UNAVAILABLE',
+      422,
+      'This video is a live stream. Try again once it has ended.',
+    ),
+
+  /** The finished video is over `YOUTUBE_MAX_FILESIZE_BYTES`. */
+  videoTooLarge: (limitBytes: number, cause?: unknown) =>
+    new AppError(
+      'E_TOO_LARGE',
+      413,
+      `This video is larger than the ${Math.floor(limitBytes / (1024 * 1024))} MB limit.`,
+      { cause },
+    ),
+
+  /**
+   * `yt-dlp` failed for a reason that is not about the video itself - a
+   * network fault, YouTube refusing this server's address, an extractor that
+   * needs an update. The detail goes to the logs as `cause`; the person is told
+   * the one useful thing, which is that a retry may work.
+   */
+  youtubeDownloadFailed: (cause?: unknown) =>
+    new AppError(
+      'E_CONVERT_FAILED',
+      500,
+      'This video could not be downloaded. Try again in a few minutes.',
+      { cause },
     ),
 };

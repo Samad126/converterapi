@@ -25,6 +25,7 @@ import {
   QPDF_BIN,
   SEVENZIP_BIN,
   SOFFICE_BIN,
+  YTDLP_BIN,
   TESSERACT_BIN,
   ZSTD_BIN,
 } from '../config.ts';
@@ -106,6 +107,16 @@ const TOOLS: ToolCheck[] = [
       linux: 'apt-get install -y ffmpeg',
       darwin: 'brew install ffmpeg',
       win32: 'winget install --id Gyan.FFmpeg',
+    },
+  },
+  {
+    usedFor: 'downloading YouTube videos for POST /youtube/{target}',
+    bin: YTDLP_BIN,
+    versionArgs: ['--version'],
+    hints: {
+      linux: 'pip install "yt-dlp[default]"',
+      darwin: 'brew install yt-dlp',
+      win32: 'winget install --id yt-dlp.yt-dlp',
     },
   },
   {

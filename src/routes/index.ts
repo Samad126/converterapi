@@ -16,6 +16,7 @@ import { createFormatsRouter } from './formats.routes.ts';
 import { createHealthRouter } from './health.routes.ts';
 import { createMediaRouter } from './media.routes.ts';
 import { createPagesRouter } from './pages.routes.ts';
+import { createYouTubeRouter } from './youtube.routes.ts';
 
 export interface RouteDeps {
   queue: BoundedQueue;
@@ -37,6 +38,7 @@ export function createRoutes(deps: RouteDeps): Router {
   router.use(createConvertRouter({ queue: deps.queue, rateLimiter: deps.rateLimiter }));
   router.use(createPagesRouter({ queue: deps.queue, rateLimiter: deps.rateLimiter }));
   router.use(createMediaRouter({ rateLimiter: deps.rateLimiter }));
+  router.use(createYouTubeRouter({ rateLimiter: deps.rateLimiter }));
 
   return router;
 }

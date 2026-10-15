@@ -227,8 +227,8 @@ FROM node:22-bookworm-slim AS runtime
 # that already excludes `.rar`.
 #
 # The service refuses to boot without any of this. Preflight checks soffice,
-# `pdftoppm`, `pandoc`, `7z`, `ffmpeg`, `heif-convert`/`heif-enc`, `zstd`,
-# `assimp`, `ebook-convert`, `fontTools`, `pyarrow` and the fonts, and then
+# `pdftoppm`, `pandoc`, `7z`, `ffmpeg`, `yt-dlp`, `heif-convert`/`heif-enc`,
+# `zstd`, `assimp`, `ebook-convert`, `fontTools`, `pyarrow` and the fonts, and then
 # converts one real document per family (plus one pandoc case, one archive
 # case and one ffmpeg case) before it listens - so a missing module fails
 # loudly at startup rather than on some user's first spreadsheet, days
@@ -272,6 +272,7 @@ RUN apt-get update \
       python-docx \
       ocrmypdf \
       pyarrow \
+      "yt-dlp[default]" \
  && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \

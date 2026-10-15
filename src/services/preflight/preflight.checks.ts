@@ -25,6 +25,7 @@ import {
   SEVENZIP_BIN,
   SOFFICE_BIN,
   TESSERACT_BIN,
+  YTDLP_BIN,
   ZSTD_BIN,
 } from '../../config.ts';
 import { PreflightError } from '../../errors.ts';
@@ -314,6 +315,38 @@ export function assertFfmpegPresent(): string {
   if (result.status !== 0) {
     throw new PreflightError(
       `"${FFMPEG_BIN} -version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
+    );
+  }
+  return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';
+}
+
+/**
+ * `yt-dlp`, behind `POST /youtube/{target}`. Checked for the same reason as
+ * ffmpeg: a missing binary otherwise shows up only as every YouTube job
+ * failing, long after boot. Only "can it run" is checked here - whether it can
+ * still download a current video depends on YouTube and the network, so a boot
+ * check cannot prove it and does not try.
+ */
+export function assertYtDlpPresent(): string {
+  const result = spawnSync(YTDLP_BIN, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new PreflightError(
+      [
+        `Cannot run "${YTDLP_BIN}" (${code ?? result.error.message}).`,
+        '',
+        'It downloads the video behind POST /youtube/{target} (mp4 and mp3).',
+        '  pip:     pip install "yt-dlp[default]"',
+        '  Docker:  use the provided Dockerfile',
+        '',
+        'Set YTDLP_BIN if it is installed somewhere not on PATH.',
+      ].join('\n'),
+    );
+  }
+  if (result.status !== 0) {
+    throw new PreflightError(
+      `"${YTDLP_BIN} --version" exited ${result.status}. stderr: ${(result.stderr ?? '').trim()}`,
     );
   }
   return (result.stdout ?? '').split('\n')[0]?.trim() ?? 'unknown';

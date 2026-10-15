@@ -125,6 +125,21 @@ export function downloadNameFor(originalName: string, extension: string): string
 }
 
 /**
+ * The name for a file that was named by something other than an upload - a
+ * YouTube video's title, say.
+ *
+ * The same sanitising as `downloadNameFor`, minus `decodeUploadName`: that
+ * step exists to undo busboy's latin-1 reading of multipart filenames, which a
+ * title never went through, and applying it to one would corrupt a title that
+ * happens to look like mojibake. A slash in a title is a separator to nothing
+ * here, so it becomes a dash before the path rules strip everything before it.
+ */
+export function downloadNameForTitle(title: string, extension: string): string {
+  const base = baseNameOf(`${title.replace(/[\\/]/g, '-')}${extension}`);
+  return base === '' ? `converted${extension}` : `${base}${extension}`;
+}
+
+/**
  * A `Content-Disposition` value carrying the filename safely.
  *
  * RFC 6266 in both directions: the quoted `filename` is what older clients

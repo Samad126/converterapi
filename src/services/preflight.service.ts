@@ -33,6 +33,7 @@ import {
   assertRasterizerPresent,
   assertSevenZipPresent,
   assertSofficePresent,
+  assertYtDlpPresent,
   assertZstdPresent,
   checkTesseractPresent,
 } from './preflight/preflight.checks.ts';
@@ -45,6 +46,7 @@ export interface PreflightReport {
   pandocVersion: string;
   sevenZipVersion: string;
   ffmpegVersion: string;
+  ytdlpVersion: string;
   heifConvertVersion: string;
   zstdVersion: string;
   assimpVersion: string;
@@ -64,6 +66,7 @@ export async function preflight(): Promise<PreflightReport> {
   const pandocVersion = assertPandocPresent();
   const sevenZipVersion = assertSevenZipPresent();
   const ffmpegVersion = assertFfmpegPresent();
+  const ytdlpVersion = assertYtDlpPresent();
   const heifConvertVersion = assertHeifPresent();
   const zstdVersion = assertZstdPresent();
   const assimpVersion = assertAssimpPresent();
@@ -83,6 +86,7 @@ export async function preflight(): Promise<PreflightReport> {
     pandocVersion,
     sevenZipVersion,
     ffmpegVersion,
+    ytdlpVersion,
     heifConvertVersion,
     zstdVersion,
     assimpVersion,

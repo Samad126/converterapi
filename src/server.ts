@@ -34,6 +34,7 @@ export async function startServer(port = PORT): Promise<StartedServer> {
       pandoc: report.pandocVersion,
       sevenZip: report.sevenZipVersion,
       ffmpeg: report.ffmpegVersion,
+      ytdlp: report.ytdlpVersion,
       fonts: report.fonts.length,
       ocrAvailable: report.ocrAvailable,
     }),

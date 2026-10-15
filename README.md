@@ -48,6 +48,7 @@ contract** with a client that is already shipped and cannot be changed.
 - [API](#api)
   - [POST /convert/{target}](#post-converttarget)
   - [POST /media/{target} (asynchronous audio/video)](#post-mediatarget--asynchronous-audiovideo-conversion)
+  - [POST /youtube/{target} (YouTube video to MP4 or MP3)](#post-youtubetarget--youtube-video-to-mp4-or-mp3)
   - [POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}](#post-pdfmergesplitremove-pagesextract-pagesorganizescan-to-pdf)
   - [POST /pdf/{rotate,watermark,protect,unlock}](#post-pdfrotatewatermarkprotectunlock)
   - [POST /pdf/{crop,page-numbers,repair}](#post-pdfcroppage-numbersrepair)
@@ -1131,6 +1132,64 @@ refuses any request body over 100MB before nginx or this service ever see it,
 so a separate, larger ceiling here would be dead configuration — and that
 upload lands on the same tmpfs `/tmp` the document-conversion workspaces
 already share, which is RAM, not disk.
+
+### POST /youtube/{target} — YouTube video to MP4 or MP3
+
+Takes a YouTube link as JSON and starts a background job that downloads the
+video and converts it: `mp4` for the video itself, `mp3` for its audio track.
+It works the way `POST /media/{target}` does — `202` with a job id as soon as
+the link is validated, then poll and download through the same
+`/media/jobs/{id}` endpoints, sharing the same concurrency pool.
+
+```bash
+curl -X POST https://converterapi.alakbaroff.com/youtube/mp3 \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://www.youtube.com/watch?v=jNQXAC9IVRw"}'
+# {"id":"…","status":"queued","statusUrl":"/media/jobs/…"}
+
+curl https://converterapi.alakbaroff.com/media/jobs/<id>
+# {"id":"…","status":"done","target":"mp3","downloadUrl":"/media/jobs/…/download","bytes":123456}
+
+curl https://converterapi.alakbaroff.com/media/jobs/<id>/download -o "Me at the zoo.mp3"
+```
+
+**What it accepts.** Links on `youtube.com`, `www.youtube.com`,
+`m.youtube.com`, `music.youtube.com` and `youtu.be`, including the `/shorts/`,
+`/embed/` and `/live/` forms, with or without `https://`. The link is reduced to
+the one video it names: a playlist or a timestamp in it is ignored. Anything
+else is refused with `E_INVALID_FIELD` before a job is created.
+
+**Why it is not a general downloader.** The downloader is `yt-dlp`, which
+understands hundreds of sites. The service takes only the 11-character video id
+from the client's link and gives `yt-dlp` the canonical
+`https://www.youtube.com/watch?v=<id>` built from it - never the client's own
+string. That is what stops this endpoint fetching arbitrary URLs.
+
+**Failures.** A failed job reports its code on `GET /media/jobs/{id}`, and its
+download answers with the matching status:
+
+- A video that is private, removed, age-restricted, members-only or blocked in
+  this country, or a live stream that has not ended: `E_VIDEO_UNAVAILABLE` (`422`).
+- A video over `YOUTUBE_MAX_FILESIZE_BYTES` (200MB by default): `E_TOO_LARGE` (`413`).
+- Anything else `yt-dlp` reports, including YouTube refusing this server's
+  address: `E_CONVERT_FAILED` (`500`), with a "try again in a few minutes" message.
+
+**Operational notes.**
+
+- `yt-dlp` is installed with pip, not apt: Debian's package lags YouTube's
+  changes by months, and an old `yt-dlp` fails on current videos. The Dockerfile
+  installs `yt-dlp[default]` unpinned, so each image build gets the current
+  release. Rebuild regularly.
+- It needs `ffmpeg` (the same `FFMPEG_BIN` as everything else) to merge an MP4
+  and to extract an MP3, and a JavaScript runtime for YouTube's current
+  challenge solver, which is the `node` this service already runs on.
+- YouTube refuses many datacenter addresses ("Sign in to confirm you're not a
+  bot"). Jobs from such an address fail with `E_CONVERT_FAILED` until that
+  changes; this service does not carry cookies or a proxy.
+- This is HTTP only. Like the media job flow, it is not in the CLI or the library.
+- YouTube's Terms of Service restrict downloading except where YouTube provides
+  a download feature or the rights holder allows it. The converter does not
+  check rights; whether to deploy it, and for what content, is the operator's call.
 
 ### POST /pdf/{merge,split,remove-pages,extract-pages,organize,scan-to-pdf}
 
@@ -2266,7 +2325,8 @@ All configuration is environment variables read in
 | `QPDF_BIN` | `qpdf` | If not on `PATH`; needed by `/pdf/protect` and `/pdf/unlock` |
 | `PANDOC_BIN` | `pandoc` | If not on `PATH`; needed by the markup sources (`.md`/`.rst`/...) |
 | `SEVENZIP_BIN` | `7z` | If not on `PATH`; needed by the archive sources/targets |
-| `FFMPEG_BIN` | `ffmpeg` | If not on `PATH`; needed by the image-transcode targets and `/media/{target}` |
+| `FFMPEG_BIN` | `ffmpeg` | If not on `PATH`; needed by the image-transcode targets, `/media/{target}` and `/youtube/{target}` |
+| `YTDLP_BIN` | `yt-dlp` | If not on `PATH`; needed by `/youtube/{target}`. Boot refuses to start without it, like `ffmpeg` |
 | `TESSERACT_BIN` | `tesseract` | If not on `PATH`; OCR for a scanned PDF's `docx` - missing is a boot warning, not a refusal |
 | `OCR_LANGUAGES` | `eng+aze+tur+rus` | `+`-joined tesseract language codes; must match the installed `tesseract-ocr-<lang>` packages |
 | `RASTER_DPI` | `150` | Resolution of a rasterised page |
@@ -2286,6 +2346,7 @@ All configuration is environment variables read in
 | `MAX_ARCHIVE_ENTRIES` | `5000` | For the archive targets; refused with `E_CONVERT_FAILED` |
 | `MAX_ARCHIVE_UNCOMPRESSED_BYTES` | `536870912` (512MB) | For the archive targets; the decompression-bomb bound |
 | `MEDIA_MAX_UPLOAD_BYTES` | `104857600` (100MB) | `/media/{target}`'s own upload cap - defaults to the same value as `MAX_UPLOAD_BYTES`, since Cloudflare's own edge refuses any request body over 100MB regardless of what either constant allows |
+| `YOUTUBE_MAX_FILESIZE_BYTES` | `209715200` (200MB) | The largest video `/youtube/{target}` will fetch. Checked by `yt-dlp` while downloading and again on the merged file. The download and the merge both sit on the `/tmp` tmpfs in RAM - see `docker-compose.yml` before raising it |
 | `MEDIA_CONVERT_TIMEOUT_MS` | `1800000` (30 min) | How long one media job may run before `E_TIMEOUT` |
 | `MEDIA_JOB_TTL_MS` | `1800000` (30 min) | How long a finished media job's result stays downloadable |
 | `MAX_CONCURRENT_MEDIA_JOBS` | `1` | Its own pool, separate from `MAX_CONCURRENT_CONVERSIONS` |
@@ -2582,6 +2643,9 @@ The test suite is `node:test` — no test framework dependency.
 | [`test/integration.test.ts`](test/integration.test.ts) | The real HTTP contract against real conversions: a valid `.docx` returning `%PDF-`, every family in the matrix, the two-slide-to-two-PNG archive, legacy Office extensions, pandoc's markup sources, the archive engine (including malicious-archive rejection), the image-transcode engine (including the ICO size limit and the GIF-as-video edge case), oversized input, wrong extension, unsupported target, unknown target, malformed file, encrypted file, empty file, cleanup, and cancellation. |
 | [`test/archive.test.ts`](test/archive.test.ts) | `validateEntries`'s pre-extraction arithmetic directly: the entry-count and declared-size caps, path-traversal and symlink rejection, encrypted-entry detection — the same hand-built-list-not-real-multi-hundred-MB-file shape `test/tables.test.ts` uses for `readZipEntry`'s own bomb defence. |
 | [`test/media.test.ts`](test/media.test.ts) | The real `/media/{target}` job lifecycle end to end — accept, poll, download — against real audio/video ffmpeg synthesises with its own `lavfi` test sources; unknown target, unsupported extension, cross-kind and self-conversion rejection, and the `404`/`409` job-lookup cases. |
+| [`test/unit/youtube.test.ts`](test/unit/youtube.test.ts) | `/youtube/{target}`'s pure parts: which links are accepted and their canonical form, the exact argument list `yt-dlp` is run with, how a `yt-dlp` failure becomes one user-facing sentence, and the title-based download name. |
+| [`test/integration/convert/youtube.test.ts`](test/integration/convert/youtube.test.ts) | `POST /youtube/{target}` end to end against a stand-in `yt-dlp` that records its arguments: accept, poll, download, every failure code, and that a rejected link never reaches `yt-dlp`. Needs no network. |
+| [`test/integration/convert/youtube-live.test.ts`](test/integration/convert/youtube-live.test.ts) | The same endpoint against YouTube itself, with the real `yt-dlp` and `ffmpeg`. Opt-in (`YOUTUBE_LIVE_TEST=1`): it needs network access, and a failure often means `yt-dlp` is out of date. |
 | [`test/unit.test.ts`](test/unit.test.ts) | Matrix self-consistency, prototype-safe lookups, the ZIP writer and its zip-slip guard, the probe-document builders, queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
 | [`test/timeout.test.ts`](test/timeout.test.ts) | The 90s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
 | [`test/preflight.test.ts`](test/preflight.test.ts) | The boot refusal, by starting the real entry point with a broken environment — a missing `soffice`, a missing `pdftoppm`, and an unresolvable `fc-match`. |

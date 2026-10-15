@@ -151,6 +151,11 @@ function actualErrors(): Array<{ code: string; message: string }> {
     Errors.jobNotFound(),
     Errors.jobNotReady('queued'),
     Errors.jobNotReady('running'),
+    Errors.invalidField('That is not a YouTube video link.'),
+    Errors.videoUnavailable(),
+    Errors.videoLive(),
+    Errors.videoTooLarge(200 * 1024 * 1024),
+    Errors.youtubeDownloadFailed(),
   ].map((error: AppError) => error.toEnvelope().error);
 
   // The 404 uses the same code as E_BAD_REQUEST with a different sentence, so

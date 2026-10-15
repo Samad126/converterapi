@@ -15,14 +15,27 @@ import type { MediaExtension, MediaTargetId } from '../formats-media.ts';
 
 export type MediaJobStatus = 'queued' | 'running' | 'done' | 'failed';
 
+/**
+ * Where a job's input comes from: a file the client uploaded to `/media/{target}`,
+ * or a YouTube video `/youtube/{target}` will download. Only the job runner
+ * ever reads this; neither shape is exposed to a client.
+ */
+export type MediaJobSource =
+  | { readonly kind: 'upload'; readonly extension: MediaExtension }
+  | { readonly kind: 'youtube'; readonly videoId: string; readonly url: string };
+
 export interface MediaJob {
   readonly id: string;
   status: MediaJobStatus;
-  readonly sourceExtension: MediaExtension;
+  readonly source: MediaJobSource;
   readonly target: MediaTargetId;
   readonly workspace: string;
-  /** The name offered back on download - the upload's own name, target extension swapped in. */
-  readonly downloadName: string;
+  /**
+   * The name offered back on download. For an upload, the upload's own name with
+   * the target extension swapped in. For a YouTube job it starts as the video id
+   * and is replaced with the video's title once the download has finished.
+   */
+  downloadName: string;
   resultPath?: string;
   bytes?: number;
   error?: ErrorEnvelope['error'];

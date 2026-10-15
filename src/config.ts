@@ -121,6 +121,14 @@ export const PANDOC_BIN = process.env.PANDOC_BIN ?? 'pandoc';
 export const FFMPEG_BIN = process.env.FFMPEG_BIN ?? 'ffmpeg';
 
 /**
+ * The YouTube downloader behind `POST /youtube/{target}` - see
+ * `engines/ytdlp.engine.ts`. Installed with pip, not apt: Debian's own package
+ * lags YouTube's changes by months, and an out-of-date yt-dlp fails on current
+ * videos in ways that look like a bug in this service.
+ */
+export const YTDLP_BIN = process.env.YTDLP_BIN ?? 'yt-dlp';
+
+/**
  * The `.heic`/`.heif` engine - a sixth conversion engine, running
  * `libheif`'s own `heif-convert`/`heif-enc` CLIs (Debian package:
  * `libheif-examples`) as subprocesses, exactly like `ffmpeg` above but for
@@ -435,6 +443,18 @@ export const MAX_CONCURRENT_MEDIA_JOBS = intFromEnv('MAX_CONCURRENT_MEDIA_JOBS',
 
 /** How many media jobs may sit queued before `POST /media/{target}` answers 503. */
 export const MAX_QUEUED_MEDIA_JOBS = intFromEnv('MAX_QUEUED_MEDIA_JOBS', 4, 0);
+
+/**
+ * The largest YouTube video `POST /youtube/{target}` will fetch, in bytes.
+ *
+ * Enforced twice: `yt-dlp` aborts once a stream passes it, and the finished
+ * file is checked against it again, because the video and audio streams are
+ * each under the limit but are merged into one file that can be larger. Both
+ * the download and the merge land on the `/tmp` tmpfs in RAM, so this is
+ * sized against that budget - see docker-compose.yml's `/tmp` and `mem_limit`
+ * notes before raising it.
+ */
+export const YOUTUBE_MAX_FILESIZE_BYTES = intFromEnv('YOUTUBE_MAX_FILESIZE_BYTES', 200 * MB, 1024);
 
 /**
  * The page-manipulation endpoints (`/pdf/merge`, `/pdf/split`, `/pdf/

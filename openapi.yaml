@@ -305,6 +305,90 @@ paths:
         '504':
           $ref: '#/components/responses/Timeout'
 
+  /youtube/{target}:
+    post:
+      tags: [media]
+      operationId: convertYouTubeToFormat
+      summary: Start a job that downloads a YouTube video as MP4 or MP3
+      description: |
+        Takes a YouTube video link as JSON and starts a background job that
+        downloads the video and produces `target` - `mp4` for the video itself,
+        or `mp3` for its audio track. It answers `202` with a job id as soon as
+        the link is validated and does NOT wait for the download.
+
+        The job is then polled and downloaded through the SAME
+        `GET /media/jobs/{id}` and `GET /media/jobs/{id}/download` endpoints a
+        `POST /media/{target}` upload uses, and it shares that endpoint family's
+        one concurrency pool.
+
+        Only `youtube.com`, `www.youtube.com`, `m.youtube.com`,
+        `music.youtube.com` and `youtu.be` links are accepted, including the
+        `/shorts/`, `/embed/` and `/live/` paths. A link is reduced to the one
+        video it names: a playlist or a timestamp in it is ignored.
+
+        A video that may not be fetched - private, removed, age-restricted,
+        members-only, or blocked in this country - and a live stream that has
+        not ended both fail the job with `E_VIDEO_UNAVAILABLE`. A video larger
+        than `YOUTUBE_MAX_FILESIZE_BYTES` (200MB by default) fails with
+        `E_TOO_LARGE`. The downloaded file is named after the video's title.
+      parameters:
+        - name: target
+          in: path
+          required: true
+          description: '`mp4` or `mp3`. Case-sensitive.'
+          schema:
+            type: string
+            enum: [mp4, mp3]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeRequest'
+      responses:
+        '202':
+          description: The job was accepted and is now queued or running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaJobAccepted'
+        '400':
+          description: |
+            The body was not JSON carrying a `url`, or the `url` is not a link to
+            a YouTube video.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                notAYouTubeLink:
+                  summary: The URL is not a YouTube video link.
+                  value:
+                    error:
+                      code: E_INVALID_FIELD
+                      message: That is not a YouTube video link.
+                badBody:
+                  summary: The body was not JSON with a url.
+                  value:
+                    error:
+                      code: E_INVALID_FIELD
+                      message: 'Send the link as JSON, like {"url": "https://www.youtube.com/watch?v=..."}.'
+        '404':
+          description: |
+            `target` is neither `mp4` nor `mp3`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                error:
+                  code: E_UNKNOWN_TARGET
+                  message: YouTube videos can only be converted to MP4 or MP3.
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Busy'
+
   /pdf/merge:
     post:
       tags: [pages]
@@ -1847,6 +1931,17 @@ components:
           type: string
           description: Always `/media/jobs/{id}`, given back so a client does not have to build it itself.
 
+    YouTubeRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: |
+            A YouTube video link - `youtube.com/watch?v=`, `youtu.be/`, or the
+            `/shorts/`, `/embed/` or `/live/` form. Anything else is refused.
+          example: https://www.youtube.com/watch?v=jNQXAC9IVRw
+
     MediaJobStatus:
       type: object
       required: [id, status, target]
@@ -1904,6 +1999,7 @@ components:
         - E_INTERNAL
         - E_JOB_NOT_FOUND
         - E_JOB_NOT_READY
+        - E_VIDEO_UNAVAILABLE
 
     ErrorEnvelope:
       type: object
