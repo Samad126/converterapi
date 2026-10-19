@@ -1,6 +1,6 @@
 {
   "name": "any-file-converter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "File converter for Node.js and the command line: convert documents, spreadsheets, presentations, images, audio, video, ebooks, archives, data files and PDFs (docx to pdf, heic to jpg, mp4 to mp3, ...). Library, CLI and HTTP API.",
   "license": "MIT",
   "type": "module",

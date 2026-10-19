@@ -1674,6 +1674,8 @@ Android-specific numbers, not a promise made to the web app).
 > **broken client** until that client is updated to post to `/convert/pdf`.
 > Nothing else in the list below changed.
 
+> **Breaking change in 3.0.0: `POST /convert/{target}` takes its file under `files`.** The single-file field `file` that 2.0.0 documented is no longer accepted, and a client still sending it receives a `400`. The response rules below are unchanged.
+
 1. **Success is `Content-Type: application/pdf` for a `pdf` target.** The client
    checks it and refuses anything else, so a stray `text/html` on a `200` is a
    client-visible failure.

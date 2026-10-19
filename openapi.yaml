@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: Universal file converter
-  version: 2.0.0
+  version: 3.0.0
   summary: Converts documents, spreadsheets, presentations and images using LibreOffice headless.
   description: |
     Uploads a file and receives it converted to another format.
@@ -20,6 +20,12 @@ info:
     > **Breaking change: `POST /convert` without a target no longer exists.**
     > Clients must post to `/convert/pdf`. A client still using the bare path
     > gets the catch-all `404`, whose message tells the user to update the app.
+
+    > **Breaking change in 3.0.0: `POST /convert/{target}` takes its file under `files`.**
+    > The single-file field `file` that 2.0.0 documented is no longer accepted,
+    > and a client still sending it receives a `400`. Every file is one `files`
+    > part, whether the request carries one file or several. The response rules
+    > below are unchanged.
 
     - **Success is `200` with the target's own media type.** For `pdf` that is
       exactly `application/pdf`, with no charset suffix: the client compares the
