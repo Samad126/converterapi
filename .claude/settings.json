@@ -1,0 +1,42 @@
+{
+    "permissions": {
+        "allow": [
+            "Bash(npm run typecheck)",
+            "Bash(npm run build)",
+            "Bash(npm test)",
+            "Bash(npx tsc --noEmit)"
+        ],
+        "deny": [
+            "Read(./.env)"
+        ]
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-generated.mjs\""
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/typecheck.mjs\"",
+                        "timeout": 120
+                    },
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/formats-reminder.mjs\""
+                    }
+                ]
+            }
+        ]
+    }
+}
