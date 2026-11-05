@@ -33,7 +33,7 @@ const {
   sweepStaleWorkspaces,
   inputFileNameFor,
 } = await import('../../src/services/workspace.service.ts');
-const { zipStored, safeEntryName } = await import('../../src/lib/zip.ts');
+const { zipStored, zipStoredParts, safeEntryName } = await import('../../src/lib/zip.ts');
 const { EXTRACT_TARGET_IDS } = await import('../../src/pipelines/conversion.pipeline.ts');
 const { decodeUploadName, downloadNameFor, contentDispositionFor } = await import(
   '../../src/lib/download-name.ts'
@@ -68,6 +68,23 @@ describe('zip writer', () => {
     assert.ok(archive.subarray(-22).readUInt32LE(0) === 0x06054b50);
     assert.ok(archive.includes(Buffer.from('slide-1.png')));
     assert.ok(archive.includes(Buffer.from('slide-2.png')));
+  });
+
+  it('writes the same bytes piece by piece as it does joined', () => {
+    // The HTTP responses write zipStoredParts' pieces one by one instead of
+    // joining them, to avoid an archive-sized copy. The client must receive
+    // exactly what zipStored produced before, and Content-Length must match.
+    const entries = [
+      { name: 'slide-1.png', data: Buffer.from('one') },
+      { name: 'ünïcode/slide-2.png', data: Buffer.alloc(70_000, 0x42) },
+      { name: 'empty.txt', data: Buffer.alloc(0) },
+    ];
+    const { parts, length } = zipStoredParts(entries);
+    const joined = Buffer.concat(parts);
+    assert.deepEqual(joined, zipStored(entries));
+    assert.equal(length, joined.length);
+    // STORED payloads are the caller's own buffers, not copies.
+    assert.ok(parts.includes(entries[1]!.data));
   });
 
   it('refuses to write a name that could escape on unpack', () => {

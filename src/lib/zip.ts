@@ -62,7 +62,21 @@ const METHOD_DEFLATE = 8;
 const DEFLATE_LEVEL = 6;
 
 export function zipStored(entries: readonly ZipEntry[]): Buffer {
-  return buildZip(entries, METHOD_STORED);
+  return Buffer.concat(buildZip(entries, METHOD_STORED));
+}
+
+/**
+ * `zipStored`'s archive as its pieces, in order, without joining them.
+ *
+ * For writing straight to an HTTP response. Joining copies every output into
+ * one new buffer the size of the whole archive, so a 100-page raster briefly
+ * held its images twice. A STORED entry's payload piece IS the caller's own
+ * buffer, so the pieces cost almost nothing on top of the data the caller
+ * already has. Concatenated, the pieces are byte-for-byte `zipStored`'s output.
+ */
+export function zipStoredParts(entries: readonly ZipEntry[]): { parts: Buffer[]; length: number } {
+  const parts = buildZip(entries, METHOD_STORED);
+  return { parts, length: parts.reduce((total, part) => total + part.length, 0) };
 }
 
 /**
@@ -74,10 +88,10 @@ export function zipStored(entries: readonly ZipEntry[]): Buffer {
  * nothing and cost CPU for it.
  */
 export function zipDeflated(entries: readonly ZipEntry[]): Buffer {
-  return buildZip(entries, METHOD_DEFLATE);
+  return Buffer.concat(buildZip(entries, METHOD_DEFLATE));
 }
 
-function buildZip(entries: readonly ZipEntry[], method: number): Buffer {
+function buildZip(entries: readonly ZipEntry[], method: number): Buffer[] {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let offset = 0;
@@ -139,5 +153,5 @@ function buildZip(entries: readonly ZipEntry[], method: number): Buffer {
   end.writeUInt32LE(offset, 16); // offset of central directory
   end.writeUInt16LE(0, 20); // comment length
 
-  return Buffer.concat([...localParts, central, end]);
+  return [...localParts, central, end];
 }

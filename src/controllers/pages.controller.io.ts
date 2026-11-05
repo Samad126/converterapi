@@ -11,7 +11,7 @@ import { MAX_PAGE_OPERATION_TOTAL_BYTES } from '../config.ts';
 import { AppError, ClientGoneError, Errors } from '../errors.ts';
 import { contentDispositionFor } from '../lib/download-name.ts';
 import { isPasswordProtected } from '../lib/encrypted.ts';
-import { zipStored } from '../lib/zip.ts';
+import { zipStoredParts } from '../lib/zip.ts';
 import type { ProcessOutcome } from '../engines/soffice.engine.ts';
 
 export interface PagesResult {
@@ -133,11 +133,15 @@ export async function assertUploadsUsable(
 /** Send a `PagesResult` the same way `convert.controller.ts` sends a conversion's. */
 export function sendPagesResult(res: Response, result: PagesResult): void {
   if (result.archive) {
-    const archive = zipStored(result.files);
+    // Written piece by piece rather than joined first: joining would copy
+    // every output into a second, archive-sized buffer. Same bytes either way.
+    const { parts, length } = zipStoredParts(result.files);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', contentDispositionFor(result.downloadName));
-    res.setHeader('Content-Length', String(archive.length));
-    res.status(200).end(archive);
+    res.setHeader('Content-Length', String(length));
+    res.status(200);
+    for (const part of parts.slice(0, -1)) res.write(part);
+    res.end(parts[parts.length - 1]);
     return;
   }
 

@@ -41,7 +41,7 @@ import { MAX_CONVERT_TOTAL_BYTES } from '../config.ts';
 import { AppError, ClientGoneError, Errors } from '../errors.ts';
 import { contentDispositionFor, downloadNameFor } from '../lib/download-name.ts';
 import { BoundedQueue, RateLimiter } from '../lib/queue.ts';
-import { zipStored, type ZipEntry } from '../lib/zip.ts';
+import { zipStoredParts, type ZipEntry } from '../lib/zip.ts';
 import { convert, type ConversionResult } from '../pipelines/conversion.pipeline.ts';
 import { createWorkspace } from '../services/workspace.service.ts';
 import { cleanup, getContext, logRequest, type RequestContext } from '../middleware/request-context.ts';
@@ -266,11 +266,15 @@ export function createConvertController(deps: ConvertControllerDeps): ConvertCon
 
       await cleanup(ctx);
 
-      const archive = zipStored(entries);
+      // Written piece by piece rather than joined first: joining would copy
+      // every output into a second, archive-sized buffer. Same bytes either way.
+      const { parts, length } = zipStoredParts(entries);
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', contentDispositionFor('converted-files.zip'));
-      res.setHeader('Content-Length', String(archive.length));
-      res.status(200).end(archive);
+      res.setHeader('Content-Length', String(length));
+      res.status(200);
+      for (const part of parts.slice(0, -1)) res.write(part);
+      res.end(parts[parts.length - 1]);
       logRequest(ctx, 'ok', { status: 200 });
     } catch (error) {
       if (error instanceof ClientGoneError) {
@@ -334,11 +338,15 @@ function sendResult(
     // The entry names inside the archive come from the conversion service -
     // `slide-1.png`, `slide-2.png` - because those describe the pages. The
     // archive's own name is the download name, derived from the upload.
-    const archive = zipStored(result.files);
+    // Written piece by piece rather than joined first: joining would copy
+    // every output into a second, archive-sized buffer. Same bytes either way.
+    const { parts, length } = zipStoredParts(result.files);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', contentDispositionFor(downloadName));
-    res.setHeader('Content-Length', String(archive.length));
-    res.status(200).end(archive);
+    res.setHeader('Content-Length', String(length));
+    res.status(200);
+    for (const part of parts.slice(0, -1)) res.write(part);
+    res.end(parts[parts.length - 1]);
     return;
   }
 
