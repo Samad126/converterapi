@@ -9,7 +9,7 @@
 # ---------------------------------------------------------------------------
 # Build stage
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim@sha256:2f0e17f8955e766e776ae16d3ac47519ca3edf47c07e5c1423527926fdd5d568 AS build
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS build
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN npm run build \
 # ---------------------------------------------------------------------------
 # Runtime stage
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim@sha256:2f0e17f8955e766e776ae16d3ac47519ca3edf47c07e5c1423527926fdd5d568 AS runtime
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS runtime
 
 # LibreOffice headless is the conversion engine.
 #
