@@ -2294,7 +2294,7 @@ a workspace touched between the check and the delete is left alone.
 | Container memory | 3 GB | `docker-compose.yml` (`mem_limit`/`memswap_limit`, raised from 1g/1g for `/media/{target}`) |
 | Container CPUs | 2 | `docker-compose.yml` |
 | Container PIDs | 256 | `docker-compose.yml` |
-| tmpfs for workspaces | 2 GB | `docker-compose.yml` |
+| Workspaces (`/tmp`) | disk-backed named volume `converter-tmp` (was a 2 GB tmpfs, which counted against `mem_limit`) | `docker-compose.yml` |
 
 **Sizing note.** `MAX_CONCURRENT_CONVERSIONS × typical soffice memory` must stay
 under the container's `mem_limit`, or the kernel OOM-kills `soffice` mid-run and
@@ -2414,8 +2414,11 @@ will be compromised, and it should be worth very little":
 
 - **Unprivileged.** Runs as uid 1000; refuses to boot as root.
 - **No capabilities.** `cap_drop: ALL`, `no-new-privileges`.
-- **Read-only root filesystem.** `/tmp` is the only writable path, and it is a
-  size-capped tmpfs.
+- **Read-only root filesystem.** `/tmp` is the only writable path, a
+  disk-backed named volume. It is not size-capped the way the old tmpfs was;
+  what bounds it is the app itself - queue capacity is checked before a byte
+  of an upload is read, every upload and archive expansion has a size limit,
+  and stale workspaces are swept.
 - **Seccomp.** Docker's default profile, tightened with additional denials for
   `ptrace`, `process_vm_readv/writev`, `userfaultfd`, `io_uring_*`, `bpf`,
   `perf_event_open`, kernel module and mount syscalls, and the kernel keyring —

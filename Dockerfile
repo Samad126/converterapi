@@ -1,12 +1,20 @@
+# syntax=docker/dockerfile:1
+
+# The base image is pinned by digest, not just the tag. `node:22-bookworm-slim`
+# is republished upstream every few weeks, and each time the tag moves every
+# layer below it is invalidated - including the ~2GB LibreOffice/Calibre layer,
+# which then rebuilds from scratch. Dependabot (.github/dependabot.yml) proposes
+# digest bumps as PRs, so updates are deliberate instead of a surprise.
+
 # ---------------------------------------------------------------------------
 # Build stage
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim@sha256:2f0e17f8955e766e776ae16d3ac47519ca3edf47c07e5c1423527926fdd5d568 AS build
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -16,7 +24,7 @@ RUN npm run build \
 # ---------------------------------------------------------------------------
 # Runtime stage
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-bookworm-slim@sha256:2f0e17f8955e766e776ae16d3ac47519ca3edf47c07e5c1423527926fdd5d568 AS runtime
 
 # LibreOffice headless is the conversion engine.
 #
@@ -233,6 +241,15 @@ FROM node:22-bookworm-slim AS runtime
 # case and one ffmpeg case) before it listens - so a missing module fails
 # loudly at startup rather than on some user's first spreadsheet, days
 # later.
+#
+# The install is split into THREE layers - the same packages as one big RUN,
+# nothing added or removed. One layer meant any edit (say, a new pip package)
+# re-downloaded and re-installed ~2GB of apt packages. Split, a change only
+# rebuilds its own layer and the ones after it, and the registry pull on the
+# server fetches the layers in parallel. Ordered from least to most often
+# changed.
+
+# Layer 1: LibreOffice, fonts and the small CLI engines.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer \
@@ -256,15 +273,26 @@ RUN apt-get update \
       libheif-examples \
       zstd \
       assimp-utils \
-      calibre \
       python3-fonttools \
+ && fc-cache -f \
+ && rm -rf /var/lib/apt/lists/*
+
+# Layer 2: the two heaviest additions, Calibre (~489MB) and Tesseract OCR.
+# fc-cache runs again because Calibre ships fonts of its own.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      calibre \
       tesseract-ocr \
       tesseract-ocr-eng \
       tesseract-ocr-aze \
       tesseract-ocr-tur \
       tesseract-ocr-rus \
  && fc-cache -f \
- && pip3 install --no-cache-dir --break-system-packages --ignore-installed \
+ && rm -rf /var/lib/apt/lists/*
+
+# Layer 3: the Python engines. After the apt layers, as before, so
+# `--ignore-installed` still wins over any Debian-packaged copy.
+RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed \
       pdf2docx \
       pdfplumber \
       python-pptx \
@@ -272,10 +300,15 @@ RUN apt-get update \
       python-docx \
       ocrmypdf \
       pyarrow \
-      "yt-dlp[default]" \
- && rm -rf /var/lib/apt/lists/*
+      "yt-dlp[default]"
 
+# MALLOC_ARENA_MAX caps glibc's per-thread malloc arenas. The default (8 per
+# core) lets Node's libuv threads and the Python/soffice children each grow
+# their own arenas, so freed memory stays reserved and RSS creeps up. 2 is the
+# common setting for containers. It changes how much is held, not what any
+# engine can do.
 ENV NODE_ENV=production \
+    MALLOC_ARENA_MAX=2 \
     PORT=3001 \
     HOST=0.0.0.0 \
     TEMP_ROOT=/tmp/converterapi \

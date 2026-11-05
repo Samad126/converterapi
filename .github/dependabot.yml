@@ -1,0 +1,13 @@
+# Base images in the Dockerfile are pinned by digest so the build cache stays
+# valid. Dependabot proposes digest bumps (security patches) as PRs, so an
+# update is a deliberate merge rather than a surprise cache miss mid-deploy.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

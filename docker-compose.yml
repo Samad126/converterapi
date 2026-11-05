@@ -14,8 +14,13 @@
 
 services:
   converterapi:
+    # The deploy pulls a prebuilt image from GHCR (built by the GitHub Actions
+    # workflow), so nothing is compiled on the server. IMAGE_TAG is the commit
+    # SHA the workflow deploys; roll back by setting it to an older one.
+    # `build:` stays so `docker compose up --build` still works locally - it
+    # builds and tags the same name.
     build: .
-    image: converterapi
+    image: ghcr.io/samad126/converterapi:${IMAGE_TAG:-latest}
     restart: unless-stopped
 
     # --- How your proxy reaches it ------------------------------------------
@@ -94,9 +99,18 @@ services:
     # comment in config.ts for why it is not nested under TEMP_ROOT itself).
     # 2g leaves room for a 500MB upload plus its converted output alongside
     # the document-conversion workspaces this size was already covering.
+    #
+    # /tmp is a disk-backed named volume, NOT a tmpfs. It used to be a 2g
+    # tmpfs, and tmpfs is RAM: every upload, LibreOffice profile, output and
+    # finished media result sitting there counted against mem_limit above, so
+    # a 500MB video upload alone took 500MB of the container's memory. On disk
+    # it costs nothing in RAM; the per-request cleanup and the stale-workspace
+    # sweeps delete files exactly as before, and the paths are unchanged.
+    # A new named volume copies the image's /tmp (mode 1777), so uid 1000 can
+    # write to it with no extra setup.
     read_only: true
-    tmpfs:
-      - /tmp:size=2g,mode=1777
+    volumes:
+      - converter-tmp:/tmp
 
     # --- Privileges ---------------------------------------------------------
     # soffice parses untrusted documents, and that parser is the entire attack
@@ -162,3 +176,7 @@ networks:
   # The trade-off is real: the container can now reach the internet. See
   # README "Network egress" for how to get that property back.
   backend:
+
+volumes:
+  # Scratch space for /tmp - see "Filesystem" above.
+  converter-tmp:
