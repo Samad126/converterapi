@@ -151,6 +151,8 @@ export type AllowedExtension =
   | '.png'
   | '.jpg'
   | '.jpeg'
+  | '.jpe'
+  | '.jfif'
   | '.psd'
   | '.pdf'
   | '.md'
@@ -175,6 +177,7 @@ export type AllowedExtension =
   | '.bmp'
   | '.gif'
   | '.tiff'
+  | '.tif'
   | '.webp'
   | '.avif'
   | '.ico'
@@ -1895,6 +1898,28 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     // `.jpg` out) rather than a source becoming its own literal extension.
     targets: ['pdf', 'svg', 'emf', 'wmf', 'eps', ...TRANSCODE_TARGETS, ...HEIF_TARGETS],
   },
+  '.jpe': {
+    extension: '.jpe',
+    family: 'draw',
+    mediaType: 'image/jpeg',
+    importFilter: 'draw_jpg_Import',
+    // Alternate spelling of `.jpeg`, same targets. `.jpeg` keeps `jpg-image` in its list, unlike `.jpg` above: the two
+    // extensions are the same format, but `.jpeg` -> `jpg-image` is a real
+    // normalising conversion (a different spelling of the extension in, a
+    // `.jpg` out) rather than a source becoming its own literal extension.
+    targets: ['pdf', 'svg', 'emf', 'wmf', 'eps', ...TRANSCODE_TARGETS, ...HEIF_TARGETS],
+  },
+  '.jfif': {
+    extension: '.jfif',
+    family: 'draw',
+    mediaType: 'image/jpeg',
+    importFilter: 'draw_jpg_Import',
+    // Alternate spelling of `.jpeg`, same targets. `.jpeg` keeps `jpg-image` in its list, unlike `.jpg` above: the two
+    // extensions are the same format, but `.jpeg` -> `jpg-image` is a real
+    // normalising conversion (a different spelling of the extension in, a
+    // `.jpg` out) rather than a source becoming its own literal extension.
+    targets: ['pdf', 'svg', 'emf', 'wmf', 'eps', ...TRANSCODE_TARGETS, ...HEIF_TARGETS],
+  },
   '.psd': {
     extension: '.psd',
     mediaType: 'image/vnd.adobe.photoshop',
@@ -2080,6 +2105,12 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     extension: '.tiff',
     mediaType: 'image/tiff',
     targets: [...TRANSCODE_TARGETS.filter((id) => id !== 'tiff'), ...HEIF_TARGETS],
+  },
+  // Alternate spelling of `.tiff`; converting to `tiff` is a real normalisation.
+  '.tif': {
+    extension: '.tif',
+    mediaType: 'image/tiff',
+    targets: [...TRANSCODE_TARGETS, ...HEIF_TARGETS],
   },
   '.webp': {
     extension: '.webp',

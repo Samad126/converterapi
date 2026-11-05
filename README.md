@@ -96,7 +96,7 @@ implemented in [`src/formats.ts`](src/formats.ts) and served at
 | `.txt` | PDF, DOCX, ODT, HTML, RTF, EPUB |
 | `.html` `.htm` | PDF, DOCX, ODT, TXT, RTF, EPUB |
 | `.rtf` | DOCX, PDF, ODT, TXT, HTML, EPUB |
-| `.png` `.jpg` `.jpeg` | PDF, SVG, EMF, WMF, EPS, HEIC, HEIF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG/PNG (image)/JPG (image) (see below) |
+| `.png` `.jpg` `.jpeg` `.jpe` `.jfif` | PDF, SVG, EMF, WMF, EPS, HEIC, HEIF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG/PNG (image)/JPG (image) (see below) |
 | `.psd` | PNG (one image per layer) |
 | `.pdf` | PDF/A, PNG/JPG (one image per page), SVG, EMF, WMF, EPS, DOCX/PPTX/XLSX/Markdown (see below) |
 | `.svg` | PDF, EMF, WMF, EPS, HEIC, HEIF, plus BMP/GIF/TIFF/WEBP/AVIF/ICO/JXL/JP2/QOI/TGA/PCX/APNG/PNG (image)/JPG (image) (LibreOffice opens an SVG as a Draw document for PDF/SVG/EMF/WMF/EPS; `ffmpeg`'s own `librsvg` decoder reads it directly for the rest) |
