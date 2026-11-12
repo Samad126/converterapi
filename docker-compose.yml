@@ -128,6 +128,12 @@ services:
       MAX_CONCURRENT_CONVERSIONS: '2'
       MAX_QUEUED_CONVERSIONS: '8'
       CONVERT_TIMEOUT_MS: '180000'
+      # Async jobs (POST /convert/{target}/jobs) hold no client connection, so
+      # one file may convert far longer than the synchronous 180s. The stale
+      # workspace sweep must stay well above this, or it could delete the
+      # workspace of a job that is merely slow or waiting for a slot.
+      CONVERT_JOB_TIMEOUT_MS: '900000'
+      STALE_WORKSPACE_MS: '2400000'
       RATE_LIMIT_MAX: '30'
       RATE_LIMIT_WINDOW_MS: '60000'
       # One proxy hop. Your proxy sets X-Forwarded-For; without this every
