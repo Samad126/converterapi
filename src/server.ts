@@ -76,9 +76,9 @@ export async function startServer(port = PORT): Promise<StartedServer> {
   const app = createApp();
   const server = createServer(app);
 
-  // The client aborts at 120s. Anything still trickling in after that is
+  // The client aborts at 240s. Anything still trickling in after that is
   // already a lost cause, so let the socket go rather than hold it forever.
-  server.requestTimeout = 120_000;
+  server.requestTimeout = 240_000;
   server.headersTimeout = 60_000;
 
   await new Promise<void>((resolve) => server.listen(port, HOST, resolve));

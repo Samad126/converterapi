@@ -127,7 +127,7 @@ services:
       TEMP_ROOT: /tmp/converterapi
       MAX_CONCURRENT_CONVERSIONS: '2'
       MAX_QUEUED_CONVERSIONS: '8'
-      CONVERT_TIMEOUT_MS: '90000'
+      CONVERT_TIMEOUT_MS: '180000'
       RATE_LIMIT_MAX: '30'
       RATE_LIMIT_WINDOW_MS: '60000'
       # One proxy hop. Your proxy sets X-Forwarded-For; without this every

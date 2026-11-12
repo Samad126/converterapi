@@ -44,7 +44,7 @@ export const MAX_UPLOAD_BYTES = 100 * MB;
 /**
  * Our own conversion deadline.
  *
- * The client aborts the whole request after 120s. Our deadline has to be
+ * The client aborts the whole request after 240s. Our deadline has to be
  * comfortably shorter than that, otherwise we get killed mid-conversion and the
  * client shows "HTTP <status>" (or a network error) instead of the sentence we
  * wanted to show.
@@ -53,7 +53,7 @@ export const MAX_UPLOAD_BYTES = 100 * MB;
  * second step a PNG/JPG request needs, because it is the client's patience it
  * has to stay inside - not soffice's.
  */
-export const CONVERT_TIMEOUT_MS = intFromEnv('CONVERT_TIMEOUT_MS', 90_000, 1_000);
+export const CONVERT_TIMEOUT_MS = intFromEnv('CONVERT_TIMEOUT_MS', 180_000, 1_000);
 
 /** How long a soffice process gets to die on SIGTERM before we SIGKILL it. */
 export const SIGKILL_GRACE_MS = intFromEnv('SIGKILL_GRACE_MS', 5_000, 100);
