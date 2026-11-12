@@ -23,6 +23,13 @@ services:
     image: ghcr.io/samad126/converterapi:${IMAGE_TAG:-latest}
     restart: unless-stopped
 
+    # tini as PID 1. soffice spawns gpg/gpgsm/gpgconf helpers that outlive it
+    # and get reparented to PID 1; node never reaps them, so without this every
+    # conversion leaks ~5 zombie PIDs and pids_limit (256) is exhausted after
+    # ~50 conversions - every later conversion then fails with a 500 while
+    # /health stays green. Found by load test; with init, PIDs stay flat.
+    init: true
+
     # --- How your proxy reaches it ------------------------------------------
     # Published on LOOPBACK ONLY, so a reverse proxy running on this host can
     # reach it and nothing else can - not the LAN, not the internet.
@@ -69,7 +76,7 @@ services:
     # directly: a real 6MB, 10-page PDF OOM-killed the WHOLE CONTAINER under
     # this same 1g limit with OCRmyPDF's own defaults. pdf_engine.py pins
     # `output_type='pdf'`, `optimize=0` and `jobs=1` on every OCR call for
-    # exactly this reason - see the README's "PDF as a source" section. If
+    # exactly this reason - see docs/REFERENCE.md "PDF as a source". If
     # this limit is lowered, or OCR_LANGUAGES is given many more languages,
     # re-verify against a real multi-page scan before trusting it in
     # production.
@@ -180,7 +187,7 @@ networks:
   # published port wins and the network stays a plain bridge.
   #
   # The trade-off is real: the container can now reach the internet. See
-  # README "Network egress" for how to get that property back.
+  # docs/REFERENCE.md "Network egress" for how to get that property back.
   backend:
 
 volumes:
