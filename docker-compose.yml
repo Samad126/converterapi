@@ -93,7 +93,10 @@ services:
     # same way the OCR note above asks for the document-conversion budget.
     mem_limit: 3g
     memswap_limit: 3g
-    cpus: 2
+    # 3 of the production host's 4 cores (Xeon E5620, 7.8GB), leaving one for
+    # nginx, the database and the other apps. Concurrency matches: CPU is the
+    # bottleneck (~220MB per conversion, so 3 fits easily under mem_limit).
+    cpus: 3
     pids_limit: 256
 
     # --- Filesystem ---------------------------------------------------------
@@ -132,7 +135,7 @@ services:
 
     environment:
       TEMP_ROOT: /tmp/converterapi
-      MAX_CONCURRENT_CONVERSIONS: '2'
+      MAX_CONCURRENT_CONVERSIONS: '3'
       MAX_QUEUED_CONVERSIONS: '8'
       CONVERT_TIMEOUT_MS: '180000'
       # Async jobs (POST /convert/{target}/jobs) hold no client connection, so
