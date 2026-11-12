@@ -43,5 +43,18 @@ export function createConvertRouter(deps: ConvertControllerDeps): Router {
     controller.handle,
   );
 
+  // The same conversion without the wait inside one request - see
+  // `jobs/convert-jobs.service.ts`. `/convert/{target}` above is untouched.
+  router.post(
+    '/convert/:target/jobs',
+    controller.admit,
+    controller.validateTarget,
+    controller.prepareWorkspace,
+    upload,
+    controller.handleJob,
+  );
+  router.get('/convert/jobs/:id', controller.jobStatus);
+  router.get('/convert/jobs/:id/download', controller.jobDownload);
+
   return router;
 }

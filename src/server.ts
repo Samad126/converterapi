@@ -15,6 +15,7 @@ import { createApp } from './app.ts';
 import { HOST, PORT, SKIP_WARMUP, SWEEP_INTERVAL_MS } from './config.ts';
 import { PreflightError } from './errors.ts';
 import { sweepMediaJobs, sweepOrphanedMediaWorkspaces } from './jobs/media-jobs.service.ts';
+import { sweepConvertJobs } from './jobs/convert-jobs.service.ts';
 import { preflight, warmUp } from './services/preflight.service.ts';
 import { sweepStaleWorkspaces } from './services/workspace.service.ts';
 
@@ -61,6 +62,9 @@ export async function startServer(port = PORT): Promise<StartedServer> {
   const sweepTimer = setInterval(() => {
     void sweepStaleWorkspaces().then((count) => {
       if (count > 0) console.log(JSON.stringify({ outcome: 'swept_stale_workspaces', count }));
+    });
+    void sweepConvertJobs().then((count) => {
+      if (count > 0) console.log(JSON.stringify({ outcome: 'swept_convert_jobs', count }));
     });
     void sweepMediaJobs().then((count) => {
       if (count > 0) console.log(JSON.stringify({ outcome: 'swept_media_jobs', count }));

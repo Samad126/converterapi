@@ -88,16 +88,22 @@ export interface ConvertOptions {
    * Defaults to true. Ignored by every other pair - see `PdfEngineRun.ocr`.
    */
   ocr?: boolean;
+  /**
+   * Overrides `CONVERT_TIMEOUT_MS` for this one conversion. Only the async job
+   * endpoint passes it: nothing there is holding a live client connection
+   * open, so the 180s that protects one is not the right budget.
+   */
+  timeoutMs?: number;
 }
 
 export async function convert(options: ConvertOptions): Promise<ConversionResult> {
-  const { workspace, conversion, signal, ocr } = options;
+  const { workspace, conversion, signal, ocr, timeoutMs } = options;
   const { source, target } = conversion;
 
   const inputPath = join(workspace, inputFileNameFor(source.extension));
   const outDir = join(workspace, OUTPUT_DIRNAME);
   const profileDir = join(workspace, PROFILE_DIRNAME);
-  const deadline = Date.now() + CONVERT_TIMEOUT_MS;
+  const deadline = Date.now() + (timeoutMs ?? CONVERT_TIMEOUT_MS);
 
   if (signal?.aborted) throw signal.reason ?? new ClientGoneError();
 
@@ -117,7 +123,15 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
       case 'pdf-engine':
         return runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline, ocr });
       case 'pandoc':
-        return runPandocPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+        return runPandocPipeline({
+          inputPath,
+          outDir,
+          workspace,
+          profileDir,
+          target,
+          signal,
+          deadline,
+        });
       case 'extract':
         return runExtractPipeline({ inputPath, target, signal, deadline });
       case 'data':

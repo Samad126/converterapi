@@ -55,6 +55,21 @@ export const MAX_UPLOAD_BYTES = 100 * MB;
  */
 export const CONVERT_TIMEOUT_MS = intFromEnv('CONVERT_TIMEOUT_MS', 180_000, 1_000);
 
+/**
+ * How long ONE file of an async `/convert/{target}/jobs` request may convert.
+ * Longer than `CONVERT_TIMEOUT_MS` because no client connection is being held
+ * open for it (the client polls), but still bounded: it is also the longest a
+ * hostile document can occupy a conversion slot.
+ */
+export const CONVERT_JOB_TIMEOUT_MS = intFromEnv('CONVERT_JOB_TIMEOUT_MS', 5 * 60_000, 1_000);
+
+/**
+ * How long a finished convert job's result stays downloadable. Kept below
+ * `STALE_WORKSPACE_MS`, because the result lives in a `TEMP_ROOT` workspace
+ * that the stale sweep would otherwise remove first.
+ */
+export const CONVERT_JOB_TTL_MS = intFromEnv('CONVERT_JOB_TTL_MS', 10 * 60_000, 10_000);
+
 /** How long a soffice process gets to die on SIGTERM before we SIGKILL it. */
 export const SIGKILL_GRACE_MS = intFromEnv('SIGKILL_GRACE_MS', 5_000, 100);
 
