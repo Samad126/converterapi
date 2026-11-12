@@ -123,7 +123,15 @@ export async function convert(options: ConvertOptions): Promise<ConversionResult
       case 'pdf-engine':
         return runEnginePipeline({ inputPath, outDir, workspace, target, signal, deadline, ocr });
       case 'pandoc':
-        return runPandocPipeline({ inputPath, outDir, workspace, target, signal, deadline });
+        return runPandocPipeline({
+          inputPath,
+          outDir,
+          workspace,
+          profileDir,
+          target,
+          signal,
+          deadline,
+        });
       case 'extract':
         return runExtractPipeline({ inputPath, target, signal, deadline });
       case 'data':

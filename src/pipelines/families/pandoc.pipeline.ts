@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { Errors } from '../../errors.ts';
 import type { TargetFormat } from '../../formats.ts';
 import { PANDOC_WRITERS, runPandoc } from '../../engines/pandoc.engine.ts';
+import { runSoffice } from '../../engines/soffice.engine.ts';
 import { collectProducedFiles, throwForNonZeroExit, throwForOutcome } from '../pipeline.shared.ts';
 import type { ProducedFile } from '../conversion.pipeline.ts';
 
@@ -23,11 +24,46 @@ export async function runPandocPipeline(run: {
   inputPath: string;
   outDir: string;
   workspace: string;
+  profileDir: string;
   target: TargetFormat;
   deadline: number;
   signal?: AbortSignal;
 }): Promise<ProducedFile[]> {
-  const { inputPath, outDir, workspace, target, deadline, signal } = run;
+  const { inputPath, outDir, workspace, profileDir, target, deadline, signal } = run;
+
+  if (target.id === 'pdf') {
+    // pandoc has no PDF writer without a LaTeX install, so go via DOCX
+    // (a faithful pandoc writer) and let Writer's PDF export lay it out.
+    const docxPath = join(workspace, 'markdown-intermediate.docx');
+    const first = await runPandoc({
+      inputPath,
+      outputPath: docxPath,
+      writer: 'docx',
+      workspace,
+      deadline,
+      signal,
+    });
+    throwForOutcome(first);
+    throwForNonZeroExit(first, 'pandoc -t docx');
+
+    const second = await runSoffice({
+      inputPath: docxPath,
+      outDir,
+      profileDir,
+      workspace,
+      convertTo: 'pdf:writer_pdf_Export',
+      deadline,
+      signal,
+    });
+    throwForOutcome(second);
+    const pdfs = await collectProducedFiles(outDir, '.pdf');
+    if (pdfs.length === 0) {
+      throw Errors.convertFailed(
+        `soffice produced no .pdf file (exit=${second.exitCode} signal=${second.signal ?? 'none'} stderr=${second.stderr})`,
+      );
+    }
+    return [{ name: 'converted.pdf', data: pdfs[0]!.data }];
+  }
   const writer = PANDOC_WRITERS[target.id];
   if (!writer) {
     // Unreachable as the matrix stands - every target `engineFrom.pandoc`

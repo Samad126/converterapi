@@ -666,6 +666,9 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
       impress: 'impress_pdf_Export',
       draw: 'draw_pdf_Export',
     },
+    // Markdown has no LibreOffice family. It reaches PDF through pandoc
+    // (-> docx) followed by a Writer PDF export - see `pandoc.pipeline.ts`.
+    engineFrom: { pandoc: ['.md'] },
   },
   odt: {
     id: 'odt',
@@ -1966,7 +1969,7 @@ export const SOURCES: Readonly<Record<AllowedExtension, SourceFormat>> = {
     mediaType: 'text/markdown',
     // `markdown` is excluded (see the target's own `engineFrom` comment): a
     // `.md` file "converting" to Markdown is not a conversion to offer.
-    targets: ['docx', 'html', 'odt', 'rtf', 'txt'],
+    targets: ['pdf', 'docx', 'html', 'odt', 'rtf', 'txt'],
   },
   '.rst': {
     extension: '.rst',
