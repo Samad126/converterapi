@@ -5,7 +5,7 @@
  * the useful thing to bound is not "how many requests arrive" but "how many
  * conversions run at once". Past that bound, extra work does not go faster - it
  * makes every request slower and eventually pushes all of them past the
- * client's 120s abort, which turns a busy server into a server that looks
+ * client's 240s abort, which turns a busy server into a server that looks
  * broken.
  *
  * So: a fixed number of slots, a short waiting room, and an honest 503 E_BUSY

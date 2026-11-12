@@ -2,7 +2,7 @@
  * The deadline path, which can only be exercised honestly in its own process:
  * CONVERT_TIMEOUT_MS is fixed when config.ts is imported.
  *
- * The point of the deadline is that it is SHORTER than the client's own 120s
+ * The point of the deadline is that it is SHORTER than the client's own 240s
  * abort, so the server still gets to answer with a real error instead of being
  * killed mid-conversion and leaving the phone to report a network failure.
  */
@@ -38,7 +38,7 @@ describe('conversion deadline', () => {
     assert.equal(envelope.error.code, 'E_TIMEOUT');
     assert.equal(envelope.error.message, 'This document took too long to convert.');
 
-    // Well inside the client's 120s abort, which is the whole design constraint.
+    // Well inside the client's 240s abort, which is the whole design constraint.
     assert.ok(result.elapsedMs < 90_000, `took ${result.elapsedMs}ms`);
 
     // The killed conversion must not leave its input, profile or output behind.

@@ -6,7 +6,7 @@
  * otherwise each have to remember:
  *
  *   - a conversion is CANCELLED when the client goes away, so a cancelled
- *     upload does not leave a soffice process burning CPU for 90 seconds on a
+ *     upload does not leave a soffice process burning CPU for 180 seconds on a
  *     machine that is deliberately CPU-capped;
  *   - the workspace is REMOVED on every path, including the ones where the
  *     route handler never ran at all because multer rejected the upload.

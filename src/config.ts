@@ -394,7 +394,7 @@ export const MAX_ARCHIVE_UNCOMPRESSED_BYTES = intFromEnv(
  * NOT part of `/convert/{target}`'s synchronous contract. Everything below
  * exists because real audio/video work breaks three assumptions the rest of
  * this service depends on: `CONVERT_TIMEOUT_MS` (a real transcode routinely
- * exceeds 90s), `MAX_UPLOAD_BYTES` (100MB, pinned to the Android client's
+ * exceeds 180s), `MAX_UPLOAD_BYTES` (100MB, pinned to the Android client's
  * wire contract - video would ideally take an order of magnitude more), and
  * the synchronous one-request-one-file model (a client cannot hold a
  * connection open for a transcode that may take minutes). See

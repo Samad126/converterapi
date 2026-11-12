@@ -800,7 +800,7 @@ targetsFor('.docx'); // every target a .docx can become
 | `AppError` | Thrown when an engine fails; a missing tool shows as `ENOENT` in `error.cause` |
 
 Unsupported input/target pairs reject with a plain `Error` that lists valid
-targets. `CONVERT_TIMEOUT_MS` (default 90s) is read once at import, so set it
+targets. `CONVERT_TIMEOUT_MS` (default 180s) is read once at import, so set it
 before importing for long files. There is no rate limit or upload ceiling in
 library mode. Audio/video (`/media`) is available through the CLI and HTTP API, not the
 library yet.
@@ -1042,7 +1042,7 @@ A separate endpoint from `POST /convert/{target}`, on purpose. Real
 audio/video work breaks three assumptions the rest of this service depends
 on:
 
-1. **`CONVERT_TIMEOUT_MS`** (90s) / the Android client's 120s abort — a real
+1. **`CONVERT_TIMEOUT_MS`** (180s) / the Android client's 120s abort — a real
    transcode routinely runs for minutes.
 2. **`MAX_UPLOAD_BYTES`** (100MB) — pinned to the Android client's wire
    contract and to Cloudflare's own 100MB edge ceiling; video work would
@@ -1686,7 +1686,7 @@ Android-specific numbers, not a promise made to the web app).
 3. **A failure is never a `200` with an error body.** The client checks the
    status *before* it reads anything, so a `200` is treated as a PDF and fails
    much further downstream.
-4. **The server's deadline (90s) is shorter than the client's abort (120s)**, so
+4. **The server's deadline (180s) is shorter than the client's abort (240s)**, so
    the server can still answer with a proper error instead of being killed
    mid-conversion.
 5. **The 100 MB body limit agrees with the client's `MAX_UPLOAD_BYTES`.** It is a
@@ -2215,7 +2215,7 @@ layers, more than `MAX_PSD_DECODE_BYTES` of declared pixel data, or more than
 useful thing to bound is not "how many requests arrive" but "how many
 conversions run at once". Past that bound, extra work does not go faster — it
 makes every request slower and eventually pushes all of them past the client's
-120s abort, which turns a busy server into a server that looks broken.
+240s abort, which turns a busy server into a server that looks broken.
 
 So [`src/lib/queue.ts`](src/lib/queue.ts) implements a bounded queue:
 
@@ -2262,7 +2262,7 @@ until the service dies — is invisible until it is fatal.
 
 **Stale workspaces** left by a crash are swept on startup and every 5 minutes.
 Only directories older than 15 minutes are touched, which is comfortably longer
-than the 90s conversion deadline, so a slow-but-alive conversion is never swept
+than the 180s conversion deadline, so a slow-but-alive conversion is never swept
 out from under itself. The age is re-checked immediately before each delete, so
 a workspace touched between the check and the delete is left alone.
 
@@ -2275,7 +2275,7 @@ a workspace touched between the check and the delete is left alone.
 | Max upload | 100 MB | `MAX_UPLOAD_BYTES` (must equal the client's) + proxy `client_max_body_size`, and dead-ceiling-capped by Cloudflare's own 100MB edge limit |
 | Files per page operation | 20 | `MAX_PAGE_OPERATION_FILES` (`/pdf/merge`, `/pdf/scan-to-pdf`) |
 | Combined size per page operation | 100 MB | `MAX_PAGE_OPERATION_TOTAL_BYTES` (several files, not one) |
-| Conversion deadline | 90s | `CONVERT_TIMEOUT_MS` (client aborts at 120s) |
+| Conversion deadline | 180s | `CONVERT_TIMEOUT_MS` (client aborts at 240s) |
 | SIGKILL grace | 5s | `SIGKILL_GRACE_MS` |
 | Concurrent conversions | 2 | `MAX_CONCURRENT_CONVERSIONS` |
 | Queued conversions | 8 | `MAX_QUEUED_CONVERSIONS` |
@@ -2356,7 +2356,7 @@ All configuration is environment variables read in
 | `MEDIA_TEMP_ROOT` | `$TMPDIR/converterapi-media` | A sibling of `TEMP_ROOT`, not nested under it - see the constant's own comment in `config.ts` |
 | `MAX_CONCURRENT_CONVERSIONS` | `2` | |
 | `MAX_QUEUED_CONVERSIONS` | `8` | `0` disables queueing entirely |
-| `CONVERT_TIMEOUT_MS` | `90000` | Must stay below the client's 120s |
+| `CONVERT_TIMEOUT_MS` | `180000` | Must stay below the client's 240s |
 | `SIGKILL_GRACE_MS` | `5000` | |
 | `STALE_WORKSPACE_MS` | `900000` | Must stay above `CONVERT_TIMEOUT_MS` |
 | `SWEEP_INTERVAL_MS` | `300000` | |
@@ -2470,7 +2470,7 @@ private files and there is no operational reason to retain them.
   shared store if you scale out.
 - The rate limiter is a fixed window, which allows a burst at a window boundary.
   Adequate for load shedding; not a defence against a determined attacker.
-- A hostile document can still consume a full conversion slot for up to 90s.
+- A hostile document can still consume a full conversion slot for up to 180s.
   The concurrency cap bounds the damage but does not prevent it.
 - **Accepting more formats means more parsers.** Every family in the matrix is a
   different LibreOffice import filter, and the import filters are where
@@ -2531,8 +2531,8 @@ that matter:
 
 - `client_max_body_size 100m` — **must match `MAX_UPLOAD_BYTES`**, so an
   oversized upload is refused before it reaches Node. Two halves of one number.
-- `proxy_read_timeout 120s` — the app's deadline is 90s and the client gives up
-  at 120s; neither helps if nginx cuts the connection first.
+- `proxy_read_timeout 240s` — the app's deadline is 180s and the client gives up
+  at 240s; neither helps if nginx cuts the connection first.
 - `error_page 413` rewritten into the JSON envelope, because the client reads
   its dialog text from `error.message` and would otherwise show a bare
   `HTTP 413`.
@@ -2652,7 +2652,7 @@ The test suite is `node:test` — no test framework dependency.
 | [`test/integration/convert/youtube.test.ts`](test/integration/convert/youtube.test.ts) | `POST /youtube/{target}` end to end against a stand-in `yt-dlp` that records its arguments: accept, poll, download, every failure code, and that a rejected link never reaches `yt-dlp`. Needs no network. |
 | [`test/integration/convert/youtube-live.test.ts`](test/integration/convert/youtube-live.test.ts) | The same endpoint against YouTube itself, with the real `yt-dlp` and `ffmpeg`. Opt-in (`YOUTUBE_LIVE_TEST=1`): it needs network access, and a failure often means `yt-dlp` is out of date. |
 | [`test/unit.test.ts`](test/unit.test.ts) | Matrix self-consistency, prototype-safe lookups, the ZIP writer and its zip-slip guard, the probe-document builders, queue bounds and `E_BUSY`, the rate limiter, encryption detection, workspace sweeping, and the exact user-facing strings. |
-| [`test/timeout.test.ts`](test/timeout.test.ts) | The 90s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
+| [`test/timeout.test.ts`](test/timeout.test.ts) | The 180s deadline, in a child process so `CONVERT_TIMEOUT_MS` can be overridden. |
 | [`test/preflight.test.ts`](test/preflight.test.ts) | The boot refusal, by starting the real entry point with a broken environment — a missing `soffice`, a missing `pdftoppm`, and an unresolvable `fc-match`. |
 | [`test/openapi.test.ts`](test/openapi.test.ts) | That [`openapi.yaml`](openapi.yaml) still describes this service: codes, exact messages, upload limit, and the responses the endpoints really return. |
 | [`test/fixtures.ts`](test/fixtures.ts) | Binary fixtures built in code — including hand-built OLE/CFB containers, since there is no way to produce a password-protected document without a copy of Word or a checked-in blob. |

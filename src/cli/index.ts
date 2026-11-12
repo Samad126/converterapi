@@ -13,7 +13,7 @@
  * Deliberately raises CONVERT_TIMEOUT_MS before anything else in this
  * process imports `config.ts` (module-level `intFromEnv` calls read it once,
  * at import time), so a long document or a slow machine doesn't hit the
- * server's own 90s default.
+ * server's own 180s default.
  */
 if (!process.env.CONVERT_TIMEOUT_MS) {
   process.env.CONVERT_TIMEOUT_MS = String(1000 * 60 * 60 * 6); // 6 hours

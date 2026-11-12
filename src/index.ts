@@ -5,7 +5,7 @@
  * The engines (LibreOffice, pandoc, ffmpeg, qpdf, ...) are system tools, not
  * npm dependencies - run `npx converter doctor` to see which are installed.
  * `CONVERT_TIMEOUT_MS` is read once when this module is first imported, so set
- * it before importing if the 90s default is too short.
+ * it before importing if the 180s default is too short.
  */
 import fsp from 'node:fs/promises';
 import { extname, join } from 'node:path';
