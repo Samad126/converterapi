@@ -4,7 +4,7 @@
  *
  * `pdf-lib`, which does every other page operation in this service, is
  * explicit that it does not implement PDF encryption at all - there is no
- * `setEncryption` anywhere in it, by design (see its README). Password
+ * `setEncryption` anywhere in it, by design (see docs/REFERENCE.md). Password
  * protection is therefore a fourth, unrelated engine, the same way the
  * `docx`/`pptx`/`xlsx` targets from a PDF needed `pdf_engine.py` rather than
  * LibreOffice: the right tool for THIS job is `qpdf`, a small, dependency-free

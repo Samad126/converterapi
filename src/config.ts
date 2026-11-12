@@ -236,7 +236,7 @@ export const ARROW_ENGINE_SCRIPT = join(import.meta.dirname, '..', 'scripts', 'a
  * `qpdf`, for `/pdf/protect` and `/pdf/unlock`.
  *
  * `pdf-lib` (everything else in the page-operations family) does not
- * implement PDF encryption at all - by its own README, that is out of scope
+ * implement PDF encryption at all - by its own docs (docs/REFERENCE.md), that is out of scope
  * for it. qpdf is a small, single-purpose CLI built for exactly this, with no
  * further dependencies of its own. See qpdf.engine.ts.
  */
@@ -413,7 +413,7 @@ export const MAX_ARCHIVE_UNCOMPRESSED_BYTES = intFromEnv(
  * wire contract - video would ideally take an order of magnitude more), and
  * the synchronous one-request-one-file model (a client cannot hold a
  * connection open for a transcode that may take minutes). See
- * `media-jobs.service.ts` and the README's own section on this endpoint for
+ * `media-jobs.service.ts` and docs/REFERENCE.md's own section on this endpoint for
  * the full reasoning.
  */
 
@@ -600,7 +600,7 @@ export const ENABLE_DOCS = process.env.ENABLE_DOCS !== '0';
  *
  * `fc-match` resolves the alias chain, so a correct answer here proves BOTH
  * that the font is installed AND that the fontconfig alias exists - which is
- * exactly the pair of conditions that has to hold. See README "Fonts".
+ * exactly the pair of conditions that has to hold. See docs/REFERENCE.md "Fonts".
  */
 export const REQUIRED_FONT_ALIASES: ReadonlyArray<{
   /** The font a Word document asks for. */

@@ -9,7 +9,7 @@
  *     {target}`'s ordinary matrix (`formats.ts`, `mode: 'transcode'`).
  *   - `runFfmpegMedia`: real audio/video transcoding for `POST /media/
  *     {target}` (`formats-media.ts`, `media-jobs.service.ts`) - asynchronous,
- *     its own job-based endpoint, for the reasons the README's Phase 5
+ *     its own job-based endpoint, for the reasons docs/REFERENCE.md's Phase 5
  *     section and `config.ts`'s `MEDIA_*` constants give.
  *
  * `-frames:v 1 -update 1` IS NOT OPTIONAL for `runFfmpeg`, and is exactly

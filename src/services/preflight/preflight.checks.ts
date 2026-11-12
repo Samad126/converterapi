@@ -175,7 +175,7 @@ export function assertPdfEnginePresent(): void {
  * qpdf, needed by `/pdf/protect` and `/pdf/unlock`.
  *
  * pdf-lib does every other page operation in this service, but its own
- * README says encryption is out of scope for it - there is no path in it
+ * docs/REFERENCE.md says encryption is out of scope for it - there is no path in it
  * that sets a PDF password at all. qpdf is checked the same way soffice and
  * the rasteriser are: can it even be run, before any request depends on it.
  */
@@ -654,7 +654,7 @@ export function assertMetricCompatibleFonts(): Array<{ requested: string; resolv
         'answer: they need an interactive EULA acceptance, which is exactly the',
         'kind of thing that breaks an unattended image build, and the metric-',
         'compatible set above is a drop-in replacement for the metrics that',
-        'pagination actually depends on. See README "Fonts".',
+        'pagination actually depends on. See docs/REFERENCE.md "Fonts".',
       ].join('\n'),
     );
   }

@@ -11,7 +11,7 @@
  *     of "works on my machine" in a service like this.
  *
  *  2. The metric-compatible fonts must be installed (see config.ts and the
- *     README). Without them LibreOffice substitutes a font with different
+ *     docs/REFERENCE.md). Without them LibreOffice substitutes a font with different
  *     metrics for Calibri and Cambria, and every line breaks in a different
  *     place. The document converts, the PDF looks right, and the pagination
  *     quietly disagrees with Word.

@@ -3,7 +3,7 @@
  * `pages.controller.ts`, calling `pdf-pages.service.ts`/`qpdf.engine.ts`
  * directly. Covers the page-manipulation operations that take simple
  * flags; the JSON-element operations (`sign`, `edit`, `redact`, `fill-form`,
- * `compare`) are not exposed here - see the README.
+ * `compare`) are not exposed here - see docs/REFERENCE.md.
  */
 import fsp from 'node:fs/promises';
 import { join } from 'node:path';

@@ -21,7 +21,7 @@
  *    a filter PER SOURCE FAMILY rather than one filter for everybody.
  *
  * Every filter name in here was verified against LibreOffice 24.2 by actually
- * running `soffice --convert-to` for that pair - see README "Conversion matrix".
+ * running `soffice --convert-to` for that pair - see docs/REFERENCE.md "Conversion matrix".
  * Guessing at these is not possible: a wrong filter name is not an error, it is
  * a silent fallback to the default export, which produces a file of the right
  * type with the wrong content.
@@ -1183,7 +1183,7 @@ export const TARGETS: Readonly<Record<TargetId, TargetFormat>> = {
      * ... (dimensions cannot exceed 256x256)" and a non-zero exit for
      * anything larger). This service does not silently downscale to make a
      * request succeed - it does not do that for any other target either -
-     * so a large image asking for `ico` fails honestly. See the README.
+     * so a large image asking for `ico` fails honestly. See docs/REFERENCE.md.
      */
     mode: 'transcode',
     multiple: false,

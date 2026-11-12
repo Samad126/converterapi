@@ -12,7 +12,7 @@ npm ci
 ./run.sh --watch    # restart on changes
 ```
 
-Settings come from the environment or a `.env` file. See "Environment variables" in the README.
+Settings come from the environment or a `.env` file. See "Configuration" in [docs/REFERENCE.md](docs/REFERENCE.md).
 
 ## Before you open a pull request
 
